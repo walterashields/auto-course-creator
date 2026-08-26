@@ -16,6 +16,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -23,6 +24,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -49,6 +51,17 @@ SUPPORTED_APPLICATIONS = {"db_browser_sqlite"}
 APP_NAME = "DB Browser for SQLite"
 MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
 TARGET_LONG_EDGE = 1568
+MOTION_DIFF_THRESHOLD = 2.0  # Mean absolute grayscale frame diff used to detect action.
+MIN_CLIP_DURATION_SECONDS = 1.5
+MOTION_PAD_SECONDS = 0.7
+NO_MOTION_KEEP_SECONDS = 2.0
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
@@ -2100,7 +2113,8 @@ class EndStateDiscovery:
                         break
             finally:
                 recorder.stop()
-                if beat_ok:
+                if beat_ok and clip_path.exists():
+                    self._trim_clip_to_motion(clip_path)
                     beat.video_clip_path = str(clip_path.resolve())
 
             if failed_reason:
@@ -2251,11 +2265,115 @@ class EndStateDiscovery:
                         file=sys.stderr,
                     )
                     continue
+            if out_path.exists():
+                self._trim_clip_to_motion(out_path)
             beat.video_clip_path = str(out_path.resolve())
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _trim_clip_to_motion(self, clip_path: Path) -> None:
+        """Trim dead air from a recorded beat clip, keeping the motion window.
+
+        Samples the clip at 2 fps in grayscale, computes mean absolute frame
+        differences, and re-encodes the segment from the first to last motion
+        frame with padding. If no motion is detected, a short middle slice is
+        kept so the clip is never empty or 0 s. The original file is replaced.
+        """
+        clip_path = Path(clip_path)
+        if not clip_path.exists():
+            logger.warning("Trim skipped: clip does not exist: %s", clip_path)
+            return
+
+        cap = cv2.VideoCapture(str(clip_path))
+        if not cap.isOpened():
+            logger.warning("Trim skipped: could not open clip: %s", clip_path)
+            return
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        original_duration = total_frames / fps if fps > 0 else 0.0
+        if original_duration <= 0 or total_frames <= 0:
+            cap.release()
+            logger.warning("Trim skipped: empty clip: %s", clip_path)
+            return
+
+        sample_interval = max(1, int(round(fps / 2.0)))  # ~2 fps sampling
+        prev_gray: Optional[np.ndarray] = None
+        motion_frames: List[int] = []
+
+        frame_idx = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if frame_idx % sample_interval != 0:
+                frame_idx += 1
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (320, 180), interpolation=cv2.INTER_AREA)
+            if prev_gray is not None:
+                diff = float(np.mean(np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32))))
+                if diff >= MOTION_DIFF_THRESHOLD:
+                    motion_frames.append(frame_idx)
+            prev_gray = gray
+            frame_idx += 1
+
+        cap.release()
+
+        if motion_frames:
+            first_frame = motion_frames[0]
+            last_frame = motion_frames[-1]
+            start_sec = max(0.0, (first_frame / fps) - MOTION_PAD_SECONDS)
+            end_sec = min(original_duration, (last_frame / fps) + MOTION_PAD_SECONDS)
+        else:
+            # No motion: keep a slice from the middle of the clip.
+            mid = original_duration / 2.0
+            start_sec = max(0.0, mid - (NO_MOTION_KEEP_SECONDS / 2.0))
+            end_sec = min(original_duration, mid + (NO_MOTION_KEEP_SECONDS / 2.0))
+
+        duration = end_sec - start_sec
+        if duration < MIN_CLIP_DURATION_SECONDS:
+            # Extend the window toward the end, capped by original duration.
+            end_sec = min(original_duration, start_sec + MIN_CLIP_DURATION_SECONDS)
+            duration = end_sec - start_sec
+            if duration < MIN_CLIP_DURATION_SECONDS and start_sec > 0:
+                start_sec = max(0.0, end_sec - MIN_CLIP_DURATION_SECONDS)
+                duration = end_sec - start_sec
+
+        if duration <= 0:
+            logger.warning("Trim skipped: computed duration <= 0 for %s", clip_path)
+            return
+
+        temp_path = clip_path.with_suffix(".trimmed.mp4")
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-ss", str(start_sec), "-i", str(clip_path),
+                    "-t", str(duration), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", str(temp_path),
+                ],
+                check=True, capture_output=True, timeout=120,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+            logger.warning("Failed to trim %s: %s", clip_path, stderr[:200])
+            if temp_path.exists():
+                temp_path.unlink()
+            return
+
+        if not temp_path.exists() or temp_path.stat().st_size == 0:
+            logger.warning("Trim produced empty output for %s", clip_path)
+            if temp_path.exists():
+                temp_path.unlink()
+            return
+
+        shutil.move(str(temp_path), str(clip_path))
+        logger.info(
+            "Trimmed %s: original=%.2fs -> trimmed=%.2fs (start=%.2f, duration=%.2f)",
+            clip_path.name, original_duration, duration, start_sec, duration,
+        )
 
     def _launch_app(self, db_path: Path) -> None:
         """Open DB Browser for SQLite on the provided database file."""
