@@ -242,19 +242,42 @@ class GraphRenderer:
                 tts = TTSGenerator()
                 with tempfile.TemporaryDirectory(prefix="wsda_tts_") as tmpdir:
                     beat_clips = tts.generate_clips(graph, Path(tmpdir))
-                    cursor = 0.0
+
+                    # Collect actual narration durations per beat.
+                    audio_durations: Dict[str, float] = {}
                     for beat, _clip_path, clip_duration_ms in beat_clips:
                         minimum = (
                             MIN_STATE_DURATION
                             if beat.attaches_to == "state"
                             else MIN_EDGE_DURATION
                         )
-                        actual_duration = max(clip_duration_ms / 1000.0, minimum)
+                        audio_durations[beat.beat_id] = max(
+                            clip_duration_ms / 1000.0, minimum
+                        )
+
+                    # Build ONE master timeline: each beat lasts at least as
+                    # long as its narration AND its recorded action clip, so
+                    # no recorded content is ever trimmed and audio/picture
+                    # share the same clock.
+                    frame_durations = self._synced_beat_durations(
+                        graph, script_beats, audio_durations
+                    )
+                    cursor = 0.0
+                    for beat in graph.narration_beats:
+                        duration = frame_durations.get(beat.beat_id, MIN_STATE_DURATION)
                         beat.start_time = round(cursor, 3)
-                        cursor += actual_duration
+                        cursor += duration
                         beat.end_time = round(cursor, 3)
-                    # Recompute frames with TTS-driven timings.
-                    frames = self._build_frames_from_beats(script_beats, output_dir)
+
+                    # Persist the re-timed graph before rendering.
+                    store = GraphStore()
+                    store.save(graph)
+
+                    # Build frames on the SAME timeline (was word-count based,
+                    # which caused audio/video drift and cut-offs).
+                    frames = self._build_frames_from_beats(
+                        script_beats, output_dir, durations=frame_durations
+                    )
                     video_path = str(output_dir / f"{graph_id}_silent.mp4")
                     self._assemble_video(frames, video_path)
 
@@ -410,6 +433,46 @@ class GraphRenderer:
             beat.start_time = round(cursor, 3)
             cursor += duration
             beat.end_time = round(cursor, 3)
+
+    def _synced_beat_durations(
+        self,
+        graph: ExecutionGraph,
+        beats: List[ScriptBeat],
+        audio_durations: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, float]:
+        """
+        Compute the final on-screen duration for every script beat.
+
+        Each beat lasts the MAXIMUM of:
+          - the actual TTS narration length (when audio is available),
+          - the recorded action-clip length (demo beats with a clip),
+          - the minimum hold time for the beat's attachment type.
+
+        Taking the maximum guarantees a recorded clip is never trimmed and
+        the narration never outruns the picture. Returns {beat_id: seconds}.
+        """
+        minimums: Dict[str, float] = {
+            nb.beat_id: (
+                MIN_STATE_DURATION if nb.attaches_to == "state" else MIN_EDGE_DURATION
+            )
+            for nb in graph.narration_beats
+        }
+
+        durations: Dict[str, float] = {}
+        for beat in beats:
+            candidates = [minimums.get(beat.beat_id, MIN_STATE_DURATION)]
+            if audio_durations and beat.beat_id in audio_durations:
+                candidates.append(audio_durations[beat.beat_id])
+            if (
+                beat.kind == "demo"
+                and beat.video_clip_path
+                and Path(beat.video_clip_path).exists()
+            ):
+                clip_dur = self._media_duration(beat.video_clip_path)
+                if clip_dur:
+                    candidates.append(clip_dur)
+            durations[beat.beat_id] = round(max(candidates), 3)
+        return durations
 
     # ------------------------------------------------------------------
     # Frame building
@@ -759,81 +822,35 @@ class GraphRenderer:
     def _extend_video_with_last_frame(
         self, video_path: str, tmpdir: Path, extra_seconds: float
     ) -> str:
-        """Append a still of the last frame for extra_seconds to the video."""
-        last_frame_path = tmpdir / "last_frame.png"
-        still_video_path = tmpdir / "still.mp4"
-        concat_list_path = tmpdir / "concat.txt"
-        extended_video_path = tmpdir / "extended.mp4"
+        """
+        Append a hold on the last frame for extra_seconds.
 
-        # Extract the final frame.
+        Single-pass re-encode with tpad. This replaces the old concat
+        demuxer + ``-c copy`` approach, which could silently corrupt the
+        output when the still clip's codec parameters differed from the
+        main video's.
+        """
+        extended_video_path = tmpdir / "extended.mp4"
         subprocess.run(
             [
                 "ffmpeg",
                 "-y",
-                "-sseof",
-                "-0.5",
                 "-i",
                 video_path,
-                "-vframes",
-                "1",
-                "-q:v",
-                "2",
-                str(last_frame_path),
-            ],
-            check=True,
-            capture_output=True,
-            timeout=60,
-        )
-
-        # Make a short silent clip from that frame.
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-loop",
-                "1",
-                "-i",
-                str(last_frame_path),
-                "-t",
-                f"{extra_seconds:.6f}",
-                "-pix_fmt",
-                "yuv420p",
+                "-vf",
+                f"tpad=stop_mode=clone:stop_duration={extra_seconds:.6f}",
                 "-c:v",
                 "libx264",
                 "-preset",
                 "fast",
-                str(still_video_path),
-            ],
-            check=True,
-            capture_output=True,
-            timeout=120,
-        )
-
-        # Concatenate original + still.
-        concat_list_path.write_text(
-            f"file '{Path(video_path).resolve()}'\n"
-            f"file '{still_video_path.resolve()}'\n",
-            encoding="utf-8",
-        )
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_list_path),
-                "-c",
-                "copy",
+                "-pix_fmt",
+                "yuv420p",
                 str(extended_video_path),
             ],
             check=True,
             capture_output=True,
-            timeout=120,
+            timeout=300,
         )
-
         return str(extended_video_path)
 
     def _assemble_video(self, frames: List[Dict[str, Any]], out_path: str) -> None:
@@ -1091,15 +1108,40 @@ class GraphRenderer:
         return narration_beats
 
     def _build_frames_from_beats(
-        self, beats: List[ScriptBeat], output_dir: Path
+        self,
+        beats: List[ScriptBeat],
+        output_dir: Path,
+        durations: Optional[Dict[str, float]] = None,
     ) -> List[Dict[str, Any]]:
-        """Build frame descriptors from script beats and recorded clips."""
+        """
+        Build frame descriptors from script beats and recorded clips.
+
+        When ``durations`` is provided (the TTS-driven master timeline from
+        ``_synced_beat_durations``), those exact per-beat durations are used.
+        Otherwise durations fall back to a word-count estimate that is still
+        extended to cover the full recorded clip, so silent/raw renders never
+        trim recorded actions either.
+        """
         frames: List[Dict[str, Any]] = []
         demo_beats = [b for b in beats if b.kind == "demo"]
         current_still: Optional[Path] = None
 
         for i, beat in enumerate(beats):
-            duration = max(len(beat.text.split()) / WORDS_PER_SECOND, MIN_STATE_DURATION)
+            if durations is not None and beat.beat_id in durations:
+                duration = durations[beat.beat_id]
+            else:
+                minimum = (
+                    MIN_EDGE_DURATION if beat.kind == "demo" else MIN_STATE_DURATION
+                )
+                duration = max(len(beat.text.split()) / WORDS_PER_SECOND, minimum)
+                if (
+                    beat.kind == "demo"
+                    and beat.video_clip_path
+                    and Path(beat.video_clip_path).exists()
+                ):
+                    clip_dur = self._media_duration(beat.video_clip_path)
+                    if clip_dur:
+                        duration = max(duration, clip_dur)
 
             if beat.kind == "demo":
                 if beat.video_clip_path and Path(beat.video_clip_path).exists():

@@ -24,6 +24,10 @@ from compiler.schemas import ExecutionGraph, NarrationBeat
 from compiler.speech_normalize import SpeechNormalizer
 
 
+class TTSAuthError(RuntimeError):
+    """Raised when ElevenLabs rejects the API key (HTTP 401/403)."""
+
+
 class TTSGenerator:
     """
     Generate TTS audio for an ExecutionGraph using ElevenLabs API.
@@ -33,7 +37,9 @@ class TTSGenerator:
     def __init__(self, api_key: Optional[str] = None, voice_id: Optional[str] = None):
         self.api_key = (api_key or os.environ.get("ELEVENLABS_API_KEY", "")).strip()
         self.voice_id = (voice_id or os.environ.get("ELEVENLABS_VOICE_ID", "")).strip()
-        self.model = "eleven_turbo_v2"
+        # eleven_turbo_v2 is deprecated; v2.5 is the supported successor.
+        # Override with ELEVENLABS_MODEL_ID if needed.
+        self.model = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_turbo_v2_5").strip()
         self.normalize = SpeechNormalizer.normalize
 
         if not self.api_key:
@@ -42,6 +48,59 @@ class TTSGenerator:
             raise ValueError("ElevenLabs voice ID required. Set ELEVENLABS_VOICE_ID env var.")
 
         print(f"TTS using key prefix: {self.api_key[:10]}... voice: {self.voice_id[:8]}...")
+
+    # ------------------------------------------------------------------
+    # Credential preflight
+    # ------------------------------------------------------------------
+
+    def check_credentials(self) -> dict:
+        """
+        Verify the API key and voice ID with ElevenLabs BEFORE rendering.
+
+        Returns the /v1/user payload on success. Raises TTSAuthError on
+        401/403 (bad/revoked key) and RuntimeError for an unknown voice ID,
+        with actionable messages. Run standalone via:
+            python -m compiler.tts --check
+        """
+        user = self._api_get("https://api.elevenlabs.io/v1/user")
+        try:
+            self._api_get(f"https://api.elevenlabs.io/v1/voices/{self.voice_id}")
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"ElevenLabs voice ID {self.voice_id!r} was not found on this account. "
+                "Set ELEVENLABS_VOICE_ID to a voice from your Voice Library "
+                "(https://elevenlabs.io/app/voice-library)."
+            ) from exc
+        return user
+
+    def _api_get(self, url: str) -> dict:
+        """GET an ElevenLabs endpoint; raise with a precise diagnosis on failure."""
+        result = subprocess.run(
+            [
+                "curl", "-s", "-S", "-X", "GET", url,
+                "-H", f"xi-api-key: {self.api_key}",
+                "-w", "\n%{http_code}",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        body, _, status = result.stdout.rpartition("\n")
+        status = status.strip()
+        if status in ("401", "403"):
+            raise TTSAuthError(
+                f"ElevenLabs rejected the API key (HTTP {status}). The key is invalid, "
+                "revoked, or lacks permission. Regenerate it at "
+                "https://elevenlabs.io/app/settings/api-keys and update "
+                f"ELEVENLABS_API_KEY. Response: {body[:300]}"
+            )
+        if not status.startswith("2"):
+            raise RuntimeError(
+                f"ElevenLabs GET {url} failed (HTTP {status or 'network error'}): "
+                f"{body[:300] or result.stderr[:300]}"
+            )
+        try:
+            return json.loads(body or "{}")
+        except json.JSONDecodeError:
+            return {}
 
     def generate(self, graph: ExecutionGraph, output_path: str) -> str:
         """
@@ -128,7 +187,14 @@ class TTSGenerator:
         return self._synthesize_with_curl(text, output_path)
 
     def _synthesize_with_curl(self, text: str, output_path: str) -> str:
-        """Shell out to curl since urllib.request fails with some keys."""
+        """
+        Shell out to curl since urllib.request fails with some keys.
+
+        Captures the HTTP status explicitly so auth failures (401/403) are
+        raised immediately as TTSAuthError with the API's own error detail,
+        transient failures (429/5xx) are retried with backoff, and the old
+        "--fail-with-body writes the JSON error into the MP3" trap is gone.
+        """
         payload = json.dumps({
             "text": text,
             "model_id": self.model,
@@ -137,22 +203,65 @@ class TTSGenerator:
                 "similarity_boost": 0.75
             }
         })
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}"
 
-        cmd = [
-            "curl", "-s", "-S", "-X", "POST",
-            f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
-            "-H", f"xi-api-key: {self.api_key}",
-            "-H", "Content-Type: application/json",
-            "-d", payload,
-            "-o", output_path,
-            "--fail-with-body"
-        ]
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            if os.path.exists(output_path):
+                os.unlink(output_path)
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
+            result = subprocess.run(
+                [
+                    "curl", "-s", "-S", "-X", "POST", url,
+                    "-H", f"xi-api-key: {self.api_key}",
+                    "-H", "Content-Type: application/json",
+                    "-d", payload,
+                    "-o", output_path,
+                    "-w", "%{http_code}",
+                ],
+                capture_output=True, text=True, timeout=180,
+            )
+            status = (result.stdout or "").strip()
+
+            if result.returncode == 0 and status.startswith("2"):
+                break
+
+            # On HTTP errors curl still wrote the JSON error body to the
+            # output file — read it for diagnostics instead of hiding it.
+            body = ""
+            if os.path.exists(output_path):
+                try:
+                    body = Path(output_path).read_text(errors="replace")[:500]
+                except Exception:
+                    body = ""
+                os.unlink(output_path)
+
+            if status in ("401", "403"):
+                raise TTSAuthError(
+                    f"ElevenLabs rejected the API key (HTTP {status}). The key is "
+                    "invalid, revoked, or over quota. Regenerate it at "
+                    "https://elevenlabs.io/app/settings/api-keys and update "
+                    f"ELEVENLABS_API_KEY. Response: {body}"
+                )
+            if status == "404":
+                raise RuntimeError(
+                    f"ElevenLabs voice ID {self.voice_id!r} not found (HTTP 404). "
+                    "Set ELEVENLABS_VOICE_ID to a voice from your Voice Library. "
+                    f"Response: {body}"
+                )
+            if (status == "429" or status.startswith("5")) and attempt < max_attempts:
+                wait = 2 ** attempt
+                print(
+                    f"ElevenLabs HTTP {status}; retrying in {wait}s "
+                    f"(attempt {attempt}/{max_attempts})...",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+                continue
+
             raise RuntimeError(
-                f"ElevenLabs curl failed (exit {result.returncode}): {result.stderr}\n"
-                f"Response: {result.stdout[:500]}"
+                f"ElevenLabs TTS failed (HTTP {status or f'curl exit {result.returncode}'})"
+                f": {body or result.stderr[:500]}"
             )
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
@@ -164,7 +273,22 @@ class TTSGenerator:
 
 
 if __name__ == "__main__":
-    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--check":
+        # Credential preflight: python -m compiler.tts --check
+        try:
+            tts = TTSGenerator()
+            info = tts.check_credentials()
+        except (ValueError, TTSAuthError, RuntimeError) as exc:
+            print(f"TTS check FAILED: {exc}", file=sys.stderr)
+            sys.exit(1)
+        subscription = info.get("subscription", {}) if isinstance(info, dict) else {}
+        tier = subscription.get("tier", "unknown")
+        char_count = subscription.get("character_count", "?")
+        char_limit = subscription.get("character_limit", "?")
+        print(f"TTS check OK: tier={tier} characters={char_count}/{char_limit} "
+              f"voice={tts.voice_id} model={tts.model}")
+        sys.exit(0)
+
     if len(sys.argv) > 1:
         text = sys.argv[1]
     else:

@@ -428,6 +428,20 @@ def run_course(
             "Note: ElevenLabs credentials not set; producing silent videos + reference scripts.",
             file=sys.stderr,
         )
+    elif output_mode in ("auto", "hybrid"):
+        # Preflight the credentials once, up front, instead of discovering a
+        # 401 at mux time for every video (which silently degrades to silent
+        # output). A failure here is a warning — rendering continues.
+        try:
+            from .tts import TTSGenerator
+
+            TTSGenerator().check_credentials()
+        except Exception as exc:
+            print(
+                f"Warning: ElevenLabs credential check failed: {exc}\n"
+                "Videos will fall back to silent output unless this is fixed.",
+                file=sys.stderr,
+            )
 
     graph_store = GraphStore()
     renderer = GraphRenderer(output_dir=str(course_output_dir))
