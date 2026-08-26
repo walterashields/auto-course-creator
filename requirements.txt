@@ -1,0 +1,16 @@
+playwright>=1.40.0
+pydantic>=2.0.0
+pyyaml>=6.0
+rich>=13.0.0
+click>=8.0.0
+flask>=3.0.0
+sqlite-utils>=3.35.0
+Pillow>=10.0.0
+python-dotenv>=1.0.0
+opencv-python>=4.8.0
+pyautogui>=0.9.54
+mss>=10.0.0
+anthropic>=1.0.0
+pydub>=0.25.1
+audioop-lts>=0.2.0
+elevenlabs>=2.0.0

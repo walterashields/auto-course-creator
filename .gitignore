@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.env.*
+*.pyc
+__pycache__/
+output/
+compiler/discovery_output/
+compiler/courses/
+compiler/.DS_Store
+.vscode/
+.idea/

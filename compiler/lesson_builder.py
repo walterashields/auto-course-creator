@@ -1,0 +1,1666 @@
+#!/usr/bin/env python3
+"""
+compiler/lesson_builder.py
+
+Lesson-first script generation, validation, action derivation, and graph
+construction. This is the Path A orchestrator: it generates a narration script
+before any screen action is taken, validates it against the SQL Essentials
+standard, derives deterministic UI actions, executes them through the discovery
+harness, and builds an ExecutionGraph from the resulting recorded clips.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+import anthropic
+
+from .discovery import DiscoveryRecipes, EndStateDiscovery
+from .graph_store import GraphStore
+from .lesson_standard import LessonStandard
+from .narrator import (
+    ScriptBeat,
+    _contains_action_word,
+    _contains_filler,
+    _contains_result_phrase,
+    _contains_state_setup_phrase,
+    _extract_numbers,
+    _format_action_sql,
+)
+from .schemas import ActionEdge, DiscoveryResult, ExecutionGraph, NarrationBeat, ScreenState
+from .sql_formatter import format_sql_query
+
+MODEL = os.environ.get("NARRATOR_MODEL", "claude-sonnet-5")
+
+_APP_FRIENDLY_NAMES = {
+    "db_browser_sqlite": "DB Browser for SQLite",
+    "metabase": "Metabase",
+    "excel": "Excel",
+    "power_bi": "Power BI",
+    "mysql_workbench": "MySQL Workbench",
+}
+
+
+def _friendly_app_name(application: str) -> str:
+    return _APP_FRIENDLY_NAMES.get(application, application.replace("_", " ").title())
+
+
+class LessonBuilder:
+    """
+    Generates a narration script from a VideoManifest, derives the concrete
+    UI action sequence, executes it through the discovery harness, and builds
+    an ExecutionGraph from the recorded demo-beat clips.
+    """
+
+    def __init__(self, content_standard_path: str = "LESSON_CONTENT_STANDARD.md"):
+        self.client = anthropic.Anthropic()
+        self.lesson_standard = LessonStandard(content_standard_path)
+
+    # ------------------------------------------------------------------
+    # Standard ingestion
+    # ------------------------------------------------------------------
+
+    def ingest_standard(self) -> dict:
+        """
+        Extract the lesson content standard into a structured dict for prompts
+        and quality gates.
+        """
+        text = self.lesson_standard.raw_text
+        return {
+            "structure_pattern": self._extract_section(text, "The five rules", "Three more rules"),
+            "voice": self._extract_section(text, "Sentence-level style", "Grounded in SQL Essential Training"),
+            "pacing": self._extract_section(text, "Corollary: no click is fast", "The five rules"),
+            "sql_style": self._extract_section(text, "SQL Query Formatting Standard", "## General Rules"),
+            "validation_habit": self._extract_section(text, "### 8. Every explanation closes", "## Grounded"),
+        }
+
+    @staticmethod
+    def _extract_section(text: str, start_marker: str, end_marker: str) -> str:
+        """Return the text between two markdown headings, trimmed."""
+        start = text.find(start_marker)
+        if start == -1:
+            return ""
+        end = text.find(end_marker, start + len(start_marker))
+        if end == -1:
+            end = len(text)
+        return re.sub(r"\n{2,}", "\n", text[start:end]).strip()
+
+    # ------------------------------------------------------------------
+    # Deterministic script generation helpers
+    # ------------------------------------------------------------------
+
+    _FORBIDDEN_VOICE_PATTERNS = [
+        r"\byou'll\b",
+        r"\byou need to\b",
+        r"\byou need\b",
+        r"\byour\b",
+        r"\bimportant to note\b",
+        r"\bbefore you\b",
+        r"\bif you skip\b",
+        r"\bif you\b",
+        r"\bit is important\b",
+        r"\bit's important\b",
+        r"\bin order to\b",
+        r"\bas you can see\b",
+        r"\bbasically\b",
+        r"\bessentially\b",
+        r"\bvery\b",
+        r"\breally\b",
+        r"\bjust\b",
+        r"\bsimply\b",
+        r"\bunderstand\b",
+        r"\bunderstanding\b",
+        r"\blearn\b",
+        r"\blearning\b",
+        r"\bgrasp\b",
+        r"\bcomprehend\b",
+        r"\bconcept\b",
+        r"\babstract\b",
+        r"\bthe fact that\b",
+        r"\bthis is because\b",
+        r"\bwhich means\b",
+        r"\btherefore\b",
+    ]
+
+    _SECOND_PERSON_PATTERN = re.compile(r"\byou\b|\byour\b|\byou'll\b|\byou're\b", re.IGNORECASE)
+
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len(text.split())
+
+    @staticmethod
+    def _truncate(text: str, max_words: int) -> str:
+        words = text.split()
+        if len(words) <= max_words:
+            return text
+        return " ".join(words[:max_words]).rstrip(",.;:")
+
+    @staticmethod
+    def _total_word_limit(format_tier: str) -> int:
+        """Soft upper word limit used for warnings, not hard failures."""
+        return {"micro": 50, "short": 80, "mid": 120, "long": 200, "full": 300}.get(format_tier, 80)
+
+    @staticmethod
+    def _db_facts(db_path: Optional[str], table_name: str) -> Dict[str, Any]:
+        """Return row count and column list for a table."""
+        facts = {"row_count": 0, "columns": []}
+        if not db_path or not Path(db_path).exists():
+            return facts
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                facts["row_count"] = cur.fetchone()[0]
+                cur.execute(f"PRAGMA table_info({table_name})")
+                facts["columns"] = [row[1] for row in cur.fetchall()]
+        except Exception as exc:
+            print(f"Warning: could not read DB facts for {table_name}: {exc}", file=sys.stderr)
+        return facts
+
+    @staticmethod
+    def _top_value(db_path: Optional[str], table_name: str, column: str, direction: str) -> str:
+        """Return the top value after sorting a column."""
+        if not db_path or not Path(db_path).exists():
+            return ""
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                order = "ASC" if direction == "asc" else "DESC"
+                cur.execute(f"SELECT {column} FROM {table_name} ORDER BY {column} {order} LIMIT 1")
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] is not None else ""
+        except Exception as exc:
+            print(f"Warning: could not read top value: {exc}", file=sys.stderr)
+            return ""
+
+    @staticmethod
+    def _filtered_count(db_path: Optional[str], table_name: str, column: str, value: str) -> int:
+        """Return the number of rows matching a filter value."""
+        if not db_path or not Path(db_path).exists():
+            return 0
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE {column} = ?", (value,))
+                return cur.fetchone()[0]
+        except Exception as exc:
+            print(f"Warning: could not read filtered count: {exc}", file=sys.stderr)
+            return 0
+
+    @staticmethod
+    def _first_value(db_path: Optional[str], table: str, column: str, context: str = "") -> str:
+        """Return a representative non-null value from a column."""
+        if not db_path or not Path(db_path).exists():
+            return ""
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL LIMIT 1"
+                )
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] is not None else ""
+        except Exception as exc:
+            print(f"Warning: could not read first value ({context}, db={db_path}, table={table}, col={column}): {exc}", file=sys.stderr)
+            return ""
+
+    @staticmethod
+    def _table_exists(db_path: Optional[str], table: str) -> bool:
+        if not db_path or not Path(db_path).exists():
+            return False
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                )
+                return cur.fetchone() is not None
+        except Exception:
+            return False
+
+    @staticmethod
+    def _column_exists(db_path: Optional[str], table: str, column: str) -> bool:
+        if not db_path or not Path(db_path).exists():
+            return False
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(f"PRAGMA table_info({table})")
+                cols = [row[1] for row in cur.fetchall()]
+                return column.lower() in (c.lower() for c in cols)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _table_for_column(db_path: Optional[str], column: str) -> Optional[str]:
+        """Return the name of a table that contains the given column."""
+        if not db_path or not Path(db_path).exists():
+            return None
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                for (table,) in cur.fetchall():
+                    try:
+                        cur.execute(f"PRAGMA table_info({table})")
+                        cols = [row[1] for row in cur.fetchall()]
+                        if column.lower() in (c.lower() for c in cols):
+                            return table
+                    except Exception:
+                        continue
+        except Exception as exc:
+            print(f"Warning: could not find table for column {column}: {exc}", file=sys.stderr)
+        return None
+
+    def _parse_objective(self, objective: str, db_path: Optional[str] = None, default_table: str = "Orders") -> Optional[Dict[str, Any]]:
+        """Map a discovery objective to a recipe type and parameters."""
+        lowered = objective.lower()
+
+        # Browse table: open/browse/show/display the X table
+        browse_match = re.search(
+            r"(?:open|browse|show|display)\s+(?:the\s+)?(\w+)\s+(?:table)", lowered,
+        )
+        if browse_match:
+            return {"type": "browse_table", "table": browse_match.group(1).capitalize()}
+
+        # Sort: sort the X table by Y [direction]
+        sort_match = re.search(
+            r"sort\s+(?:the\s+)?(\w+)\s+(?:table\s+)?by\s+(?:the\s+)?(\w+)(?:\s+(?:column|header))?",
+            lowered,
+        )
+        if sort_match:
+            direction = "desc" if any(w in lowered for w in ("descending", "desc", "largest", "biggest", "highest")) else "asc"
+            return {
+                "type": "sort_column",
+                "table": sort_match.group(1).capitalize(),
+                "column": sort_match.group(2).capitalize(),
+                "direction": direction,
+            }
+
+        # Filter with explicit value: filter X by typing Y into the Z column filter box
+        filter_value_match = re.search(
+            r"filter\s+(?:the\s+)?(\w+)\s+(?:table\s+)?(?:by\s+(?:typing|entering)\s+)['\"]?(.+?)['\"]?\s+(?:into|in)\s+(?:the\s+)?(\w+)\s+(?:column\s+)?filter",
+            lowered,
+        )
+        if filter_value_match:
+            value = filter_value_match.group(2).strip().strip("'\"")
+            return {
+                "type": "filter_column",
+                "table": filter_value_match.group(1).capitalize(),
+                "column": filter_value_match.group(3).capitalize(),
+                "value": value,
+            }
+
+        # Filter without explicit value: filter X by/using/with the Y column filter box
+        filter_col_match = re.search(
+            r"filter\s+(?:the\s+)?(\w+)\s+(?:table\s+)?(?:by|using|with)\s+(?:the\s+)?(\w+)(?:\s+(?:column))?(?:\s+(?:filter\s+box))?(?:\s+(?:for\s+an\s+exact\s+text\s+match))?",
+            lowered,
+        )
+        if filter_col_match:
+            table = filter_col_match.group(1).capitalize()
+            column = filter_col_match.group(2).capitalize()
+            if not self._table_exists(db_path, table):
+                table = default_table
+            value = self._first_value(db_path, table, column, context=f"filter {objective[:60]}") or ""
+            return {
+                "type": "filter_column",
+                "table": table,
+                "column": column,
+                "value": value,
+            }
+
+        # Execute query: try to extract the literal SELECT statement first.
+        if any(phrase in lowered for phrase in ("execute sql", "select ", "run a query", "query in the execute sql", "join query")):
+            table_match = re.search(r"(?:on|from)\s+(?:the\s+)?(\w+)\s+(?:table)?", lowered)
+            table = table_match.group(1).capitalize() if table_match else "Orders"
+
+            # Capture a SELECT ... clause up to a stopping word, but keep going
+            # through "FROM table" so simple star queries stay complete.
+            query_match = re.search(
+                r"(SELECT\s+.+?(?:\s+FROM\s+\w+)?)(?:\s+(?:query|in the execute sql|in the|on the|and view|and see)|$)",
+                objective,
+                re.IGNORECASE,
+            )
+            if query_match:
+                query = query_match.group(1).strip()
+                query = re.sub(r"[;.]+$", "", query)
+                # Reject placeholder captures like "SELECT query with a WHERE clause".
+                looks_valid = (
+                    re.search(r"\bFROM\b", query, re.IGNORECASE)
+                    or re.search(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", query, re.IGNORECASE)
+                )
+                if looks_valid:
+                    # Aggregates like COUNT(*) still need a source table.
+                    if re.search(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", query, re.IGNORECASE) and not re.search(r"\bFROM\b", query, re.IGNORECASE):
+                        query = f"{query}\nFROM {table}"
+                    return {"type": "execute_query", "query": query}
+
+            if "count" in lowered:
+                return {"type": "execute_query", "query": f"SELECT\n    COUNT(*)\nFROM {table}"}
+
+            if "where" in lowered:
+                col_match = re.search(
+                    r"where\s+clause\s+(?:on\s+(?:the\s+)?)?(?:\w+\s+table\s+)?(\w+)(?:\s+column)?",
+                    lowered,
+                    re.IGNORECASE,
+                )
+                column = col_match.group(1).capitalize() if col_match else "status"
+                if not self._table_exists(db_path, table):
+                    table = default_table
+                # Make sure the chosen table actually has the target column.
+                if db_path and not self._column_exists(db_path, table, column):
+                    table = self._table_for_column(db_path, column) or table
+                value_match = re.search(r"equal\s+to\s+['\"]?([\w-]+)", lowered, re.IGNORECASE)
+                value = (value_match.group(1).strip() if value_match else self._first_value(db_path, table, column, context=f"where {objective[:60]}")) or ""
+                value = value.replace("'", "''")
+                return {
+                    "type": "execute_query",
+                    "query": f"SELECT\n    *\nFROM {table}\nWHERE {column} = '{value}'",
+                }
+
+            if "join" in lowered or ("top" in lowered and "spend" in lowered):
+                join_table = "Customers" if table.lower() == "orders" else table
+                return {
+                    "type": "execute_query",
+                    "query": (
+                        f"SELECT\n"
+                        f"    c.name,\n"
+                        f"    SUM(o.amount) AS total_spend\n"
+                        f"FROM {table.lower()} o\n"
+                        f"JOIN {join_table.lower()} c ON o.customer_id = c.customer_id\n"
+                        f"GROUP BY c.name\n"
+                        f"ORDER BY total_spend DESC"
+                    ),
+                }
+
+            return {"type": "execute_query", "query": f"SELECT\n    *\nFROM {table}"}
+
+        return None
+
+    @staticmethod
+    def _verbalize_sql(query: str) -> str:
+        """Convert a SQL query fragment to a single-line spoken form for narration."""
+        spoken = query.strip()
+        # Collapse whitespace and newlines to single spaces.
+        spoken = re.sub(r"\s+", " ", spoken)
+        spoken = re.sub(r"\bSELECT\b", "SELECT", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bFROM\b", "FROM", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bWHERE\b", "WHERE", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bORDER BY\b", "ORDER BY", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bGROUP BY\b", "GROUP BY", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bCOUNT\b", "COUNT", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bSUM\b", "SUM", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bAS\b", "AS", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bJOIN\b", "JOIN", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bINNER\b", "INNER", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bLEFT\b", "LEFT", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bRIGHT\b", "RIGHT", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\bON\b", "ON", spoken, flags=re.IGNORECASE)
+        spoken = re.sub(r"\*", "star", spoken)
+        # Keep COUNT star natural (remove parentheses around the star substitution).
+        spoken = re.sub(r"\(\s*star\s*\)", " star", spoken)
+        return spoken.strip()
+
+    @staticmethod
+    def _wait_action() -> Dict[str, Any]:
+        return {"type": "wait", "duration": 1.5}
+
+    @staticmethod
+    def _click_action(detail: str) -> Dict[str, Any]:
+        return {"type": "click", "detail": detail}
+
+    @staticmethod
+    def _type_action(text: str, target: Optional[str] = None) -> Dict[str, Any]:
+        action: Dict[str, Any] = {"type": "type", "detail": text}
+        if target:
+            action["target"] = target
+        return action
+
+    @staticmethod
+    def _key_action(key: str) -> Dict[str, Any]:
+        return {"type": "key", "detail": key}
+
+    @staticmethod
+    def _verify_action(detail: str) -> Dict[str, Any]:
+        return {"type": "verify", "detail": detail}
+
+    @staticmethod
+    def _sequence_action(actions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {"type": "sequence", "actions": actions}
+
+    @staticmethod
+    def _parse_demo_to_action(text: str) -> List[Dict[str, Any]]:
+        """
+        Parse a demo-beat narration sentence into vision-agent action dicts.
+
+        Used as a fallback when a demo beat does not already have an action.
+        Examples:
+          "We click the Browse Data tab and the table view opens."
+            -> [{"type": "click", "detail": "Browse Data tab"}]
+          "We type SELECT star FROM Orders and the query appears."
+            -> [{"type": "type", "detail": "SELECT * FROM Orders"}]
+          "We press F5 and the results grid populates."
+            -> [{"type": "key", "detail": "F5"}]
+        """
+        actions: List[Dict[str, Any]] = []
+        lowered = text.lower()
+
+        # Explicit high-level action verbs.
+        if re.search(r"\b(apply|activate)\s+(?:the\s+)?filter", lowered):
+            actions.append({"type": "click", "detail": "filter box"})
+        if re.search(r"\brun\s+(?:the\s+)?quer", lowered) or re.search(
+            r"\bexecute\s+(?:the\s+)?quer", lowered
+        ):
+            actions.append({"type": "key", "detail": "f5"})
+
+        # Sort: "sort X by Y" or "click the Y column header".
+        sort_match = re.search(
+            r"\bsort\s+(?:the\s+)?\w+\s+(?:table\s+)?by\s+(?:the\s+)?(\w+)", lowered
+        )
+        if sort_match:
+            actions.append({"type": "click", "detail": f"{sort_match.group(1)} column header"})
+        header_match = re.search(r"\bclick\s+(?:the\s+)?(\w+)\s+(?:column\s+)?header", lowered)
+        if header_match:
+            actions.append({"type": "click", "detail": f"{header_match.group(1)} column header"})
+
+        # Find type actions.
+        for match in re.finditer(r"\btype\s+(.+?)(?=\s+(?:into|in|and|then|,)\s|\s*$)", lowered):
+            detail = match.group(1).strip().rstrip(",.;:")
+            # Convert spoken "star" back to the SQL asterisk.
+            detail = detail.replace("star", "*")
+            actions.append({"type": "type", "detail": detail})
+
+        # Find key actions.
+        for match in re.finditer(r"\bpress(?:es)?\s+([a-z0-9_+]+)", lowered, re.IGNORECASE):
+            actions.append({"type": "key", "detail": match.group(1)})
+
+        # Find click actions.
+        for match in re.finditer(
+            r"\bclick(?:s)?\s+(?:the\s+)?(.+?)(?=\s+(?:and|then|,)\s|\s*$)", lowered
+        ):
+            detail = match.group(1).strip().rstrip(",.;:")
+            actions.append({"type": "click", "detail": detail})
+
+        if len(actions) > 1:
+            return [{"type": "sequence", "actions": actions}]
+        return actions
+
+    @staticmethod
+    def _normalize_action(action_spec: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert legacy recipe action specs and coordinate-based actions into the
+        vision-agent action format (click/type/key/verify/wait/sequence).
+        """
+        if not isinstance(action_spec, dict):
+            return {"type": "wait", "duration": 1.5}
+
+        action_type = action_spec.get("type")
+
+        if action_type == "browse_table":
+            table = action_spec.get("table", "Orders")
+            return {
+                "type": "sequence",
+                "actions": [
+                    {"type": "click", "detail": "Browse Data tab"},
+                    {"type": "click", "detail": f"{table} table in the table dropdown"},
+                ],
+            }
+
+        if action_type == "sort_column":
+            table = action_spec.get("table", "Orders")
+            column = action_spec.get("column", "amount")
+            direction = action_spec.get("direction", "asc")
+            seq: List[Dict[str, Any]] = [
+                {"type": "click", "detail": "Browse Data tab"},
+                {"type": "click", "detail": f"{table} table in the table dropdown"},
+            ]
+            if direction == "desc":
+                seq.append({"type": "click", "detail": f"{column} column header"})
+            seq.append({"type": "click", "detail": f"{column} column header"})
+            return {"type": "sequence", "actions": seq}
+
+        if action_type == "filter_column":
+            table = action_spec.get("table", "Orders")
+            column = action_spec.get("column", "region")
+            value = action_spec.get("value", "")
+            return {
+                "type": "sequence",
+                "actions": [
+                    {"type": "click", "detail": "Browse Data tab"},
+                    {"type": "click", "detail": f"{table} table in the table dropdown"},
+                    {"type": "click", "detail": f"{column} filter box"},
+                    {"type": "type", "detail": str(value), "target": f"{column} filter box"},
+                    {"type": "key", "detail": "Return"},
+                ],
+            }
+
+        if action_type == "execute_query":
+            query = action_spec.get("query", "SELECT * FROM Orders")
+            return {
+                "type": "sequence",
+                "actions": [
+                    {"type": "click", "detail": "Execute SQL tab"},
+                    {"type": "click", "detail": "SQL editor text area"},
+                    {"type": "type", "detail": query, "target": "SQL editor text area"},
+                    {"type": "key", "detail": "F5"},
+                ],
+            }
+
+        # Coordinate-based click/type/key actions from older manifests.
+        if action_type == "click":
+            detail = action_spec.get("description") or action_spec.get("detail") or "UI element"
+            target = action_spec.get("target")
+            if not isinstance(target, dict):
+                target = {}
+            return {"type": "click", "detail": detail, "target": target}
+
+        if action_type == "type":
+            detail = action_spec.get("detail") or action_spec.get("text") or ""
+            target = action_spec.get("target")
+            if isinstance(target, dict):
+                # Keep legacy coordinate dictionaries for the graph edge, but add
+                # a human description for the vision agent if it is missing.
+                if not target.get("description"):
+                    target = {**target, "description": action_spec.get("description", "input field")}
+            elif isinstance(target, str):
+                # Vision-agent format uses a string target; keep it.
+                pass
+            else:
+                target = action_spec.get("description", "input field")
+            return {"type": "type", "detail": detail, "target": target}
+
+        if action_type == "key":
+            detail = action_spec.get("detail") or action_spec.get("text") or "Return"
+            return {"type": "key", "detail": detail}
+
+        if action_type == "wait":
+            return {"type": "wait", "duration": action_spec.get("duration", 1.5)}
+
+        # Already in vision-agent format.
+        return action_spec
+
+    def _build_script_beats(
+        self, video: Any, parsed: Dict[str, Any]
+    ) -> List[ScriptBeat]:
+        """Build SQL Essentials-quality beats from a parsed objective.
+
+        Each non-wait beat gets a vision-agent action dict in ``beat.action`` so
+        the discovery harness can drive the UI dynamically instead of using
+        hard-coded coordinate recipes.
+        """
+        exercise = video.exercise_artifact or {}
+        db_path = exercise.get("db_path")
+        table = parsed.get("table", "Orders")
+        facts = self._db_facts(db_path, table)
+        row_count = facts.get("row_count", 0)
+        columns = facts.get("columns", [])
+        columns_text = ", ".join(columns) if columns else "the columns"
+        tier = getattr(video, "format_tier", "short")
+        compact = tier in {"micro"}
+
+        rows_word = "rows" if row_count != 1 else "row"
+
+        def _validation(text: str) -> str:
+            """Ensure validation beats are 10-15 words and end with a period."""
+            text = text.strip().rstrip(".")
+            wc = len(text.split())
+            pads = [
+                ", confirming the result is correct",
+                ", which confirms the operation succeeded",
+                ", verifying the outcome matches our goal",
+            ]
+            while wc < 10:
+                text = text + pads[(wc // 3) % len(pads)]
+                wc = len(text.split())
+            if wc > 15:
+                text = " ".join(text.split()[:15]).rstrip(",;:")
+            return text + "."
+
+        beats: List[ScriptBeat] = []
+
+        if parsed["type"] == "browse_table":
+            if compact:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text=f"In this video, we will open the {table} table.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text="We click Browse Data and the table appears.",
+                        action=self._sequence_action([
+                            self._click_action("Browse Data tab"),
+                            self._click_action(f"{table} table in the table dropdown"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="validation",
+                        text=_validation(
+                            f"We see {len(columns)} columns and {row_count} {rows_word} in the grid"
+                        ),
+                        action=self._verify_action(
+                            f"the {table} table is visible with its rows and columns"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="close",
+                        text=f"We have opened the {table} table and confirmed its structure.",
+                        action=self._wait_action(),
+                    ),
+                ]
+            else:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text=f"In this video, we will open the {table} table in the Browse Data tab.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text="We click the Browse Data tab and the table view opens.",
+                        action=self._click_action("Browse Data tab"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="demo",
+                        text=f"We select {table} from the dropdown and {row_count} {rows_word} appear.",
+                        action=self._click_action(f"{table} table in the table dropdown"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="validation",
+                        text=_validation(
+                            f"We see {len(columns)} columns in the grid: {columns_text}"
+                        ),
+                        action=self._verify_action(
+                            f"the {table} table is visible with columns {columns_text}"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_005",
+                        kind="close",
+                        text=f"We have opened the {table} table and confirmed its structure.",
+                        action=self._wait_action(),
+                    ),
+                ]
+
+        elif parsed["type"] == "sort_column":
+            column = parsed.get("column", "amount")
+            direction = parsed.get("direction", "asc")
+            direction_text = "ascending" if direction == "asc" else "descending"
+            top_value = self._top_value(db_path, table, column, direction) or "the first value"
+            if compact:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text=f"In this video, we will sort by {column} in {direction_text} order.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text=f"We open the {table} table and click the {column} header.",
+                        action=self._sequence_action([
+                            self._click_action("Browse Data tab"),
+                            self._click_action(f"{table} table in the table dropdown"),
+                            self._click_action(f"{column} column header"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="validation",
+                        text=_validation(
+                            f"We see the {direction_text} sort with {top_value} at the top"
+                        ),
+                        action=self._verify_action(
+                            f"the {table} rows are sorted by {column} in {direction_text} order"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="close",
+                        text=f"We have sorted the {table} table by {column} in {direction_text} order.",
+                        action=self._wait_action(),
+                    ),
+                ]
+            else:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text=f"In this video, we will sort the {table} table by {column} in {direction_text} order.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text=f"We open the {table} table and the rows appear.",
+                        action=self._sequence_action([
+                            self._click_action("Browse Data tab"),
+                            self._click_action(f"{table} table in the table dropdown"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="demo",
+                        text=f"We click the {column} column header and the rows reorder.",
+                        action=self._click_action(f"{column} column header"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="validation",
+                        text=_validation(
+                            f"We see the {direction_text} sort, with {top_value} at the top"
+                        ),
+                        action=self._verify_action(
+                            f"the {table} rows are sorted by {column} in {direction_text} order"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_005",
+                        kind="close",
+                        text=f"We have sorted the {table} table by {column} in {direction_text} order.",
+                        action=self._wait_action(),
+                    ),
+                ]
+
+        elif parsed["type"] == "filter_column":
+            column = parsed.get("column", "region")
+            value = parsed.get("value", "")
+            filtered_count = self._filtered_count(db_path, table, column, value) if value else 0
+            filtered_word = "rows" if filtered_count != 1 else "row"
+            if compact:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text=f"In this video, we will filter the {table} by {column}.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text=f"We click the filter box, type {value}, and press Return.",
+                        action=self._sequence_action([
+                            self._click_action("Browse Data tab"),
+                            self._click_action(f"{table} table in the table dropdown"),
+                            self._click_action(f"{column} filter box"),
+                            self._type_action(str(value), target=f"{column} filter box"),
+                            self._key_action("Return"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="validation",
+                        text=_validation(
+                            f"We see exactly {filtered_count} {filtered_word} where {column} equals {value}"
+                        ),
+                        action=self._verify_action(
+                            f"only {filtered_count} {filtered_word} with {column} equal to {value} are visible"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="close",
+                        text=f"We have filtered the {table} by {column} and isolated rows.",
+                        action=self._wait_action(),
+                    ),
+                ]
+            else:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text=f"In this video, we will filter the {table} table to show only {value} rows.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text=f"We open the {table} table and the rows appear.",
+                        action=self._sequence_action([
+                            self._click_action("Browse Data tab"),
+                            self._click_action(f"{table} table in the table dropdown"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="demo",
+                        text=f"We click the {column} filter box and type {value}.",
+                        action=self._click_action(f"{column} filter box"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="demo",
+                        text="We press Return and the rows filter.",
+                        action=self._type_action(str(value), target=f"{column} filter box"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_005",
+                        kind="validation",
+                        text=_validation(
+                            f"We see {filtered_count} {filtered_word}, all with {column} equal to {value}"
+                        ),
+                        action=self._verify_action(
+                            f"only {filtered_count} {filtered_word} with {column} equal to {value} are visible"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_006",
+                        kind="close",
+                        text=f"We have filtered the {table} table by {column} and narrowed the view.",
+                        action=self._wait_action(),
+                    ),
+                ]
+
+            # Compact the filter short version: the type action needs a Return keypress.
+            if not compact:
+                # Replace the Return press with a key action after the type beat.
+                # Current beat_004 is type; add an explicit Return key beat.
+                beats.insert(
+                    5,
+                    ScriptBeat(
+                        beat_id="beat_005_key",
+                        kind="demo",
+                        text="We press Return and the rows filter.",
+                        action=self._key_action("Return"),
+                    ),
+                )
+                # Renumber beats.
+                for i, beat in enumerate(beats, start=1):
+                    beat.beat_id = f"beat_{i:03d}"
+
+        elif parsed["type"] == "execute_query":
+            query = parsed.get("query", "SELECT * FROM Orders")
+            spoken_query = self._verbalize_sql(query)
+            spoken_words = spoken_query.split()
+            short_type_text = (
+                f"We type {spoken_query} and the SQL appears."
+                if len(spoken_words) <= 6
+                else "We type the formatted query and the SQL appears."
+            )
+            if compact:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text="In this video, we will run our first SELECT query.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text="We open Execute SQL, type the query, and run it.",
+                        action=self._sequence_action([
+                            self._click_action("Execute SQL tab"),
+                            self._click_action("SQL editor text area"),
+                            self._type_action(query, target="SQL editor text area"),
+                            self._key_action("F5"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="validation",
+                        text=_validation(
+                            f"We see the results grid populate with the returned {rows_word}"
+                        ),
+                        action=self._verify_action(
+                            "the Execute SQL tab shows a populated results grid below the query"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="close",
+                        text=f"We have run the query and retrieved the {row_count} {rows_word}.",
+                        action=self._wait_action(),
+                    ),
+                ]
+            else:
+                beats = [
+                    ScriptBeat(
+                        beat_id="beat_001",
+                        kind="opening",
+                        text="In this video, we will run a SELECT query in the Execute SQL tab.",
+                        action=self._wait_action(),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_002",
+                        kind="demo",
+                        text="We click the Execute SQL tab and the editor appears.",
+                        action=self._click_action("Execute SQL tab"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_003",
+                        kind="demo",
+                        text="We click the SQL editor and type the formatted query.",
+                        action=self._sequence_action([
+                            self._click_action("SQL editor text area"),
+                            self._type_action(query, target="SQL editor text area"),
+                        ]),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_004",
+                        kind="demo",
+                        text="We press F5 and the results grid populates.",
+                        action=self._key_action("F5"),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_005",
+                        kind="validation",
+                        text=_validation(
+                            f"We see {row_count} {rows_word} returned, confirming the query executed successfully"
+                        ),
+                        action=self._verify_action(
+                            "the Execute SQL tab shows a populated results grid below the query"
+                        ),
+                    ),
+                    ScriptBeat(
+                        beat_id="beat_006",
+                        kind="close",
+                        text=f"We have run our SELECT query and retrieved all {row_count} {rows_word}.",
+                        action=self._wait_action(),
+                    ),
+                ]
+
+        return beats
+
+    def _enforce_word_limits(
+        self, beats: List[ScriptBeat], video: Any
+    ) -> List[ScriptBeat]:
+        """Trim beats to per-kind word limits and total script limit without
+        breaking action+result demo sentences."""
+        limits = {"opening": 15, "demo": 12, "validation": 15, "close": 15}
+        minima = {"opening": 10, "demo": 5, "validation": 10, "close": 10}
+        total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
+
+        # First pass: hard cap per kind.
+        for beat in beats:
+            beat.text = self._truncate(beat.text, limits.get(beat.kind, 15))
+
+        # Second pass: if total still exceeds limit, trim non-essential words
+        # from the longest beat, but never below its minimum and never remove
+        # the 'and' that joins action + result in demo beats.
+        while sum(self._word_count(b.text) for b in beats) > total_limit and len(beats) > 3:
+            longest = max(beats[1:-1], key=lambda b: self._word_count(b.text))
+            words = longest.text.split()
+            minimum = minima.get(longest.kind, 5)
+            if len(words) <= minimum:
+                break
+            # For demo beats, do not drop the word 'and' or the last word.
+            if longest.kind == "demo" and " and " in longest.text and len(words) > minimum + 1:
+                longest.text = " ".join(words[:-1]).rstrip(",.;:")
+            elif longest.kind == "demo":
+                break
+            else:
+                longest.text = " ".join(words[:-1]).rstrip(",.;:")
+
+        return beats
+
+    # ------------------------------------------------------------------
+    # Script generation
+    # ------------------------------------------------------------------
+
+    def generate_script(
+        self,
+        video: Any,
+        fix_errors: Optional[List[str]] = None,
+        max_attempts: int = 1,
+    ) -> List[ScriptBeat]:
+        """
+        Generate a SQL Essentials-quality narration script for the video.
+
+        Known objectives are rendered deterministically from templates. Unknown
+        objectives fall back to an LLM prompt. The validator emits warnings for
+        most issues and only hard-fails on empty/missing beats. At most one
+        regeneration attempt is made; after that the best-effort script is used.
+        """
+        exercise = video.exercise_artifact or {}
+        db_path = exercise.get("db_path")
+        default_table = (video.exercise_artifact or {}).get("table_name", "Orders")
+        parsed = self._parse_objective(video.discovery_objective, db_path, default_table=default_table)
+        beats: List[ScriptBeat] = []
+
+        if parsed:
+            beats = self._build_script_beats(video, parsed)
+        else:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
+                return []
+            for attempt in range(max_attempts):
+                prompt = self._build_script_prompt(video, fix_errors=fix_errors)
+                response = self.client.messages.create(
+                    model=MODEL,
+                    max_tokens=2048,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text_parts = [block.text for block in response.content if block.type == "text"]
+                raw_text = "\n".join(text_parts).strip()
+                script_data = self._parse_script_json(raw_text)
+                if not script_data:
+                    print(f"Warning: could not parse script JSON (attempt {attempt + 1}); retrying.", file=sys.stderr)
+                    continue
+                beats = [
+                    ScriptBeat(
+                        beat_id=item.get("beat_id") or f"beat_{i:03d}",
+                        kind=item.get("kind", "state"),
+                        text=item.get("text", "").strip(),
+                        action=item.get("action"),
+                        visual_check=item.get("visual_check"),
+                    )
+                    for i, item in enumerate(script_data, start=1)
+                ]
+                beats = self._validate_script_beats(beats, video)
+                ok, errors, warnings = self.validate_script(beats, video)
+                for warning in warnings:
+                    print(f"Warning: {warning}", file=sys.stderr)
+                if ok:
+                    break
+                print(f"Script quality gate failed (attempt {attempt + 1}); regenerating.", file=sys.stderr)
+                fix_errors = errors
+
+        beats = self._enforce_word_limits(beats, video)
+        beats = self._validate_script_beats(beats, video)
+        ok, errors, warnings = self.validate_script(beats, video)
+        for warning in warnings:
+            print(f"Warning: {warning}", file=sys.stderr)
+        if not ok:
+            print(f"Warning: returning script despite hard failures: {errors}", file=sys.stderr)
+        return beats
+
+    @staticmethod
+    def _parse_script_json(raw_text: str) -> List[Dict[str, Any]]:
+        """Extract a JSON array of beats from the LLM response."""
+        script_data: List[Dict[str, Any]] = []
+        fenced = re.search(r"```(?:json)?\s*(\[.*\])\s*```", raw_text, re.DOTALL)
+        if fenced:
+            try:
+                script_data = json.loads(fenced.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        if not script_data:
+            try:
+                script_data = json.loads(raw_text)
+            except json.JSONDecodeError:
+                return []
+
+        if not isinstance(script_data, list):
+            script_data = script_data.get("script", [])
+
+        return script_data
+
+    def _build_script_prompt(
+        self, video: Any, fix_errors: Optional[List[str]] = None
+    ) -> str:
+        exercise = video.exercise_artifact or {}
+        db_path = exercise.get("db_path", "")
+        table_name = exercise.get("table_name", "")
+        fix_section = ""
+        if fix_errors:
+            fix_section = (
+                "\n\nThe previous script failed quality review with these errors. "
+                "Fix them and return a corrected JSON array with no explanation:\n"
+                + "\n".join(f"- {e}" for e in fix_errors)
+            )
+
+        return f"""You are writing narration for a short software-training video in the style of SQL Essentials.
+
+Course context
+- Topic: {getattr(video, 'title', '')}
+- Tool: DB Browser for SQLite
+- Learning objective: {video.learning_objective}
+- Discovery objective: {video.discovery_objective}
+- Running example: {table_name} table in {db_path}
+
+STRICT RULES (zero exceptions):
+1. Exactly 4-6 beats total.
+2. Beat kinds (in order): opening, demo (2-4 beats), validation, close.
+3. NO concept beat. NO abstract theory. NO explanation of why the skill matters.
+4. Voice: first person plural, present tense. "We click...", "We type...", "We see..."
+5. NEVER use: you'll, you need to, it's important to, before you, if you skip, understand, learn, concept, abstract.
+6. Demo beats must combine action + immediate result in one sentence:
+   GOOD: "We click the Browse Data tab and the table view opens."
+   BAD: "Click the Browse Data tab." (robotic command)
+   BAD: "The table view opens." (no action)
+7. Validation beat confirms a concrete visible fact.
+8. Close beat: "We have [skill]."
+9. Word limits: opening 10-15, demo 5-10, validation 10-15, close 10-15. Total ≤70 words for a short video.
+10. SQL keywords in narration stay uppercase: SELECT, FROM, WHERE. Use "star" for *.
+
+Return ONLY a JSON array of beats like:
+[
+  {{"beat_id": "beat_001", "kind": "opening", "text": "In this video, we will open the Orders table.", "action": {{"type": "browse_table", "table": "Orders"}}}},
+  {{"beat_id": "beat_002", "kind": "demo", "text": "We click the Browse Data tab and the table view opens."}},
+  {{"beat_id": "beat_003", "kind": "demo", "text": "We select Orders from the dropdown and the rows appear."}},
+  {{"beat_id": "beat_004", "kind": "validation", "text": "We see all rows and columns in the Orders table."}},
+  {{"beat_id": "beat_005", "kind": "close", "text": "We have opened the Orders table and confirmed its structure."}}
+]
+{fix_section}
+"""
+
+    @staticmethod
+    def _validate_script_beats(beats: List[ScriptBeat], video: Any) -> List[ScriptBeat]:
+        """Normalize actions and drop beats that are empty or have unknown kinds."""
+        valid_kinds = {"opening", "concept", "demo", "validation", "close", "recap", "preview"}
+        supported_actions = {
+            "browse_table", "sort_column", "filter_column", "execute_query",
+            "click", "type", "key", "wait", "verify", "sequence",
+        }
+        cleaned: List[ScriptBeat] = []
+        for beat in beats:
+            if beat.kind not in valid_kinds:
+                print(f"Warning: dropping script beat with unknown kind {beat.kind!r}", file=sys.stderr)
+                continue
+            if not beat.text or not beat.text.strip():
+                print(f"Warning: {beat.beat_id} has empty text; skipping.", file=sys.stderr)
+                continue
+            if beat.kind == "demo" and beat.action:
+                action_type = beat.action.get("type")
+                if action_type not in supported_actions:
+                    print(
+                        f"Warning: demo beat {beat.beat_id} uses unsupported action {action_type!r}; skipping.",
+                        file=sys.stderr,
+                    )
+                    continue
+                beat.action = _format_action_sql(beat.action)
+                beat.action = LessonBuilder._normalize_action(beat.action)
+            cleaned.append(beat)
+        return cleaned
+
+    def validate_script(
+        self, beats: List[ScriptBeat], video: Any
+    ) -> tuple[bool, List[str], List[str]]:
+        """
+        SQL Essentials quality gate. Returns (ok, hard_errors, warnings).
+
+        Only empty text, missing required beat kinds, and a complete lack of demo
+        beats are treated as hard failures. Everything else is a warning so the
+        pipeline can use the best-effort script instead of looping forever.
+        """
+        errors: List[str] = []
+        warnings: List[str] = []
+
+        if not beats:
+            errors.append("Script is empty.")
+            return False, errors, warnings
+
+        kinds = [b.kind for b in beats]
+        required = {"opening", "demo", "validation", "close"}
+        missing = required - set(kinds)
+        if missing:
+            errors.append(f"Missing required beat kinds: {sorted(missing)}")
+
+        if "concept" in kinds:
+            warnings.append("Concept beats are not preferred; consider replacing with demo/validation.")
+
+        # Structure ordering warnings.
+        try:
+            first_demo = kinds.index("demo")
+        except ValueError:
+            first_demo = len(kinds)
+        if "validation" in kinds and "close" in kinds:
+            if kinds.index("validation") > kinds.index("close"):
+                warnings.append("Validation beat should come before the close beat.")
+        if "opening" in kinds and first_demo < kinds.index("opening"):
+            warnings.append("Opening should come before demo beats.")
+
+        demo_count = sum(1 for b in beats if b.kind == "demo")
+        action_count = sum(1 for b in beats if b.kind == "demo" and b.action)
+        if demo_count == 0:
+            errors.append("Script must have at least one demo beat.")
+        if action_count == 0:
+            warnings.append("Demo beats lack concrete actions; discovery may not reach the objective.")
+
+        # Total length (soft limit → warning).
+        total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
+        total_words = sum(self._word_count(b.text) for b in beats)
+        if total_words > total_limit:
+            warnings.append(f"Script is {total_words} words, exceeds soft limit of {total_limit}.")
+
+        # Per-kind soft word limits.
+        limits = {"opening": (8, 25), "demo": (3, 20), "validation": (8, 25), "close": (8, 20)}
+        for beat in beats:
+            wc = self._word_count(beat.text)
+            lo, hi = limits.get(beat.kind, (3, 25))
+            if not (lo <= wc <= hi):
+                warnings.append(f"{beat.beat_id} ({beat.kind}) has {wc} words; expected {lo}-{hi}.")
+
+            lowered = beat.text.lower()
+            for pattern in self._FORBIDDEN_VOICE_PATTERNS:
+                if re.search(pattern, lowered):
+                    warnings.append(f"{beat.beat_id} contains filler phrase matching /{pattern}/.")
+                    break
+
+            if self._SECOND_PERSON_PATTERN.search(beat.text):
+                warnings.append(f"{beat.beat_id} uses second-person voice; prefer 'we'.")
+
+            if not beat.text.startswith("We ") and beat.kind in {"demo", "validation", "close"}:
+                warnings.append(f"{beat.beat_id} should start with 'We '.")
+
+            if beat.kind == "opening" and not re.search(
+                r"^(in this video,\s+)?(we\s+will|this\s+video\s+shows|we\s+are\s+going)", lowered
+            ):
+                warnings.append(f"{beat.beat_id} opening should state the objective clearly.")
+
+            if beat.kind == "close" and not re.search(r"^we\s+have", lowered):
+                warnings.append(f"{beat.beat_id} close should recap the skill.")
+
+            if beat.kind == "validation" and _contains_action_word(beat.text):
+                warnings.append(f"{beat.beat_id} (validation) describes an action; prefer a visible fact.")
+
+            if beat.kind == "demo":
+                action_words = {"click", "type", "press", "enter", "select", "choose", "hit", "tap", "open", "run", "sort", "filter"}
+                if not any(w in lowered for w in action_words):
+                    warnings.append(f"{beat.beat_id} (demo) does not describe an action.")
+
+        return not errors, errors, warnings
+    # ------------------------------------------------------------------
+    # Action derivation
+    # ------------------------------------------------------------------
+
+    def derive_actions(
+        self, beats: List[ScriptBeat], db_path: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert script demo beats into concrete UI actions the discovery harness
+        can execute. Recipe-friendly actions are expanded by DiscoveryRecipes;
+        generic click/type/key actions pass through.
+        """
+        actions, _ = self._derive_actions_with_mapping(beats, db_path)
+        return actions
+
+    def _derive_actions_with_mapping(
+        self, beats: List[ScriptBeat], db_path: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], List[Optional[ScriptBeat]]]:
+        """
+        Like derive_actions, but also returns a parallel list mapping each
+        concrete action back to its source demo beat (or None).
+        """
+        actions: List[Dict[str, Any]] = []
+        beat_for_action: List[Optional[ScriptBeat]] = []
+        for beat in beats:
+            if beat.kind != "demo" or not beat.action:
+                continue
+            derived = self._derive_single_action(beat.action, db_path)
+            actions.extend(derived)
+            beat_for_action.extend([beat] * len(derived))
+        return actions, beat_for_action
+
+    @staticmethod
+    def _derive_single_action(
+        action_spec: Dict[str, Any], db_path: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        action_type = action_spec.get("type")
+
+        if action_type == "browse_table":
+            return DiscoveryRecipes.browse_table(action_spec.get("table", "Orders"), db_path)
+
+        if action_type == "sort_column":
+            return DiscoveryRecipes.sort_column(
+                action_spec.get("table", "Orders"),
+                action_spec.get("column", "amount"),
+                action_spec.get("direction", "asc"),
+            )
+
+        if action_type == "filter_column":
+            return DiscoveryRecipes.filter_column(
+                action_spec.get("table", "Orders"),
+                action_spec.get("column", "region"),
+                action_spec.get("value", ""),
+            )
+
+        if action_type == "execute_query":
+            query = action_spec.get("query", "SELECT * FROM Orders")
+            return DiscoveryRecipes.execute_query(query)
+
+        if action_type == "click":
+            return [
+                {
+                    "action": "click",
+                    "target": action_spec.get("target", {"x": 0.5, "y": 0.5}),
+                    "description": action_spec.get("description", "Click"),
+                    "animate": True,
+                }
+            ]
+
+        if action_type == "type":
+            target = action_spec.get("target", {"x": 0.5, "y": 0.5})
+            return [
+                {
+                    "action": "click",
+                    "target": target,
+                    "description": action_spec.get("description", "Focus input"),
+                    "animate": True,
+                },
+                {
+                    "action": "type",
+                    "target": target,
+                    "text": action_spec.get("text", ""),
+                    "description": action_spec.get("description", "Type value"),
+                    "click_first": False,
+                },
+            ]
+
+        if action_type == "key":
+            return [
+                {
+                    "action": "key",
+                    "text": action_spec.get("text", "Return"),
+                    "description": action_spec.get("description", "Press key"),
+                }
+            ]
+
+        if action_type == "wait":
+            return [
+                {
+                    "action": "wait",
+                    "duration": action_spec.get("duration", 1.0),
+                    "description": action_spec.get("description", "Wait"),
+                }
+            ]
+
+        print(f"Warning: unsupported action type {action_type!r}", file=sys.stderr)
+        return []
+
+    # ------------------------------------------------------------------
+    # Script execution
+    # ------------------------------------------------------------------
+
+    def execute_script(
+        self,
+        beats: List[ScriptBeat],
+        discovery: EndStateDiscovery,
+        db_path: Optional[str] = None,
+    ) -> DiscoveryResult:
+        """
+        Run the vision-agent script beats through the discovery harness.
+
+        The harness records one video clip per beat (opening, demo, validation,
+        close) and stores the path in ``beat.video_clip_path``.
+        """
+        # Back-fill demo actions using the text parser for any beat that is
+        # missing an action specification, normalising multi-action parses to a
+        # single sequence action dict.
+        for beat in beats:
+            if beat.kind == "demo" and not beat.action:
+                parsed = self._parse_demo_to_action(beat.text)
+                if len(parsed) == 1:
+                    beat.action = parsed[0]
+                elif len(parsed) > 1:
+                    beat.action = {"type": "sequence", "actions": parsed}
+
+        return discovery.execute_script(
+            beats=beats,
+            visual_summary=discovery.objective,
+            save_all_screenshots=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Graph construction
+    # ------------------------------------------------------------------
+
+    def build_graph(
+        self,
+        video: Any,
+        beats: List[ScriptBeat],
+        discovery_result: DiscoveryResult,
+    ) -> ExecutionGraph:
+        """
+        Build an ExecutionGraph from the script beats and the discovery result.
+
+        Demo beats become edges whose video_path is the recorded clip for that
+        beat. Non-demo beats attach to the surrounding states.
+        """
+        if not discovery_result.success or not discovery_result.locked_state:
+            raise ValueError("DiscoveryResult must be successful to build a graph.")
+
+        graph_id = f"{video.video_id}_{uuid.uuid4().hex[:8]}"
+        application = video.application
+        output_dir = Path(discovery_result.locked_state.screenshot_path).parent
+
+        demo_beats = [b for b in beats if b.kind == "demo"]
+        if not demo_beats:
+            raise ValueError("Cannot build graph: script has no demo beats.")
+
+        # Build states from frame extracts of demo-beat clips.
+        states: List[ScreenState] = []
+        start_screenshot = self._extract_first_frame(
+            demo_beats[0].video_clip_path, output_dir / f"{graph_id}_start.png"
+        )
+        start_state = ScreenState(
+            state_id="state_000",
+            screenshot_path=str(start_screenshot.resolve()),
+            timestamp=0.0,
+            application=application,  # type: ignore[arg-type]
+            platform_snapshot={},
+            visual_summary="Start state",
+        )
+
+        prev_state = start_state
+        edges: List[ActionEdge] = []
+
+        for i, beat in enumerate(demo_beats, start=1):
+            if not beat.video_clip_path:
+                raise ValueError(f"Demo beat {beat.beat_id} has no recorded clip.")
+
+            end_screenshot = self._extract_last_frame(
+                beat.video_clip_path, output_dir / f"{graph_id}_state_{i:03d}.png"
+            )
+            state_id = f"state_{i:03d}"
+            state = ScreenState(
+                state_id=state_id,
+                screenshot_path=str(end_screenshot.resolve()),
+                timestamp=0.0,
+                application=application,  # type: ignore[arg-type]
+                platform_snapshot={},
+                visual_summary=f"After {beat.beat_id}",
+            )
+            states.append(state)
+
+            action_type: Literal["click", "type", "select", "scroll", "hotkey", "wait", "api_seed"] = "click"
+            payload: Optional[str] = None
+            target: Dict[str, Any] = {}
+            if beat.action:
+                raw_type = beat.action.get("type")
+                if raw_type == "execute_query":
+                    action_type = "type"
+                    payload = beat.action.get("query")
+                    target = {"x": 0.5, "y": 0.45, "w": 700, "h": 300}
+                elif raw_type == "type":
+                    action_type = "type"
+                    # Vision-agent beats store the text in ``detail``; older recipe
+                    # beats store it in ``text``.  Support both.
+                    payload = beat.action.get("detail") or beat.action.get("text")
+                    target = beat.action.get("target", {})
+                elif raw_type == "click":
+                    action_type = "click"
+                    target = beat.action.get("target", {})
+                elif raw_type == "key":
+                    action_type = "hotkey"
+                    payload = beat.action.get("detail") or beat.action.get("text")
+                elif raw_type == "sequence":
+                    # A sequence edge represents a multi-step demo beat; the renderer
+                    # uses the recorded clip, so the edge action is a generic click.
+                    action_type = "click"
+                elif raw_type == "wait":
+                    action_type = "wait"
+                else:
+                    target = beat.action.get("target", {})
+
+            # ActionEdge.target must be a dict; vision-agent strings are descriptive.
+            if isinstance(target, str):
+                target = {"description": target}
+            elif not isinstance(target, dict):
+                target = {}
+
+            edges.append(
+                ActionEdge(
+                    edge_id=f"edge_{i:03d}",
+                    from_state_id=prev_state.state_id,
+                    to_state_id=state.state_id,
+                    action_type=action_type,
+                    target=target,
+                    payload=payload,
+                    expected_duration=2.0,
+                    video_path=beat.video_clip_path,
+                )
+            )
+            prev_state = state
+
+        end_state = discovery_result.locked_state
+        end_state.state_id = f"state_{len(states) + 1:03d}"
+
+        # Connect the last demo state to the locked end state if they differ.
+        if prev_state.state_id != end_state.state_id:
+            edges.append(
+                ActionEdge(
+                    edge_id=f"edge_{len(edges) + 1:03d}",
+                    from_state_id=prev_state.state_id,
+                    to_state_id=end_state.state_id,
+                    action_type="wait",
+                    target={},
+                    payload=None,
+                    expected_duration=1.0,
+                    video_path=None,
+                )
+            )
+
+        narration_beats = self._overlay_beats(beats, start_state, states, end_state, edges)
+
+        graph = ExecutionGraph(
+            graph_id=graph_id,
+            learning_objective=video.learning_objective,
+            application=application,
+            start_state=start_state,
+            end_state=end_state,
+            states=states,
+            edges=edges,
+            narration_beats=narration_beats,
+            generation_cost_usd=round(
+                sum(log.get("cost_usd", 0.0) for log in discovery_result.attempt_logs), 6
+            ),
+            reliability_score=discovery_result.reliability_score,
+        )
+
+        store = GraphStore()
+        store.save(graph)
+        return graph
+
+    @staticmethod
+    def _extract_first_frame(video_path: Optional[str], out_path: Path) -> Path:
+        """Extract the first frame of a video clip to a PNG."""
+        if not video_path or not Path(video_path).exists():
+            return LessonBuilder._blank_image(out_path)
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", video_path,
+                    "-ss", "0", "-vframes", "1",
+                    "-pix_fmt", "rgb24", str(out_path),
+                ],
+                check=True, capture_output=True, timeout=60,
+            )
+            return out_path
+        except Exception as exc:
+            print(f"Warning: could not extract first frame from {video_path}: {exc}", file=sys.stderr)
+            return LessonBuilder._blank_image(out_path)
+
+    @staticmethod
+    def _extract_last_frame(video_path: Optional[str], out_path: Path) -> Path:
+        """Extract the last frame of a video clip to a PNG."""
+        if not video_path or not Path(video_path).exists():
+            return LessonBuilder._blank_image(out_path)
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-sseof", "-0.5", "-i", video_path,
+                    "-vframes", "1", "-pix_fmt", "rgb24", str(out_path),
+                ],
+                check=True, capture_output=True, timeout=60,
+            )
+            return out_path
+        except Exception as exc:
+            print(f"Warning: could not extract last frame from {video_path}: {exc}", file=sys.stderr)
+            return LessonBuilder._blank_image(out_path)
+
+    @staticmethod
+    def _blank_image(out_path: Path) -> Path:
+        """Create a small black placeholder PNG."""
+        try:
+            from PIL import Image
+            img = Image.new("RGB", (1280, 720), color=(0, 0, 0))
+            img.save(out_path)
+        except Exception:
+            # Absolute fallback: write a 1x1 transparent PNG header.
+            out_path.write_bytes(
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+        return out_path
+
+    @staticmethod
+    def _overlay_beats(
+        beats: List[ScriptBeat],
+        start_state: ScreenState,
+        intermediate_states: List[ScreenState],
+        end_state: ScreenState,
+        edges: List[ActionEdge],
+    ) -> List[NarrationBeat]:
+        """
+        Map script beats to graph states and edges.
+
+        Demo beats consume edges in order. Non-demo state beats attach to the
+        current state; multiple consecutive state beats can share a state.
+        """
+        states = [start_state] + intermediate_states + [end_state]
+        edge_idx = 0
+        state_idx = 0
+        narration_beats: List[NarrationBeat] = []
+
+        for beat in beats:
+            if beat.kind == "demo":
+                if edge_idx >= len(edges):
+                    beat.attaches_to = "state"
+                    beat.target_id = end_state.state_id
+                    state_idx = len(states) - 1
+                else:
+                    beat.attaches_to = "edge"
+                    beat.target_id = edges[edge_idx].edge_id
+                    to_id = edges[edge_idx].to_state_id
+                    edge_idx += 1
+                    for i, s in enumerate(states):
+                        if s.state_id == to_id:
+                            state_idx = i
+                            break
+            else:
+                beat.attaches_to = "state"
+                beat.target_id = states[min(state_idx, len(states) - 1)].state_id
+
+            narration_beats.append(
+                NarrationBeat(
+                    beat_id=beat.beat_id,
+                    attaches_to=beat.attaches_to,  # type: ignore[arg-type]
+                    target_id=beat.target_id or "",
+                    text=beat.text,
+                    word_count=len(beat.text.split()),
+                    start_time=0.0,
+                    end_time=0.0,
+                )
+            )
+
+        return narration_beats
