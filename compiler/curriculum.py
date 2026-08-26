@@ -24,6 +24,7 @@ from .graph_store import GraphStore
 from .lesson_builder import LessonBuilder
 from .narrator import ScriptBeat
 from .renderer import GraphRenderer
+from .scout import scout_environment
 from .tts import TTSGenerator
 
 
@@ -456,13 +457,26 @@ def run_course(
         graph_id = f"{manifest.course_id}_{video.video_id}"
         db_path = video.exercise_artifact.get("db_path")
 
+        # Phase 1b: scout the environment so the script only asserts observed facts.
+        env_map = None
+        if db_path and video.application:
+            try:
+                env_map = scout_environment(
+                    db_path=str(db_path),
+                    application=video.application,
+                    video_id=video.video_id,
+                    output_dir=discovery_output_dir,
+                )
+            except Exception as exc:
+                print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
+
         # Phase 2: generate or load the narration script.
         if video.script_beats:
             script_beats = [_dict_to_script_beat(b) for b in video.script_beats]
             # Normalize legacy recipe/coordinate actions to the vision-agent format.
             script_beats = lesson_builder._validate_script_beats(script_beats, video)
         else:
-            script_beats = lesson_builder.generate_script(video)
+            script_beats = lesson_builder.generate_script(video, env_map=env_map)
             video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
 
         if not script_beats:

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import anthropic
 
-from .discovery import DiscoveryRecipes, EndStateDiscovery
+from .discovery import APP_NAME, DiscoveryRecipes, EndStateDiscovery
 from .graph_store import GraphStore
 from .lesson_standard import LessonStandard
 from .narrator import (
@@ -588,7 +588,10 @@ class LessonBuilder:
         return action_spec
 
     def _build_script_beats(
-        self, video: Any, parsed: Dict[str, Any]
+        self,
+        video: Any,
+        parsed: Dict[str, Any],
+        env_map: Optional[Dict[str, Any]] = None,
     ) -> List[ScriptBeat]:
         """Build SQL Essentials-quality beats from a parsed objective.
 
@@ -606,7 +609,29 @@ class LessonBuilder:
         tier = getattr(video, "format_tier", "short")
         compact = tier in {"micro"}
 
+        # Ground against the scout pass if available.
+        env_tables = []
+        env_columns: Dict[str, List[str]] = {}
+        env_row_counts: Dict[str, int] = {}
+        env_default_table: Optional[str] = None
+        env_active_tab: Optional[str] = None
+        if env_map:
+            env_tables = env_map.get("tables", []) or []
+            env_columns = env_map.get("columns", {}) or {}
+            env_row_counts = env_map.get("row_counts", {}) or {}
+            ui = env_map.get("ui") or {}
+            env_default_table = ui.get("browse_data_default_table")
+            env_active_tab = ui.get("active_tab")
+            # Prefer observed facts over raw DB facts when they conflict.
+            if table in env_row_counts:
+                row_count = env_row_counts[table]
+            if table in env_columns:
+                columns = env_columns[table]
+                columns_text = ", ".join(columns)
+
         rows_word = "rows" if row_count != 1 else "row"
+        browse_data_already_active = env_active_tab and "browse data" in env_active_tab.lower()
+        target_table_already_open = env_default_table and env_default_table.lower() == table.lower()
 
         def _validation(text: str) -> str:
             """Ensure validation beats are 10-15 words and end with a period."""
@@ -628,6 +653,22 @@ class LessonBuilder:
 
         if parsed["type"] == "browse_table":
             if compact:
+                demo_actions: List[Dict[str, Any]] = []
+                demo_texts: List[str] = []
+                if not browse_data_already_active:
+                    demo_actions.append(self._click_action("Browse Data tab"))
+                    demo_texts.append("We click Browse Data")
+                if not target_table_already_open:
+                    demo_actions.append(self._click_action(f"{table} table in the table dropdown"))
+                    demo_texts.append(f"and open the {table} table")
+                if not demo_actions:
+                    demo_actions = [self._wait_action()]
+                    demo_texts.append(f"The {table} table is already open")
+                demo_action = (
+                    self._sequence_action(demo_actions)
+                    if len(demo_actions) > 1
+                    else demo_actions[0]
+                )
                 beats = [
                     ScriptBeat(
                         beat_id="beat_001",
@@ -638,11 +679,8 @@ class LessonBuilder:
                     ScriptBeat(
                         beat_id="beat_002",
                         kind="demo",
-                        text="We click Browse Data and the table appears.",
-                        action=self._sequence_action([
-                            self._click_action("Browse Data tab"),
-                            self._click_action(f"{table} table in the table dropdown"),
-                        ]),
+                        text=" ".join(demo_texts).strip() + ".",
+                        action=demo_action,
                     ),
                     ScriptBeat(
                         beat_id="beat_003",
@@ -662,6 +700,25 @@ class LessonBuilder:
                     ),
                 ]
             else:
+                demo_actions = []
+                demo_texts = []
+                if not browse_data_already_active:
+                    demo_actions.append(self._click_action("Browse Data tab"))
+                    demo_texts.append("We click the Browse Data tab")
+                if not target_table_already_open:
+                    demo_actions.append(self._click_action(f"{table} table in the table dropdown"))
+                    if demo_texts:
+                        demo_texts.append(f"and select {table}")
+                    else:
+                        demo_texts.append(f"We select {table}")
+                if not demo_actions:
+                    demo_actions = [self._wait_action()]
+                    demo_texts.append(f"The {table} table is already open")
+                demo_action = (
+                    self._sequence_action(demo_actions)
+                    if len(demo_actions) > 1
+                    else demo_actions[0]
+                )
                 beats = [
                     ScriptBeat(
                         beat_id="beat_001",
@@ -672,17 +729,11 @@ class LessonBuilder:
                     ScriptBeat(
                         beat_id="beat_002",
                         kind="demo",
-                        text="We click the Browse Data tab and the table view opens.",
-                        action=self._click_action("Browse Data tab"),
+                        text=" ".join(demo_texts).strip() + ".",
+                        action=demo_action,
                     ),
                     ScriptBeat(
                         beat_id="beat_003",
-                        kind="demo",
-                        text=f"We select {table} from the dropdown and {row_count} {rows_word} appear.",
-                        action=self._click_action(f"{table} table in the table dropdown"),
-                    ),
-                    ScriptBeat(
-                        beat_id="beat_004",
                         kind="validation",
                         text=_validation(
                             f"We see {len(columns)} columns in the grid: {columns_text}"
@@ -692,7 +743,7 @@ class LessonBuilder:
                         ),
                     ),
                     ScriptBeat(
-                        beat_id="beat_005",
+                        beat_id="beat_004",
                         kind="close",
                         text=f"We have opened the {table} table and confirmed its structure.",
                         action=self._wait_action(),
@@ -1021,6 +1072,7 @@ class LessonBuilder:
         video: Any,
         fix_errors: Optional[List[str]] = None,
         max_attempts: int = 1,
+        env_map: Optional[Dict[str, Any]] = None,
     ) -> List[ScriptBeat]:
         """
         Generate a SQL Essentials-quality narration script for the video.
@@ -1037,13 +1089,13 @@ class LessonBuilder:
         beats: List[ScriptBeat] = []
 
         if parsed:
-            beats = self._build_script_beats(video, parsed)
+            beats = self._build_script_beats(video, parsed, env_map=env_map)
         else:
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
                 return []
             for attempt in range(max_attempts):
-                prompt = self._build_script_prompt(video, fix_errors=fix_errors)
+                prompt = self._build_script_prompt(video, fix_errors=fix_errors, env_map=env_map)
                 response = self.client.messages.create(
                     model=MODEL,
                     max_tokens=2048,
@@ -1106,7 +1158,10 @@ class LessonBuilder:
         return script_data
 
     def _build_script_prompt(
-        self, video: Any, fix_errors: Optional[List[str]] = None
+        self,
+        video: Any,
+        fix_errors: Optional[List[str]] = None,
+        env_map: Optional[Dict[str, Any]] = None,
     ) -> str:
         exercise = video.exercise_artifact or {}
         db_path = exercise.get("db_path", "")
@@ -1119,6 +1174,31 @@ class LessonBuilder:
                 + "\n".join(f"- {e}" for e in fix_errors)
             )
 
+        env_section = ""
+        if env_map:
+            env_section = (
+                "\n\nOBSERVED ENVIRONMENT (from a scout pass; treat as ground truth):\n"
+                f"- Application: {env_map.get('application', video.application)}\n"
+                f"- Tables in database: {', '.join(env_map.get('tables', []) or [])}\n"
+            )
+            row_counts = env_map.get("row_counts", {}) or {}
+            if row_counts:
+                env_section += "- Exact row counts: " + ", ".join(
+                    f"{t}={row_counts.get(t, '?')}" for t in env_map.get("tables", [])
+                ) + "\n"
+            columns = env_map.get("columns", {}) or {}
+            if columns:
+                env_section += "- Columns per table:\n"
+                for t in env_map.get("tables", []):
+                    env_section += f"  - {t}: {', '.join(columns.get(t, []))}\n"
+            ui = env_map.get("ui") or {}
+            env_section += (
+                f"- Active tab on launch: {ui.get('active_tab')}\n"
+                f"- Available tabs: {', '.join(ui.get('available_tabs', []) or [])}\n"
+                f"- Browse Data default table: {ui.get('browse_data_default_table')}\n"
+                f"- Notable UI state: {ui.get('notable', 'none')}\n"
+            )
+
         return f"""You are writing narration for a short software-training video in the style of SQL Essentials.
 
 Course context
@@ -1127,7 +1207,7 @@ Course context
 - Learning objective: {video.learning_objective}
 - Discovery objective: {video.discovery_objective}
 - Running example: {table_name} table in {db_path}
-
+{env_section}
 STRICT RULES (zero exceptions):
 1. Exactly 4-6 beats total.
 2. Beat kinds (in order): opening, demo (2-4 beats), validation, close.
@@ -1138,10 +1218,15 @@ STRICT RULES (zero exceptions):
    GOOD: "We click the Browse Data tab and the table view opens."
    BAD: "Click the Browse Data tab." (robotic command)
    BAD: "The table view opens." (no action)
-7. Validation beat confirms a concrete visible fact.
-8. Close beat: "We have [skill]."
-9. Word limits: opening 10-15, demo 5-10, validation 10-15, close 10-15. Total ≤70 words for a short video.
-10. SQL keywords in narration stay uppercase: SELECT, FROM, WHERE. Use "star" for *.
+7. Every demo beat = exactly ONE atomic action with narration <= 20 words, written to be spoken WHILE the action happens.
+8. Do NOT generate actions already satisfied by the observed default state:
+   - If Browse Data is the active tab, do not narrate clicking it.
+   - If the target table is already shown in Browse Data, do not narrate selecting it.
+9. Validation beats must reference facts in the EnvironmentMap verbatim (exact table names, column names, and row counts).
+10. Only state numbers/names present in the EnvironmentMap. Never invent quantities, table names, or column names.
+11. Close beat: "We have [skill]."
+12. Word limits: opening 10-15, demo 5-20, validation 10-15, close 10-15. Total ≤70 words for a short video.
+13. SQL keywords in narration stay uppercase: SELECT, FROM, WHERE. Use "star" for *.
 
 Return ONLY a JSON array of beats like:
 [
