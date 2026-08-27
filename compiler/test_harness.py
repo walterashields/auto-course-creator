@@ -520,6 +520,25 @@ class TestScriptIntegrityGate(unittest.TestCase):
         self.builder._enforce_sentence_integrity(beats)
         self.assertTrue(self.builder.script_integrity_ok(beats))
 
+    def test_validation13_original_script_fails_gate(self) -> None:
+        """The exact Phase 1 validation13 script (mid-sentence) must fail the gate."""
+        original_validation13_beats = [
+            ScriptBeat(beat_id="beat_001", kind="opening", text="In this video, we will write our first SELECT query to pull a customer contact"),
+            ScriptBeat(beat_id="beat_002", kind="concept", text="SELECT tells the database which columns we want, and FROM tells it which table holds"),
+            ScriptBeat(beat_id="beat_003", kind="demo", text="We open the Execute SQL tab.", action={"type": "click", "detail": "Execute SQL tab"}),
+            ScriptBeat(beat_id="beat_004", kind="demo", text="We type a comment block so we remember what this query is", action={"type": "type_block", "text": "-- comment"}),
+            ScriptBeat(beat_id="beat_005", kind="demo", text="We type the query that asks for first name, last name, and", action={"type": "type_block", "text": "SELECT 1;"}),
+            ScriptBeat(beat_id="beat_006", kind="demo", text="We run the query and the result pane fills with the contact", action={"type": "run_query"}),
+            ScriptBeat(beat_id="beat_007", kind="explain", text="The result pane shows 60 rows with FirstName, LastName, Email, giving us the complete customer"),
+            ScriptBeat(beat_id="beat_008", kind="validation", text="We see 60 rows returned in the result pane, confirming the contact list is complete."),
+            ScriptBeat(beat_id="beat_009", kind="close", text="We have written our first SELECT query and pulled the customer contact list. Next, we"),
+        ]
+        self.assertFalse(self.builder.script_integrity_ok(original_validation13_beats))
+        self.builder._enforce_sentence_integrity(original_validation13_beats)
+        self.assertTrue(self.builder.script_integrity_ok(original_validation13_beats))
+        for beat in original_validation13_beats:
+            self.assertRegex(beat.text, r"[.!?]$")
+
 
 class TestEditorReadBack(unittest.TestCase):
     def _agent_with_mocks(self) -> VisionAgent:
