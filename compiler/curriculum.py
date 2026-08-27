@@ -432,6 +432,11 @@ def _verify_final_frame_matches_locked_state(
     SSIM is used instead of MSE because screen-capture and screen-recording
     frames of the same UI state can differ in color rendering, timing text, and
     anti-aliasing while still being semantically identical.
+
+    Diagnostics:
+      - Both images are normalized to 640 px wide grayscale before comparison.
+      - Their original dimensions are logged.
+      - On mismatch, both compared images are saved to discovery_output/.
     """
     locked_state = getattr(discovery_result, "locked_state", None)
     if not locked_state:
@@ -443,50 +448,73 @@ def _verify_final_frame_matches_locked_state(
         return
 
     try:
-        import tempfile
         from PIL import Image
         import numpy as np
 
-        with tempfile.TemporaryDirectory(prefix="wsda_guard_") as tmpdir:
-            tmp_path = Path(tmpdir)
-            video_frame = tmp_path / "video_last.png"
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-sseof", "-0.5", "-i", video_path,
-                    "-vframes", "1", "-pix_fmt", "rgb24", str(video_frame),
-                ],
-                check=True, capture_output=True, timeout=30,
-            )
-            img_video = Image.open(video_frame).convert("L")
-            img_state = Image.open(screenshot_path).convert("L")
-            img_state = img_state.resize(img_video.size, Image.Resampling.LANCZOS)
-            arr_video = np.array(img_video).astype(np.float32)
-            arr_state = np.array(img_state).astype(np.float32)
+        discovery_output_dir = Path(__file__).resolve().parent / "discovery_output"
+        discovery_output_dir.mkdir(parents=True, exist_ok=True)
 
-            try:
-                from skimage.metrics import structural_similarity as ssim
-                score = float(ssim(arr_video, arr_state, data_range=255.0))
-                metric_name = "SSIM"
-            except Exception:
-                # Fallback to MSE if scikit-image is unavailable.
-                score = float(np.mean((arr_video - arr_state) ** 2))
-                metric_name = "MSE"
-                similarity_threshold = 10.0
+        video_frame = discovery_output_dir / "guard_video_last.png"
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-sseof", "-0.5", "-i", video_path,
+                "-vframes", "1", "-pix_fmt", "rgb24", str(video_frame),
+            ],
+            check=True, capture_output=True, timeout=30,
+        )
 
-            if metric_name == "SSIM":
-                verdict = "MATCH" if score >= similarity_threshold else "MISMATCH"
-            else:
-                verdict = "MATCH" if score < similarity_threshold else "MISMATCH"
+        img_video_raw = Image.open(video_frame).convert("L")
+        img_state_raw = Image.open(screenshot_path).convert("L")
+
+        print(
+            f"[POST-RENDER GUARD] comparing video frame {img_video_raw.size} "
+            f"vs locked screenshot {img_state_raw.size}",
+            file=sys.stderr,
+        )
+
+        # Normalize both to the same fixed width before comparing.
+        target_width = 640
+        def _normalize(img: Image.Image) -> Image.Image:
+            w, h = img.size
+            if w == target_width:
+                return img
+            ratio = target_width / w
+            return img.resize((target_width, int(h * ratio)), Image.Resampling.LANCZOS)
+
+        img_video = _normalize(img_video_raw)
+        img_state = _normalize(img_state_raw)
+        arr_video = np.array(img_video).astype(np.float32)
+        arr_state = np.array(img_state).astype(np.float32)
+
+        try:
+            from skimage.metrics import structural_similarity as ssim
+            score = float(ssim(arr_video, arr_state, data_range=255.0))
+            metric_name = "SSIM"
+        except Exception:
+            # Fallback to MSE if scikit-image is unavailable.
+            score = float(np.mean((arr_video - arr_state) ** 2))
+            metric_name = "MSE"
+            similarity_threshold = 10.0
+
+        if metric_name == "SSIM":
+            verdict = "MATCH" if score >= similarity_threshold else "MISMATCH"
+        else:
+            verdict = "MATCH" if score < similarity_threshold else "MISMATCH"
+        print(
+            f"[POST-RENDER GUARD] final-frame vs locked-state: {verdict} ({metric_name}={score:.4f})",
+            file=sys.stderr,
+        )
+        if verdict == "MISMATCH":
+            final_save = discovery_output_dir / "guard_final_frame.png"
+            locked_save = discovery_output_dir / "guard_locked_reference.png"
+            img_video_raw.save(final_save)
+            img_state_raw.save(locked_save)
             print(
-                f"[POST-RENDER GUARD] final-frame vs locked-state: {verdict} ({metric_name}={score:.4f})",
+                "[POST-RENDER GUARD] WARNING: rendered video does not end on the discovered objective state! "
+                f"video={video_path} screenshot={screenshot_path} "
+                f"saved={final_save}, {locked_save}",
                 file=sys.stderr,
             )
-            if verdict == "MISMATCH":
-                print(
-                    "[POST-RENDER GUARD] WARNING: rendered video does not end on the discovered objective state! "
-                    f"video={video_path} screenshot={screenshot_path}",
-                    file=sys.stderr,
-                )
     except Exception as exc:
         print(
             f"[POST-RENDER GUARD] WARNING: could not run final-frame check: {exc}",
@@ -499,7 +527,29 @@ def _verify_final_frame_matches_locked_state(
 # ---------------------------------------------------------------------------
 
 
-def _setup_run_log(course_output_dir: Path) -> logging.Handler:
+class _Tee:
+    """Write to a file and the original stream at the same time."""
+
+    def __init__(self, stream, file_path: Path):
+        self.stream = stream
+        self.file = open(str(file_path), "a", encoding="utf-8")
+
+    def write(self, data: str) -> int:
+        self.stream.write(data)
+        self.stream.flush()
+        self.file.write(data)
+        self.file.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        self.stream.flush()
+        self.file.flush()
+
+    def close(self) -> None:
+        self.file.close()
+
+
+def _setup_run_log(course_output_dir: Path):
     """Persist console output to run.log inside the course output directory."""
     log_path = course_output_dir / "run.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -509,6 +559,11 @@ def _setup_run_log(course_output_dir: Path) -> logging.Handler:
             f"# Run log started {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
             encoding="utf-8",
         )
+
+    # Tee stdout/stderr so print() and logging both end up in run.log.
+    sys.stdout = _Tee(sys.stdout, log_path)  # type: ignore[assignment]
+    sys.stderr = _Tee(sys.stderr, log_path)  # type: ignore[assignment]
+
     handler = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
     handler.setLevel(logging.INFO)
