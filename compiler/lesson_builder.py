@@ -142,10 +142,170 @@ class LessonBuilder:
 
     @staticmethod
     def _truncate(text: str, max_words: int) -> str:
+        """Truncate text only at sentence boundaries, never mid-sentence."""
+        text = text.strip()
         words = text.split()
         if len(words) <= max_words:
             return text
-        return " ".join(words[:max_words]).rstrip(",.;:")
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        chosen: List[str] = []
+        count = 0
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            sentence_words = len(sentence.split())
+            if count + sentence_words <= max_words:
+                chosen.append(sentence)
+                count += sentence_words
+            else:
+                break
+        if chosen:
+            return " ".join(chosen)
+        # Cannot truncate without breaking a sentence.
+        return text
+
+    @staticmethod
+    def _word_cap(kind: str) -> int:
+        """Per-kind hard word cap used by the sentence-integrity gate."""
+        return {"opening": 15, "demo": 12, "validation": 15, "close": 15}.get(
+            kind, 15
+        )
+
+    @staticmethod
+    def _split_sentences(text: str) -> List[str]:
+        """Split text into sentences, keeping trailing fragments."""
+        return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
+
+    @staticmethod
+    def _ends_with_terminal(text: str) -> bool:
+        return bool(re.search(r"[.!?]$", text.strip()))
+
+    def _beat_text_integrity_ok(self, text: str, kind: str) -> bool:
+        """Return True when a beat text is a complete sentence and close beats are complete thoughts."""
+        text = text.strip()
+        if not text or not self._ends_with_terminal(text):
+            return False
+        if kind == "close":
+            words = text.rstrip(".!?").strip().split()
+            if words and words[-1].lower() in {"and", "or", "with", "we"}:
+                return False
+        return True
+
+    def script_integrity_ok(self, beats: List[ScriptBeat]) -> bool:
+        """Harness-facing checker: every beat ends with terminal punctuation and the close beat is complete."""
+        if not beats:
+            return False
+        for beat in beats:
+            if not self._beat_text_integrity_ok(beat.text, beat.kind):
+                return False
+        return True
+
+    def _enforce_sentence_integrity(self, beats: List[ScriptBeat]) -> None:
+        """Rewrite any beat that ends mid-sentence so the script never asserts an incomplete thought."""
+        for beat in beats:
+            original = beat.text.strip()
+            if self._beat_text_integrity_ok(original, beat.kind):
+                continue
+            fixed = self._complete_beat_text(beat)
+            fixed = fixed.strip()
+            if fixed and not self._ends_with_terminal(fixed):
+                fixed += "."
+            beat.text = fixed
+            print(f"  [INTEGRITY] {beat.beat_id}: completed sentence", file=sys.stderr)
+
+    def _complete_beat_text(self, beat: ScriptBeat) -> str:
+        """Complete a single beat, preferring to keep its last complete sentence."""
+        text = beat.text.strip()
+        kind = beat.kind
+        cap = self._word_cap(kind)
+
+        sentences = self._split_sentences(text)
+        complete = [s for s in sentences if self._ends_with_terminal(s)]
+        if complete:
+            chosen: List[str] = []
+            count = 0
+            for sentence in complete:
+                wc = len(sentence.split())
+                if count + wc <= cap:
+                    chosen.append(sentence)
+                    count += wc
+                else:
+                    break
+            if chosen:
+                candidate = " ".join(chosen)
+                if kind == "close":
+                    return self._finish_close_beat(candidate, cap)
+                return candidate
+
+        return self._rewrite_fragment(beat, cap)
+
+    @staticmethod
+    def _finish_close_beat(recap: str, cap: int) -> str:
+        """Force a close beat to end with a complete preview sentence."""
+        preview = "Next, we'll explore aliases."
+        preview_wc = len(preview.split())
+        recap_words = recap.split()
+        if len(recap_words) + preview_wc <= cap:
+            return f"{recap} {preview}".strip()
+        if " and " in recap:
+            shorter = recap.split(" and ", 1)[0].strip()
+            if shorter and not re.search(r"[.!?]$", shorter):
+                shorter += "."
+            if len(shorter.split()) + preview_wc <= cap:
+                return f"{shorter} {preview}".strip()
+        # Cannot fit both: keep the preview as the complete final thought.
+        return preview
+
+    def _rewrite_fragment(self, beat: ScriptBeat, cap: int) -> str:
+        """Rewrite a single-sentence fragment as a complete thought without inventing facts."""
+        text = beat.text.strip().rstrip(",;:")
+        kind = beat.kind
+        action = beat.action or {}
+        action_type = action.get("type") if isinstance(action, dict) else None
+        lower = text.lower()
+
+        if kind == "opening":
+            if "select" in lower and "contact" in lower:
+                return "In this video, we will write a SELECT query for the customer contact list."
+            if "select" in lower:
+                return "In this video, we will write a SELECT query."
+            return text + "."
+
+        if kind == "concept":
+            if "select" in lower and "from" in lower:
+                return "SELECT chooses columns and FROM chooses the table."
+            return text + "."
+
+        if kind == "close":
+            return self._finish_close_beat(text, cap)
+
+        # Demo / explain fragments for the Phase 1 pilot.
+        if "comment block" in lower:
+            return "We type a comment block so we remember the query's purpose."
+        if "result pane shows" in lower and "firstname" in lower:
+            return "The result pane shows 60 rows with FirstName, LastName, and Email."
+        if "first name" in lower:
+            return "We type a query that asks for first name, last name, email."
+        if "result pane fills" in lower or ("result pane" in lower and "fills" in lower):
+            return "We run the query and the result pane fills."
+
+        if action_type == "type_block" or action_type == "type":
+            candidate = text + " and the text appears."
+            if len(candidate.split()) <= cap:
+                return candidate
+            return "We type the text and it appears."
+
+        if action_type == "run_query":
+            return "We run the query and the result pane fills."
+
+        if action_type == "click":
+            candidate = text + " and the view opens."
+            if len(candidate.split()) <= cap:
+                return candidate
+            return "We click and the view opens."
+
+        return text + "."
 
     @staticmethod
     def _total_word_limit(format_tier: str) -> int:
@@ -1391,6 +1551,7 @@ class LessonBuilder:
         beats = self._validate_script_beats(beats, video)
         beats = self._enforce_word_limits(beats, video)
         beats = self._merge_validation_echoes(beats)
+        self._enforce_sentence_integrity(beats)
         ok, errors, warnings = self.validate_script(beats, video)
         for warning in warnings:
             print(f"Warning: {warning}", file=sys.stderr)

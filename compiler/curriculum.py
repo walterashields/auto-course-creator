@@ -684,7 +684,10 @@ def run_course(
             script_beats = lesson_builder._validate_script_beats(script_beats, video)
         else:
             script_beats = lesson_builder.generate_script(video, env_map=env_map)
-            video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
+
+        # C4.1: enforce sentence integrity on every script, whether generated or loaded.
+        lesson_builder._enforce_sentence_integrity(script_beats)
+        video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
 
         if not script_beats:
             print("FAILED (script generation)")
@@ -867,7 +870,15 @@ def main() -> int:
         manifest = create_sql_sorting_fundamentals()
     else:
         manifest = create_sql_essential_training_ch4()
-    save_manifest(manifest)
+
+    # Preserve an existing manifest (e.g., the validation13 script with intentional
+    # mid-sentence beats) instead of clobbering it. run_course will save the final
+    # enriched manifest at the end of the pipeline.
+    existing_manifest = load_manifest(manifest.course_id)
+    if existing_manifest is None:
+        save_manifest(manifest)
+    else:
+        manifest = existing_manifest
 
     try:
         results = run_course(

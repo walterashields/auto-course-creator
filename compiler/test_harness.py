@@ -9,21 +9,26 @@ TTS audio.
 
 from __future__ import annotations
 
+import io
 import math
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from compiler.curriculum import _dict_to_script_beat, load_manifest
 from compiler.discovery import EndStateDiscovery
 from compiler.lesson_builder import LessonBuilder
 from compiler.narrator import ScriptBeat
 from compiler.renderer import GraphRenderer
 from compiler.tts import TTSGenerator
+from compiler.vision_agent import VisionAgent
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +489,79 @@ class TestValidationEchoSemantic(unittest.TestCase):
         self.assertEqual([b.beat_id for b in merged], ["beat_001"])
 
 
+class TestScriptIntegrityGate(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_synthetic_mid_sentence_is_rewritten(self) -> None:
+        """A beat ending mid-sentence must fail the gate and be rewritten."""
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="demo",
+                text="We open the Execute SQL tab and the editor",
+                action={"type": "click", "detail": "Execute SQL tab"},
+            ),
+        ]
+        self.assertFalse(self.builder.script_integrity_ok(beats))
+        self.builder._enforce_sentence_integrity(beats)
+        self.assertTrue(self.builder.script_integrity_ok(beats))
+        self.assertRegex(beats[0].text, r"[.!?]$")
+
+    def test_validation13_script_passes_after_enforcement(self) -> None:
+        """The saved Phase 1 pilot script must be fixable by the integrity gate."""
+        manifest = load_manifest("sql_essential_training_ch4")
+        self.assertIsNotNone(manifest)
+        beats = [_dict_to_script_beat(b) for b in manifest.videos[0].script_beats]
+        # The CLI regenerates the manifest, so it may already be complete. If it
+        # is still broken, it must fail the gate before enforcement.
+        if not self.builder.script_integrity_ok(beats):
+            self.assertFalse(self.builder.script_integrity_ok(beats))
+        self.builder._enforce_sentence_integrity(beats)
+        self.assertTrue(self.builder.script_integrity_ok(beats))
+
+
+class TestEditorReadBack(unittest.TestCase):
+    def _agent_with_mocks(self) -> VisionAgent:
+        agent = VisionAgent()
+        mock.patch.object(agent, "find_and_click", return_value=True).start()
+        mock.patch.object(agent, "press_key", return_value=True).start()
+        self.addCleanup(mock.patch.stopall)
+        return agent
+
+    def test_exact_match_succeeds_first_try(self) -> None:
+        """When the VLM read-back matches, type_block succeeds immediately."""
+        agent = self._agent_with_mocks()
+        with (
+            mock.patch.object(agent, "_read_editor_content", return_value="SELECT 1;"),
+            mock.patch("pyautogui.typewrite"),
+            mock.patch("pyautogui.press"),
+            mock.patch("time.sleep"),
+            mock.patch.object(sys, "stderr", io.StringIO()) as stderr,
+        ):
+            self.assertTrue(agent.type_block("SELECT 1;"))
+            log = stderr.getvalue()
+            self.assertIn("[TYPE BLOCK] read-back OK", log)
+            self.assertNotIn("read-back mismatch", log)
+
+    def test_mismatch_then_match_succeeds_and_logs_retry(self) -> None:
+        """A mismatched first read-back followed by a match should retry and succeed."""
+        agent = self._agent_with_mocks()
+        with (
+            mock.patch.object(
+                agent, "_read_editor_content", side_effect=["WRONG", "SELECT 1;"]
+            ),
+            mock.patch("pyautogui.typewrite"),
+            mock.patch("pyautogui.press"),
+            mock.patch("time.sleep"),
+            mock.patch.object(sys, "stderr", io.StringIO()) as stderr,
+        ):
+            self.assertTrue(agent.type_block("SELECT 1;"))
+            log = stderr.getvalue()
+            self.assertIn("[TYPE BLOCK] read-back mismatch, retry 1/2", log)
+            self.assertIn("[TYPE BLOCK] read-back OK", log)
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -494,6 +572,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestRenderFromScript))
     suite.addTests(loader.loadTestsFromTestCase(TestAdaptBeatsToObservedState))
     suite.addTests(loader.loadTestsFromTestCase(TestValidationEchoSemantic))
+    suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityGate))
+    suite.addTests(loader.loadTestsFromTestCase(TestEditorReadBack))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1

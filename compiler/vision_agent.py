@@ -246,76 +246,165 @@ class VisionAgent:
         time.sleep(0.2)
         return True
 
+    def _dismiss_character_viewer(self) -> None:
+        """Dismiss the macOS Character Viewer / Dictation dialog if it opened."""
+        for _ in range(3):
+            pyautogui.press("esc")
+            time.sleep(0.2)
+
+    def _focus_editor(self) -> None:
+        """Click the SQL editor, falling back to a normalized center click."""
+        print("  [TYPE BLOCK] focusing SQL editor", file=sys.stderr)
+        if not self.find_and_click("Focus the SQL editor", "SQL editor text area"):
+            logical_w, logical_h = pyautogui.size()
+            fx, fy = int(logical_w * 0.5), int(logical_h * 0.45)
+            print(f"  [TYPE BLOCK] fallback click editor at ({fx}, {fy})", file=sys.stderr)
+            pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
+            pyautogui.click(fx, fy)
+            time.sleep(0.3)
+
+    def _clear_editor(self) -> None:
+        """Focus the SQL editor, select all, and delete any existing text."""
+        print("  [TYPE BLOCK] clearing editor", file=sys.stderr)
+        self._dismiss_character_viewer()
+        self._focus_editor()
+        self.press_key("cmd+a")
+        self.press_key("delete")
+        time.sleep(0.2)
+
+    def _type_visible(self, text: str) -> None:
+        """Type text at ~0.015 s/character so a learner can follow along."""
+        print(f"  [TYPE BLOCK] typing {len(text)} characters", file=sys.stderr)
+        pyautogui.typewrite(text, interval=0.015)
+        time.sleep(0.2)
+        self._dismiss_character_viewer()
+
+    def _paste_text(self, text: str) -> None:
+        """Select all editor text and paste from the clipboard."""
+        print("  [PASTE FALLBACK] selecting editor text and pasting from clipboard", file=sys.stderr)
+        self._dismiss_character_viewer()
+        logical_w, logical_h = pyautogui.size()
+        pyautogui.tripleClick(int(logical_w * 0.12), int(logical_h * 0.22))
+        time.sleep(0.2)
+        original_clipboard = pyperclip.paste()
+        try:
+            pyperclip.copy(text)
+            time.sleep(0.1)
+            pyautogui.hotkey("command", "v")
+            time.sleep(0.4)
+        finally:
+            try:
+                pyperclip.copy(original_clipboard)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _normalize_editor_text(text: str) -> str:
+        """Collapse whitespace, strip, and lowercase for read-back comparison."""
+        return re.sub(r"\s+", " ", text).strip().lower()
+
+    def _read_editor_content(self) -> str:
+        """Ask the VLM for the exact text currently in the SQL editor."""
+        prompt = (
+            "Read only the editable SQL text in the DB Browser for SQLite SQL editor. "
+            "Ignore line numbers, UI chrome, prompts, and anything outside the editable text area. "
+            "Return ONLY the exact editable text as a single code block."
+        )
+        result = self._call_vlm(prompt, expect_json=False, max_tokens=512)
+        text = result.text
+        fenced = re.search(r"```(?:\w+)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if fenced:
+            return fenced.group(1)
+        return text
+
     def type_block(self, text: str) -> bool:
         """
-        Type a multi-line SQL block visibly into the active editor.
+        Type a multi-line SQL block visibly into the active editor with read-back verification.
 
-        Focuses the SQL editor, then types at ~0.015 s/character so a learner can
-        follow along. After typing, asks the VLM whether the editor contains the
-        exact text. If typing fails or the VLM disagrees, fall back to clipboard
-        paste and log the fallback.
+        Before typing the editor is cleared. After typing the VLM reads the editor
+        content and it is compared to the intended text. Up to two retries are
+        attempted; if they all fail the method falls back to clipboard paste with
+        the same read-back check.
         """
         if not text:
             return True
 
-        def _focus_editor() -> None:
-            """Click the SQL editor, falling back to a normalized center click."""
-            print("  [TYPE BLOCK] focusing SQL editor", file=sys.stderr)
-            if not self.find_and_click("Focus the SQL editor", "SQL editor text area"):
-                logical_w, logical_h = pyautogui.size()
-                fx, fy = int(logical_w * 0.5), int(logical_h * 0.45)
-                print(f"  [TYPE BLOCK] fallback click editor at ({fx}, {fy})", file=sys.stderr)
-                pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
-                pyautogui.click(fx, fy)
-                time.sleep(0.3)
+        intended_norm = self._normalize_editor_text(text)
 
-        def _close_character_viewer() -> None:
-            """Dismiss the macOS Character Viewer / Dictation dialog if it opened."""
-            for _ in range(3):
-                pyautogui.press("esc")
-                time.sleep(0.2)
+        def _matches(read_text: str) -> bool:
+            read_norm = self._normalize_editor_text(read_text)
+            if read_norm == intended_norm:
+                return True
+            # Debug: log why the normalized strings differ.
+            print(
+                f"  [TYPE BLOCK] read-back normalized: {read_norm!r}",
+                file=sys.stderr,
+            )
+            print(
+                f"  [TYPE BLOCK] intended normalized:  {intended_norm!r}",
+                file=sys.stderr,
+            )
+            return False
 
-        def _paste_text() -> None:
-            """Select all editor text via triple-click and paste from clipboard."""
-            print("  [PASTE FALLBACK] selecting editor text and pasting from clipboard", file=sys.stderr)
-            _close_character_viewer()
-            # Triple-click the editor line to select existing partial text.
-            logical_w, logical_h = pyautogui.size()
-            pyautogui.tripleClick(int(logical_w * 0.12), int(logical_h * 0.22))
-            time.sleep(0.2)
-            original_clipboard = pyperclip.paste()
-            try:
-                pyperclip.copy(text)
-                time.sleep(0.1)
-                pyautogui.hotkey("command", "v")
-                time.sleep(0.4)
-            finally:
-                try:
-                    pyperclip.copy(original_clipboard)
-                except Exception:
-                    pass
+        self._clear_editor()
+        self._type_visible(text)
 
-        _close_character_viewer()
-        _focus_editor()
+        for attempt in range(1, 3):
+            read_back = self._read_editor_content()
+            if _matches(read_back):
+                print("  [TYPE BLOCK] read-back OK", file=sys.stderr)
+                self.press_key("esc")
+                print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
+                return True
+            print(
+                f"  [TYPE BLOCK] read-back mismatch, retry {attempt}/2",
+                file=sys.stderr,
+            )
+            self._clear_editor()
+            self._type_visible(text)
 
-        # Attempt visible typing first, as required by the C4 spec.
-        print(f"  [TYPE BLOCK] typing {len(text)} characters", file=sys.stderr)
-        pyautogui.typewrite(text, interval=0.015)
-        time.sleep(0.3)
-
-        # Dismiss any Character Viewer / Dictation dialog the typing may have opened.
-        _close_character_viewer()
-
-        # Verify the editor shows the intended text.
-        verified = self.verify_state(
-            f"the SQL editor now contains exactly this query:\n{text}"
-        )
-        if verified:
+        print("  [TYPE BLOCK] read-back FAILED", file=sys.stderr)
+        self._paste_text(text)
+        read_back = self._read_editor_content()
+        if _matches(read_back):
+            print("  [TYPE BLOCK] paste fallback OK", file=sys.stderr)
+            self.press_key("esc")
+            print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
             return True
+        return False
 
-        print("  [PASTE FALLBACK] VLM did not confirm typed text; using clipboard", file=sys.stderr)
-        _paste_text()
+    def prepare_sql_editor(self) -> bool:
+        """Ensure the SQL editor is empty and focused before a typing beat."""
+        print("  [STAGE PREP] SQL editor cleared", file=sys.stderr)
+        self._clear_editor()
         return True
+
+    def scroll_result_pane_top(self) -> bool:
+        """Scroll the Execute SQL result pane to the top row."""
+        print("  [STAGE PREP] result pane scrolled to top", file=sys.stderr)
+        try:
+            self.find_and_click("Focus the result pane", "results grid in the lower pane")
+        except Exception:
+            logical_w, logical_h = pyautogui.size()
+            fx, fy = int(logical_w * 0.5), int(logical_h * 0.75)
+            pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
+            pyautogui.click(fx, fy)
+            time.sleep(0.3)
+        self.press_key("ctrl+home")
+        time.sleep(0.3)
+        return True
+
+    def dismiss_transient_ui(self) -> bool:
+        """Dismiss any open transient dropdown or modal before capturing state."""
+        try:
+            if self.is_modal_or_dropdown_open():
+                print("  [STAGE PREP] dismissed transient UI", file=sys.stderr)
+                self.press_key("esc")
+                time.sleep(0.3)
+                return True
+        except Exception as exc:
+            print(f"Warning: transient UI dismiss check failed: {exc}", file=sys.stderr)
+        return False
 
     def run_query(self) -> bool:
         """

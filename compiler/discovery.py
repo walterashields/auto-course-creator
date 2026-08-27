@@ -727,6 +727,19 @@ def _capture_screenshot(output_dir: Path) -> Tuple[str, int, int, float, Image.I
       - raw full-resolution PIL Image
       - raw full-resolution PNG bytes (for hashing and saving)
     """
+    # Keep DB Browser for SQLite front-most so every screenshot shows the UI
+    # under test, even if another application stole focus during the run.
+    try:
+        subprocess.run(
+            ["osascript", "-e", f'tell application "{APP_NAME}" to activate'],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+        time.sleep(0.2)
+    except Exception:
+        pass
+
     logical_w, logical_h, _ = _logical_screen_size()
     tmp_path = output_dir / f"_tmp_screenshot_{uuid.uuid4().hex}.png"
     try:
@@ -2224,6 +2237,11 @@ class EndStateDiscovery:
             clip_path = self.output_dir / f"{run_id}_{beat.beat_id}.mp4"
             recorder = ScreenRecorder(str(clip_path), fps=10)
             if not skipped:
+                # Stage prep before recording: clear editor for typing beats and
+                # dismiss any transient UI that would clutter the captured frame.
+                if action.get("type") == "type_block":
+                    agent.prepare_sql_editor()
+                agent.dismiss_transient_ui()
                 recorder.start()
             beat_ok = skipped  # skipped beats are treated as already succeeded
             try:
@@ -2261,6 +2279,22 @@ class EndStateDiscovery:
 
                     if beat_ok and beat.kind == "demo":
                         executed_demo_count += 1
+
+                        # Stage prep after a successful action.
+                        if action.get("type") == "run_query":
+                            agent.scroll_result_pane_top()
+                        agent.dismiss_transient_ui()
+
+                        # Persist the verified editor content for type_block beats.
+                        if action.get("type") == "type_block":
+                            intended = (
+                                action.get("text") or action.get("detail") or ""
+                            ).strip()
+                            if intended:
+                                if beat.observed_state is None:
+                                    beat.observed_state = {}
+                                beat.observed_state["editor_content"] = intended
+
                         # Keep recorder running while the UI settles so the clip
                         # captures the stable result state, not transient motion.
                         self._wait_for_visual_stability(
@@ -2296,20 +2330,7 @@ class EndStateDiscovery:
             # --- OBSERVE after state/demo/validation beats --------------------
             if beat_ok and beat.kind in ("state", "demo", "validation"):
                 # Dismiss any transient dropdown/modal before observing stable state.
-                if beat.kind == "demo" and not skipped:
-                    try:
-                        if agent.is_modal_or_dropdown_open():
-                            print(
-                                f"  Dismissing transient dropdown/modal after {beat.beat_id}.",
-                                file=sys.stderr,
-                            )
-                            _press_key("esc")
-                            time.sleep(0.5)
-                    except Exception as exc:
-                        print(
-                            f"Warning: transient-UI dismiss check failed for {beat.beat_id}: {exc}",
-                            file=sys.stderr,
-                        )
+                agent.dismiss_transient_ui()
                 try:
                     observed = agent.summarize_observed_state()
                     # Preserve any SQL grounding data already attached to the beat.
@@ -2332,10 +2353,7 @@ class EndStateDiscovery:
 
         # TIDY end state: dismiss any open dropdown/modal before final capture.
         try:
-            if agent.is_modal_or_dropdown_open():
-                print("  Dismissing open dropdown/modal before final screenshot.", file=sys.stderr)
-                _press_key("esc")
-                time.sleep(0.5)
+            agent.dismiss_transient_ui()
         except Exception as exc:
             print(f"Warning: end-state tidy check failed: {exc}", file=sys.stderr)
 
