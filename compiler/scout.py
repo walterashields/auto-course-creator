@@ -169,18 +169,46 @@ def _vision_scout(client: anthropic.Anthropic, output_dir: Path) -> Dict[str, An
     return data
 
 
+def _execute_planned_query(db_path: str, query: str) -> Dict[str, Any]:
+    """Run a planned query through sqlite3 and return a structured summary."""
+    result: Dict[str, Any] = {
+        "columns": [],
+        "row_count": 0,
+        "first_rows": [],
+        "error": None,
+    }
+    if not db_path or not Path(db_path).exists():
+        result["error"] = "database not found"
+        return result
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        result["columns"] = [desc[0] for desc in cursor.description] if cursor.description else []
+        result["row_count"] = len(rows)
+        result["first_rows"] = [list(row) for row in rows[:5]]
+        conn.close()
+    except Exception as exc:
+        result["error"] = str(exc)
+        print(f"Warning: planned query failed: {exc}", file=sys.stderr)
+    return result
+
+
 def scout_environment(
     db_path: str,
     application: str,
     video_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
+    planned_queries: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Scout the environment for a single video.
 
-    Returns an EnvironmentMap dict with database facts (from sqlite3) and UI
-    facts (from one Claude vision call). Also writes the map to
-    <output_dir>/<video_id>_env.json if both are provided.
+    Returns an EnvironmentMap dict with database facts (from sqlite3), UI
+    facts (from one Claude vision call), and ground-truth results for any
+    planned queries. Also writes the map to
+    <output_dir>/<video_id>_env.json (or a generated id if video_id is None).
 
     The application is launched, observed, and then quit cleanly so the real
     discovery run starts from a fresh state.
@@ -195,6 +223,11 @@ def scout_environment(
 
     tables, columns, row_counts = _list_tables_and_counts(db_path)
 
+    # Execute planned queries against the database before launching the app.
+    query_results: Dict[str, Dict[str, Any]] = {}
+    for query in (planned_queries or []):
+        query_results[query] = _execute_planned_query(db_path, query)
+
     # Launch, observe, quit.
     _launch_app_for_scout(db_path)
     client = anthropic.Anthropic()
@@ -208,11 +241,12 @@ def scout_environment(
         "tables": tables,
         "columns": columns,
         "row_counts": row_counts,
+        "query_results": query_results,
         "ui": vision_facts,
     }
 
-    if video_id:
-        env_path = output_dir / f"{video_id}_env.json"
-        env_path.write_text(json.dumps(env_map, indent=2), encoding="utf-8")
+    env_id = video_id or f"scout_{uuid.uuid4().hex[:12]}"
+    env_path = output_dir / f"{env_id}_env.json"
+    env_path.write_text(json.dumps(env_map, indent=2), encoding="utf-8")
 
     return env_map

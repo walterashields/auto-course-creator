@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -61,6 +62,8 @@ class VideoManifest(BaseModel):
     preview_text_hint: Optional[str] = None
     # Serialized script beats (Path A lesson-first architecture).
     script_beats: List[dict] = Field(default_factory=list)
+    # Ground-truth SELECT queries to run during the scout pass.
+    planned_queries: List[str] = Field(default_factory=list)
 
 
 class CourseManifest(BaseModel):
@@ -206,6 +209,56 @@ def create_sql_sorting_fundamentals() -> CourseManifest:
     )
 
 
+def create_sql_essential_training_ch4() -> CourseManifest:
+    """
+    Phase 1 pilot: one video teaching a first SELECT query against the
+    WSDA Music database.
+    """
+    db_path = str((Path(__file__).resolve().parent / "data" / "wsda_music.db").resolve())
+    exercise = {
+        "db_path": db_path,
+        "table_name": "Customer",
+        "description": "WSDA Music Customer table with FirstName, LastName, Email.",
+    }
+
+    videos = [
+        VideoManifest(
+            video_id="video_1_1",
+            title="Your First Query",
+            learning_objective="Write and run your first SELECT query to return a customer contact list",
+            discovery_objective=(
+                "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer;, "
+                "run it with F5, and show the result pane with the contact list"
+            ),
+            application="db_browser_sqlite",
+            prerequisite_videos=[],
+            exercise_artifact=exercise,
+            format_tier="mid",
+            planned_queries=["SELECT FirstName, LastName, Email FROM Customer;"],
+        ),
+    ]
+
+    return CourseManifest(
+        course_id="sql_essential_training_ch4",
+        title="SQL Essential Training Chapter 4",
+        description=(
+            "Write and run your first SELECT query to return a customer contact list from WSDA Music."
+        ),
+        target_audience="Beginner data analysts",
+        videos=videos,
+        running_example={
+            "name": "Customer",
+            "description": "WSDA Music customer contact list.",
+            "schema": {
+                "CustomerId": "INTEGER PRIMARY KEY",
+                "FirstName": "TEXT",
+                "LastName": "TEXT",
+                "Email": "TEXT",
+            },
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dependency ordering
 # ---------------------------------------------------------------------------
@@ -282,7 +335,7 @@ def _video_order(manifest: CourseManifest) -> List[VideoManifest]:
 
 _SCRIPT_BEAT_FIELDS = {
     "beat_id", "kind", "text", "action", "visual_check",
-    "attaches_to", "target_id", "video_clip_path",
+    "attaches_to", "target_id", "video_clip_path", "observed_state",
 }
 
 
@@ -367,9 +420,102 @@ def _media_duration(path: str) -> Optional[float]:
         return None
 
 
+def _verify_final_frame_matches_locked_state(
+    video_path: str,
+    discovery_result: Any,
+    similarity_threshold: float = 0.90,
+) -> None:
+    """
+    Extract the last frame of the rendered silent MP4 and compare it to the
+    locked end-state screenshot using SSIM. Print a loud warning if they differ.
+
+    SSIM is used instead of MSE because screen-capture and screen-recording
+    frames of the same UI state can differ in color rendering, timing text, and
+    anti-aliasing while still being semantically identical.
+    """
+    locked_state = getattr(discovery_result, "locked_state", None)
+    if not locked_state:
+        return
+    screenshot_path = getattr(locked_state, "screenshot_path", None)
+    if not screenshot_path or not Path(screenshot_path).exists():
+        return
+    if not video_path or not Path(video_path).exists():
+        return
+
+    try:
+        import tempfile
+        from PIL import Image
+        import numpy as np
+
+        with tempfile.TemporaryDirectory(prefix="wsda_guard_") as tmpdir:
+            tmp_path = Path(tmpdir)
+            video_frame = tmp_path / "video_last.png"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-sseof", "-0.5", "-i", video_path,
+                    "-vframes", "1", "-pix_fmt", "rgb24", str(video_frame),
+                ],
+                check=True, capture_output=True, timeout=30,
+            )
+            img_video = Image.open(video_frame).convert("L")
+            img_state = Image.open(screenshot_path).convert("L")
+            img_state = img_state.resize(img_video.size, Image.Resampling.LANCZOS)
+            arr_video = np.array(img_video).astype(np.float32)
+            arr_state = np.array(img_state).astype(np.float32)
+
+            try:
+                from skimage.metrics import structural_similarity as ssim
+                score = float(ssim(arr_video, arr_state, data_range=255.0))
+                metric_name = "SSIM"
+            except Exception:
+                # Fallback to MSE if scikit-image is unavailable.
+                score = float(np.mean((arr_video - arr_state) ** 2))
+                metric_name = "MSE"
+                similarity_threshold = 10.0
+
+            if metric_name == "SSIM":
+                verdict = "MATCH" if score >= similarity_threshold else "MISMATCH"
+            else:
+                verdict = "MATCH" if score < similarity_threshold else "MISMATCH"
+            print(
+                f"[POST-RENDER GUARD] final-frame vs locked-state: {verdict} ({metric_name}={score:.4f})",
+                file=sys.stderr,
+            )
+            if verdict == "MISMATCH":
+                print(
+                    "[POST-RENDER GUARD] WARNING: rendered video does not end on the discovered objective state! "
+                    f"video={video_path} screenshot={screenshot_path}",
+                    file=sys.stderr,
+                )
+    except Exception as exc:
+        print(
+            f"[POST-RENDER GUARD] WARNING: could not run final-frame check: {exc}",
+            file=sys.stderr,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Build pipeline
 # ---------------------------------------------------------------------------
+
+
+def _setup_run_log(course_output_dir: Path) -> logging.Handler:
+    """Persist console output to run.log inside the course output directory."""
+    log_path = course_output_dir / "run.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Ensure the file exists with a run header even if no log records are emitted.
+    if not log_path.exists():
+        log_path.write_text(
+            f"# Run log started {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+            encoding="utf-8",
+        )
+    handler = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+    handler.setLevel(logging.INFO)
+    root = logging.getLogger()
+    root.setLevel(min(root.level or logging.INFO, logging.INFO))
+    root.addHandler(handler)
+    return handler
 
 
 def run_course(
@@ -400,6 +546,9 @@ def run_course(
     # Seed databases (.db files) are preserved.
     _cleanup_dir_contents(course_output_dir)
     _cleanup_dir_contents(discovery_output_dir)
+
+    # Set up run.log after cleanup so it survives the fresh-start wipe.
+    _setup_run_log(course_output_dir)
 
     # Resolve video order early so we can ensure each video's seed DB exists.
     ordered_videos = _video_order(manifest)
@@ -448,6 +597,8 @@ def run_course(
     renderer = GraphRenderer(output_dir=str(course_output_dir))
     lesson_builder = LessonBuilder()
 
+    logging.info("Starting course %s with %d video(s)", manifest.course_id, len(ordered_videos))
+
     video_outputs: List[dict] = []
     total_duration = 0.0
 
@@ -466,6 +617,7 @@ def run_course(
                     application=video.application,
                     video_id=video.video_id,
                     output_dir=discovery_output_dir,
+                    planned_queries=video.planned_queries,
                 )
             except Exception as exc:
                 print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
@@ -570,7 +722,19 @@ def run_course(
         if not final_path:
             final_path = video_path
 
+        # Post-render guard: final frame of the silent MP4 should match the
+        # locked end-state screenshot. A mismatch means the renderer did not end
+        # on the discovered objective state.
+        _verify_final_frame_matches_locked_state(video_path, discovery_result)
+
         duration = render_result.get("duration", 0.0)
+        logging.info(
+            "Completed video %s (%s): duration=%.3fs final=%s",
+            video.video_id,
+            video.title,
+            duration,
+            final_path,
+        )
         video_outputs.append(
             {
                 "video_id": video.video_id,
@@ -593,6 +757,13 @@ def run_course(
 
     # Save the updated manifest with actual durations.
     save_manifest(manifest)
+
+    logging.info(
+        "Course %s finished: %d video(s), total_duration=%.3fs",
+        manifest.course_id,
+        len(video_outputs),
+        total_duration,
+    )
 
     return {
         "course_id": manifest.course_id,
@@ -629,9 +800,18 @@ def main() -> int:
         default="auto",
         help="Output mode: auto (default), hybrid, or raw",
     )
+    parser.add_argument(
+        "--course-id",
+        choices=["sql_sorting_fundamentals", "sql_essential_training_ch4"],
+        default="sql_essential_training_ch4",
+        help="Course manifest to build (default: sql_essential_training_ch4)",
+    )
     args = parser.parse_args()
 
-    manifest = create_sql_sorting_fundamentals()
+    if args.course_id == "sql_sorting_fundamentals":
+        manifest = create_sql_sorting_fundamentals()
+    else:
+        manifest = create_sql_essential_training_ch4()
     save_manifest(manifest)
 
     try:

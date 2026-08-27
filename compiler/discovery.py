@@ -1044,6 +1044,99 @@ def _extract_query_from_objective(objective: str) -> str:
     return f"SELECT * FROM {table}"
 
 
+def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
+    """
+    Pull the SQL query associated with a beat.
+
+    Prefer an explicit type_block action, then fall back to a SELECT/FROM
+    statement embedded in the beat narration.
+    """
+    candidates: List[str] = []
+    action = beat.action or {}
+    if action.get("type") == "type_block":
+        candidates.append(action.get("text") or action.get("detail") or "")
+    candidates.append(beat.text)
+
+    for candidate in candidates:
+        match = re.search(
+            r"(SELECT\s+.+?\s+FROM\s+\w+)(?:\s+WHERE|\s+ORDER|\s+GROUP|\s+LIMIT|;|$)",
+            candidate,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _execute_query_ground_truth(db_path: str, query: str) -> Dict[str, Any]:
+    """Run a SELECT query through sqlite3 and return a structured summary."""
+    result: Dict[str, Any] = {"columns": [], "row_count": 0, "first_rows": []}
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        result["columns"] = [desc[0] for desc in cursor.description] if cursor.description else []
+        result["row_count"] = len(rows)
+        result["first_rows"] = [list(row) for row in rows[:5]]
+        conn.close()
+    except Exception as exc:
+        print(f"Warning: could not ground query against {db_path}: {exc}", file=sys.stderr)
+        result["error"] = str(exc)
+    return result
+
+
+def _ground_query_result(beat: "ScriptBeat", db_path: Optional[str]) -> None:
+    """
+    Compare a beat's SQL result to the actual sqlite3 result.
+
+    The VLM's result-pane summary is expected under beat.observed_state[
+    "query_result"]. If it disagrees with sqlite3, a grounding error is logged.
+    Either way, the sqlite3 result is stored as the authoritative ground truth.
+    """
+    query = _extract_sql_query(beat)
+    if not query or not db_path or not Path(db_path).exists():
+        return
+
+    vlm_result = (beat.observed_state or {}).get("query_result") or {}
+    ground = _execute_query_ground_truth(db_path, query)
+
+    vlm_count = vlm_result.get("row_count")
+    ground_count = ground.get("row_count")
+    vlm_columns = list(vlm_result.get("columns") or [])
+    ground_columns = list(ground.get("columns") or [])
+
+    count_mismatch = False
+    try:
+        if isinstance(vlm_count, str) and "of" in vlm_count.lower():
+            vlm_count_int = int(vlm_count.lower().split("of")[0].strip())
+        else:
+            vlm_count_int = int(vlm_count) if vlm_count is not None else None
+        count_mismatch = vlm_count_int is not None and vlm_count_int != ground_count
+    except Exception:
+        pass
+
+    column_mismatch = bool(vlm_columns) and [
+        c.lower() for c in vlm_columns
+    ] != [c.lower() for c in ground_columns]
+
+    if count_mismatch or column_mismatch:
+        print(
+            f"[GROUNDING ERROR] sqlite3={ground_count} rows, VLM={vlm_count} rows "
+            f"(columns sqlite3={ground_columns}, VLM={vlm_columns})",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"[GROUNDING OK] sqlite3={ground_count} rows, columns={ground_columns}",
+            file=sys.stderr,
+        )
+
+    if beat.observed_state is None:
+        beat.observed_state = {}
+    beat.observed_state["query_result"] = ground
+
+
 # Programmatic bounding box dimensions (in API screenshot pixels) for each
 # element type.  The vision model returns only a center point; we expand it to
 # a full clickable area centered on that point.
@@ -2069,56 +2162,182 @@ class EndStateDiscovery:
 
         agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir))
         failed_reason = ""
+        previous_observed_state: Optional[Dict[str, Any]] = None
+        executed_demo_count = 0
 
-        for beat in beats:
+        for idx, beat in enumerate(beats):
             action = beat.action
             if not action:
                 # Non-demo beats without an explicit action simply wait.
                 action = {"type": "wait", "duration": 1.5}
 
+            # --- SKIP redundant demo actions ----------------------------------
+            skipped = False
+            if beat.kind == "demo" and action.get("type") != "wait":
+                intended = self._intended_state_description(action)
+                later_demos = [j for j in range(idx + 1, len(beats)) if beats[j].kind == "demo"]
+                can_skip = executed_demo_count > 0 or len(later_demos) > 0
+                skip_reason = (
+                    f"can_skip={can_skip} (executed_demo_count={executed_demo_count}, "
+                    f"later_demos={len(later_demos)})"
+                )
+                prev_summary = ""
+                if previous_observed_state:
+                    prev_summary = previous_observed_state.get("summary", "") or ""
+                print(
+                    f"  [skip-check] {beat.beat_id}: intended='{intended}' | "
+                    f"previous_observed='{prev_summary[:80]}' | {skip_reason}",
+                    file=sys.stderr,
+                )
+                if intended and can_skip:
+                    try:
+                        already_true, suggested = agent.is_end_state_already_present(
+                            intended, previous_observed_state=previous_observed_state
+                        )
+                        verdict = "YES" if already_true else "NO"
+                        print(
+                            f"  [skip-check] {beat.beat_id}: VLM verdict={verdict} "
+                            f"suggested='{suggested[:70]}'",
+                            file=sys.stderr,
+                        )
+                        if already_true and suggested:
+                            if not suggested.lower().startswith("we "):
+                                suggested = f"We see that {suggested[0].lower()}{suggested[1:]}"
+                            print(
+                                f"  Skipping redundant action for {beat.beat_id}: {suggested[:70]}",
+                                file=sys.stderr,
+                            )
+                            skipped = True
+                            beat.kind = "state"
+                            beat.text = suggested
+                            beat.action = {"type": "wait", "duration": 1.5}
+                            beat.video_clip_path = None
+                    except Exception as exc:
+                        print(
+                            f"Warning: skip check failed for {beat.beat_id}: {exc}",
+                            file=sys.stderr,
+                        )
+                else:
+                    why = "no intended state" if not intended else "would leave graph without demo edges"
+                    print(f"  [skip-check] {beat.beat_id}: not checked because {why}", file=sys.stderr)
+
             clip_path = self.output_dir / f"{run_id}_{beat.beat_id}.mp4"
             recorder = ScreenRecorder(str(clip_path), fps=10)
-            recorder.start()
-            beat_ok = False
+            if not skipped:
+                recorder.start()
+            beat_ok = skipped  # skipped beats are treated as already succeeded
             try:
                 print(
                     f"  Executing beat {beat.beat_id} ({beat.kind}): {beat.text[:60]}",
                     file=sys.stderr,
                 )
-                for attempt in range(3):
-                    if agent.execute_beat(action):
-                        beat_ok = True
-                        break
-                    print(
-                        f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
-                        file=sys.stderr,
-                    )
-                    time.sleep(0.5)
+                if not skipped:
+                    for attempt in range(3):
+                        if agent.execute_beat(action):
+                            beat_ok = True
+                            break
+                        print(
+                            f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
+                            file=sys.stderr,
+                        )
+                        time.sleep(0.5)
 
-                if not beat_ok:
-                    recovery = agent.ask_recovery(
-                        f"Beat {beat.beat_id} ({beat.kind}): {beat.text}"
-                    )
-                    if recovery:
-                        print(f"  Attempting recovery for {beat.beat_id}", file=sys.stderr)
-                        if not agent.execute_beat(recovery):
+                    if not beat_ok:
+                        recovery = agent.ask_recovery(
+                            f"Beat {beat.beat_id} ({beat.kind}): {beat.text}"
+                        )
+                        if recovery:
+                            print(f"  Attempting recovery for {beat.beat_id}", file=sys.stderr)
+                            if not agent.execute_beat(recovery):
+                                failed_reason = (
+                                    f"Beat {beat.beat_id} failed and recovery did not succeed"
+                                )
+                                break
+                        else:
                             failed_reason = (
-                                f"Beat {beat.beat_id} failed and recovery did not succeed"
+                                f"Beat {beat.beat_id} failed and no recovery action was returned"
                             )
                             break
-                    else:
-                        failed_reason = (
-                            f"Beat {beat.beat_id} failed and no recovery action was returned"
+
+                    if beat_ok and beat.kind == "demo":
+                        executed_demo_count += 1
+                        # Keep recorder running while the UI settles so the clip
+                        # captures the stable result state, not transient motion.
+                        self._wait_for_visual_stability(
+                            interval_seconds=0.4, timeout_seconds=4.0
                         )
-                        break
+
+                        # --- SQL result grounding --------------------------------
+                        # Only auto-run and ground when the beat actually contains a
+                        # runnable SELECT statement. Comment blocks and prose beats
+                        # should not trigger an execution.
+                        sql_for_grounding = _extract_sql_query(beat)
+                        if sql_for_grounding:
+                            try:
+                                agent.run_query()
+                                pane_summary = agent.summarize_result_pane()
+                                if beat.observed_state is None:
+                                    beat.observed_state = {}
+                                beat.observed_state["query_result"] = pane_summary
+                                db_path_str = str(self.db_path) if self.db_path else None
+                                _ground_query_result(beat, db_path_str)
+                            except Exception as exc:
+                                print(
+                                    f"Warning: SQL grounding failed for {beat.beat_id}: {exc}",
+                                    file=sys.stderr,
+                                )
             finally:
-                recorder.stop()
-                if beat_ok and clip_path.exists():
-                    self._trim_clip_to_motion(clip_path)
-                    beat.video_clip_path = str(clip_path.resolve())
+                if not skipped:
+                    recorder.stop()
+                    if beat_ok and clip_path.exists():
+                        self._trim_clip_to_motion(clip_path)
+                        beat.video_clip_path = str(clip_path.resolve())
+
+            # --- OBSERVE after state/demo/validation beats --------------------
+            if beat_ok and beat.kind in ("state", "demo", "validation"):
+                # Dismiss any transient dropdown/modal before observing stable state.
+                if beat.kind == "demo" and not skipped:
+                    try:
+                        if agent.is_modal_or_dropdown_open():
+                            print(
+                                f"  Dismissing transient dropdown/modal after {beat.beat_id}.",
+                                file=sys.stderr,
+                            )
+                            _press_key("esc")
+                            time.sleep(0.5)
+                    except Exception as exc:
+                        print(
+                            f"Warning: transient-UI dismiss check failed for {beat.beat_id}: {exc}",
+                            file=sys.stderr,
+                        )
+                try:
+                    observed = agent.summarize_observed_state()
+                    # Preserve any SQL grounding data already attached to the beat.
+                    prior_query_result = (beat.observed_state or {}).get("query_result")
+                    beat.observed_state = observed
+                    if prior_query_result:
+                        beat.observed_state["query_result"] = prior_query_result
+                    previous_observed_state = observed
+                    summary = observed.get("summary", "")
+                    if summary:
+                        print(f"    Observed: {summary[:100]}", file=sys.stderr)
+                except Exception as exc:
+                    print(
+                        f"Warning: could not summarize observed state for {beat.beat_id}: {exc}",
+                        file=sys.stderr,
+                    )
 
             if failed_reason:
                 return self._make_result(success=False, reason=failed_reason)
+
+        # TIDY end state: dismiss any open dropdown/modal before final capture.
+        try:
+            if agent.is_modal_or_dropdown_open():
+                print("  Dismissing open dropdown/modal before final screenshot.", file=sys.stderr)
+                _press_key("esc")
+                time.sleep(0.5)
+        except Exception as exc:
+            print(f"Warning: end-state tidy check failed: {exc}", file=sys.stderr)
 
         # Capture and lock the final end state.
         try:
@@ -2208,6 +2427,55 @@ class EndStateDiscovery:
         print(f"End state discovered via vision agent in {len(beats)} beats: {self.objective}")
         return self._make_result(success=True, locked_state=screen_state, recipe=True)
 
+    @staticmethod
+    def _intended_state_description(action: Dict[str, Any]) -> str:
+        """Convert a demo action into a precise intended end-state description."""
+        action_type = action.get("type")
+        detail = action.get("action_detail") or action.get("detail") or ""
+        if not detail and isinstance(action.get("target"), str):
+            detail = action["target"]
+        detail_lower = detail.lower()
+
+        # Table-selection clicks (dropdown or list item) end with the table loaded.
+        table_select_match = __import__("re").search(
+            r"(\w+)\s+(?:table\s+)?(?:in\s+)?(?:the\s+)?(?:table\s+)?(?:dropdown|list|selector)",
+            detail,
+            __import__("re").IGNORECASE,
+        )
+        if table_select_match and "table" in detail_lower:
+            return f"the {table_select_match.group(1)} table rows are visible in the Browse Data grid"
+
+        if action_type == "sequence":
+            sub_actions = action.get("actions", [])
+            descriptions = [
+                EndStateDiscovery._intended_state_description(sub)
+                for sub in sub_actions
+            ]
+            descriptions = [d for d in descriptions if d]
+            if descriptions:
+                return descriptions[-1]
+            return ""
+
+        if action_type == "click":
+            if "browse data" in detail_lower:
+                return "the Browse Data tab is active and its content area is visible"
+            if "table" in detail_lower and "dropdown" in detail_lower:
+                return "the table dropdown is open"
+            return f"{detail} is selected/active"
+        if action_type == "browse_table":
+            return f"the {action.get('table', detail)} table rows are visible in the Browse Data grid"
+        if action_type == "sort_column":
+            return f"the {action.get('table', '')} table is sorted by {action.get('column', '')}"
+        if action_type == "filter_column":
+            return f"the {action.get('table', '')} table is filtered by {action.get('column', '')} = {action.get('value', '')}"
+        if action_type == "execute_query":
+            return "the Execute SQL tab shows query results"
+        if action_type == "type":
+            return f"'{detail}' has been typed into the active input"
+        if action_type == "key":
+            return f"the '{detail}' key has been pressed"
+        return detail or ""
+
     def _concatenate_clips_per_beat(
         self,
         run_id: str,
@@ -2272,6 +2540,41 @@ class EndStateDiscovery:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _wait_for_visual_stability(
+        self,
+        interval_seconds: float = 0.4,
+        timeout_seconds: float = 4.0,
+        stability_threshold: float = 1.0,
+        stable_frames_required: int = 2,
+    ) -> None:
+        """
+        Poll screenshots until the UI stops changing or a timeout is reached.
+
+        The recorder (if running) keeps capturing during this window so the
+        resulting clip includes the settled end state rather than cutting off
+        while animations or loading are still in progress.
+        """
+        start = time.time()
+        prev_gray: Optional[np.ndarray] = None
+        stable_frames = 0
+        while time.time() - start < timeout_seconds:
+            try:
+                _, _, _, _, raw_img, _ = _capture_screenshot(self.output_dir)
+                gray = np.array(raw_img.convert("L"))
+                gray = cv2.resize(gray, (320, 180), interpolation=cv2.INTER_AREA)
+                if prev_gray is not None:
+                    diff = float(np.mean(np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32))))
+                    if diff < stability_threshold:
+                        stable_frames += 1
+                        if stable_frames >= stable_frames_required:
+                            return
+                    else:
+                        stable_frames = 0
+                prev_gray = gray
+            except Exception as exc:
+                print(f"Warning: stability screenshot failed: {exc}", file=sys.stderr)
+            time.sleep(interval_seconds)
 
     def _trim_clip_to_motion(self, clip_path: Path) -> None:
         """Trim dead air from a recorded beat clip, keeping the motion window.

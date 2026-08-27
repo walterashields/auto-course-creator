@@ -42,6 +42,8 @@ class ScriptBeat:
     target_id: Optional[str] = None
     # Filled during discovery: path to the recorded video clip for this beat.
     video_clip_path: Optional[str] = None
+    # Filled during execution-time sight: structured observed UI state summary.
+    observed_state: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------

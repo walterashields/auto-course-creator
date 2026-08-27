@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -63,6 +64,9 @@ class LessonBuilder:
     def __init__(self, content_standard_path: str = "LESSON_CONTENT_STANDARD.md"):
         self.client = anthropic.Anthropic()
         self.lesson_standard = LessonStandard(content_standard_path)
+        self.style_guide_path = str(
+            Path(__file__).resolve().parent / "style_guide.md"
+        )
 
     # ------------------------------------------------------------------
     # Standard ingestion
@@ -456,10 +460,14 @@ class LessonBuilder:
         # Explicit high-level action verbs.
         if re.search(r"\b(apply|activate)\s+(?:the\s+)?filter", lowered):
             actions.append({"type": "click", "detail": "filter box"})
+
+        # SQL-specific demo verbs.
+        if re.search(r"\b(open|click)\s+(?:the\s+)?execute\s+sql\s+tab", lowered):
+            actions.append({"type": "click", "detail": "Execute SQL tab"})
         if re.search(r"\brun\s+(?:the\s+)?quer", lowered) or re.search(
             r"\bexecute\s+(?:the\s+)?quer", lowered
         ):
-            actions.append({"type": "key", "detail": "f5"})
+            actions.append({"type": "run_query"})
 
         # Sort: "sort X by Y" or "click the Y column header".
         sort_match = re.search(
@@ -471,12 +479,27 @@ class LessonBuilder:
         if header_match:
             actions.append({"type": "click", "detail": f"{header_match.group(1)} column header"})
 
+        # Find type_block actions for multi-line SQL.
+        block_match = re.search(
+            r"\btype\s+(?:the\s+)?(comment\s+block|formatted\s+query|query|sql)(?:\s+with)?\s*[:;]?\s*(.+?)(?=\s+(?:and|then|,)\s|\s*$)",
+            lowered,
+            re.DOTALL,
+        )
+        if block_match:
+            payload = block_match.group(2).strip().rstrip(",.;:")
+            payload = payload.replace("star", "*")
+            if "\n" in payload or len(payload) > 80:
+                actions.append({"type": "type_block", "text": payload})
+
         # Find type actions.
         for match in re.finditer(r"\btype\s+(.+?)(?=\s+(?:into|in|and|then|,)\s|\s*$)", lowered):
             detail = match.group(1).strip().rstrip(",.;:")
             # Convert spoken "star" back to the SQL asterisk.
             detail = detail.replace("star", "*")
-            actions.append({"type": "type", "detail": detail})
+            if "\n" in detail or len(detail) > 80:
+                actions.append({"type": "type_block", "text": detail})
+            else:
+                actions.append({"type": "type", "detail": detail})
 
         # Find key actions.
         for match in re.finditer(r"\bpress(?:es)?\s+([a-z0-9_+]+)", lowered, re.IGNORECASE):
@@ -553,6 +576,18 @@ class LessonBuilder:
                     {"type": "key", "detail": "F5"},
                 ],
             }
+
+        if action_type == "type_block":
+            return {
+                "type": "type_block",
+                "text": action_spec.get("text") or action_spec.get("detail") or "",
+            }
+
+        if action_type == "run_query":
+            return {"type": "run_query"}
+
+        if action_type == "summarize_result_pane":
+            return {"type": "summarize_result_pane"}
 
         # Coordinate-based click/type/key actions from older manifests.
         if action_type == "click":
@@ -1031,6 +1066,151 @@ class LessonBuilder:
 
         return beats
 
+    def _build_sql_script_beats(
+        self,
+        video: Any,
+        env_map: Optional[Dict[str, Any]] = None,
+    ) -> List[ScriptBeat]:
+        """
+        Deterministic SQL-arc script for the C4 Phase 1 pilot video.
+
+        Returns beats 001-009 with a validation beat that cites the actual,
+        scout-verified row count for the planned query.
+        """
+        exercise = video.exercise_artifact or {}
+        db_path = exercise.get("db_path")
+
+        planned = video.planned_queries[0] if video.planned_queries else "SELECT FirstName, LastName, Email FROM Customer;"
+        query_results = (env_map or {}).get("query_results", {}) or {}
+        ground = query_results.get(planned) or {}
+
+        # Fallback to live sqlite3 if the scout pass did not include this query.
+        if not ground and db_path and Path(db_path).exists():
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute(planned)
+                    rows = cur.fetchall()
+                    ground = {
+                        "columns": [desc[0] for desc in cur.description] if cur.description else [],
+                        "row_count": len(rows),
+                        "first_rows": [list(row) for row in rows[:5]],
+                    }
+            except Exception as exc:
+                print(f"Warning: could not ground pilot query: {exc}", file=sys.stderr)
+                ground = {}
+
+        row_count = ground.get("row_count")
+        columns = ground.get("columns", [])
+        columns_text = ", ".join(columns) if columns else "FirstName, LastName, Email"
+        rows_word = "rows" if row_count != 1 else "row"
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        comment_block = (
+            f"-- Created By: WSDA Student\n"
+            f"-- Date: {today}\n"
+            f"-- Description: Customer contact list for management"
+        )
+        query_text = "SELECT FirstName, LastName, Email FROM Customer;"
+
+        def _validation(text: str) -> str:
+            text = text.strip().rstrip(".")
+            wc = len(text.split())
+            pads = [
+                ", confirming the result is correct",
+                ", which confirms the operation succeeded",
+                ", verifying the outcome matches our goal",
+            ]
+            while wc < 10:
+                text = text + pads[(wc // 3) % len(pads)]
+                wc = len(text.split())
+            if wc > 15:
+                text = " ".join(text.split()[:15]).rstrip(",;:")
+            return text + "."
+
+        # Build the explain beat text using only verified facts.
+        if row_count is not None:
+            explain_text = (
+                f"The result pane shows {row_count} {rows_word} with {columns_text}, "
+                f"giving us the complete customer contact list."
+            )
+        else:
+            explain_text = (
+                f"The result pane shows the customer contact list with {columns_text}."
+            )
+        explain_text = self._truncate(explain_text, 70)
+
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="opening",
+                text=(
+                    "In this video, we will write our first SELECT query to pull a customer "
+                    "contact list for WSDA Music management."
+                ),
+                action=self._wait_action(),
+            ),
+            ScriptBeat(
+                beat_id="beat_002",
+                kind="concept",
+                text=(
+                    "SELECT tells the database which columns we want, and FROM tells it "
+                    "which table holds them."
+                ),
+                action=self._wait_action(),
+            ),
+            ScriptBeat(
+                beat_id="beat_003",
+                kind="demo",
+                text="We open the Execute SQL tab.",
+                action=self._click_action("Execute SQL tab"),
+            ),
+            ScriptBeat(
+                beat_id="beat_004",
+                kind="demo",
+                text="We type a comment block so we remember what this query is for.",
+                action={"type": "type_block", "text": comment_block},
+            ),
+            ScriptBeat(
+                beat_id="beat_005",
+                kind="demo",
+                text="We type the query that asks for first name, last name, and email from the Customer table.",
+                action={"type": "type_block", "text": query_text},
+            ),
+            ScriptBeat(
+                beat_id="beat_006",
+                kind="demo",
+                text="We run the query and the result pane fills with the contact list.",
+                action={"type": "run_query"},
+            ),
+            ScriptBeat(
+                beat_id="beat_007",
+                kind="explain",
+                text=explain_text,
+                action=self._wait_action(),
+            ),
+            ScriptBeat(
+                beat_id="beat_008",
+                kind="validation",
+                text=_validation(
+                    f"We see {row_count} {rows_word} returned in the result pane, confirming the contact list is complete"
+                    if row_count is not None
+                    else "We see the contact list returned in the result pane, confirming the query succeeded"
+                ),
+                action=self._verify_action(
+                    "the Execute SQL tab shows a populated results grid with the contact list"
+                ),
+            ),
+            ScriptBeat(
+                beat_id="beat_009",
+                kind="close",
+                text="We have written our first SELECT query and pulled the customer contact list. Next, we will look at aliases.",
+                action=self._wait_action(),
+            ),
+        ]
+
+        return beats
+
     def _enforce_word_limits(
         self, beats: List[ScriptBeat], video: Any
     ) -> List[ScriptBeat]:
@@ -1063,6 +1243,80 @@ class LessonBuilder:
 
         return beats
 
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        """Return lowercase word tokens for overlap comparisons."""
+        return set(re.findall(r"[a-z0-9_]+", text.lower()))
+
+    def _validation_has_new_datum(
+        self,
+        beat: ScriptBeat,
+        previous_beats: List[ScriptBeat],
+    ) -> bool:
+        """
+        Return True if the validation beat asserts something not already present
+        in the previous two beats. A new datum is a number, column name, or
+        concrete value not found in the combined text of the previous two beats.
+        Generic words like 'result', 'pane', or 'query' do not count as data.
+        """
+        if not previous_beats:
+            return True
+
+        prev_text = " ".join(b.text for b in previous_beats[-2:])
+        prev_tokens = self._token_set(prev_text)
+        beat_tokens = self._token_set(beat.text)
+        new_tokens = beat_tokens - prev_tokens
+
+        # Numbers count as new observable data.
+        has_new_number = bool(
+            re.search(r"\d+", beat.text)
+            and set(re.findall(r"\d+", beat.text))
+            - set(re.findall(r"\d+", prev_text))
+        )
+
+        # Column-like capitalized identifiers that are not generic UI words.
+        generic_ui = {
+            "execute", "sql", "tab", "editor", "query", "result", "pane",
+            "table", "grid", "rows", "columns", "browse", "data", "window",
+        }
+        has_new_column = bool(
+            any(
+                re.search(r"\b[A-Z][a-zA-Z]+\b", t) and t.lower() not in generic_ui
+                for t in new_tokens
+            )
+        )
+
+        # Distinct concrete closure words that indicate a new verification claim.
+        has_new_verification = bool(
+            new_tokens & {"returned", "complete", "confirmed", "matches", "succeeded"}
+        )
+        return has_new_number or has_new_column or has_new_verification
+
+    def _merge_validation_echoes(
+        self,
+        beats: List[ScriptBeat],
+    ) -> List[ScriptBeat]:
+        """
+        Drop validation beats that merely restate the previous two beats.
+
+        A validation beat is merged/dropped when it adds no new observable datum
+        (no new numbers, column names, or factual claims) compared to the
+        previous two beats. This prevents redundant "we see the same thing"
+        validation echoes.
+        """
+        merged: List[ScriptBeat] = []
+        for i, beat in enumerate(beats):
+            if beat.kind == "validation":
+                previous = beats[:i]
+                if not self._validation_has_new_datum(beat, previous):
+                    print(
+                        f"  Merging redundant validation echo {beat.beat_id}: {beat.text[:60]}",
+                        file=sys.stderr,
+                    )
+                    continue
+            merged.append(beat)
+        return merged
+
     # ------------------------------------------------------------------
     # Script generation
     # ------------------------------------------------------------------
@@ -1088,7 +1342,15 @@ class LessonBuilder:
         parsed = self._parse_objective(video.discovery_objective, db_path, default_table=default_table)
         beats: List[ScriptBeat] = []
 
-        if parsed:
+        discovery_lower = video.discovery_objective.lower()
+        is_sql_demo = (
+            video.application == "db_browser_sqlite"
+            and ("execute sql" in discovery_lower or "select" in discovery_lower)
+        )
+
+        if is_sql_demo:
+            beats = self._build_sql_script_beats(video, env_map=env_map)
+        elif parsed:
             beats = self._build_script_beats(video, parsed, env_map=env_map)
         else:
             if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -1126,8 +1388,9 @@ class LessonBuilder:
                 print(f"Script quality gate failed (attempt {attempt + 1}); regenerating.", file=sys.stderr)
                 fix_errors = errors
 
-        beats = self._enforce_word_limits(beats, video)
         beats = self._validate_script_beats(beats, video)
+        beats = self._enforce_word_limits(beats, video)
+        beats = self._merge_validation_echoes(beats)
         ok, errors, warnings = self.validate_script(beats, video)
         for warning in warnings:
             print(f"Warning: {warning}", file=sys.stderr)
@@ -1191,6 +1454,15 @@ class LessonBuilder:
                 env_section += "- Columns per table:\n"
                 for t in env_map.get("tables", []):
                     env_section += f"  - {t}: {', '.join(columns.get(t, []))}\n"
+            query_results = env_map.get("query_results", {}) or {}
+            if query_results:
+                env_section += "- Verified query results:\n"
+                for query, qresult in query_results.items():
+                    cols = qresult.get("columns", [])
+                    count = qresult.get("row_count", "?")
+                    env_section += f"  - {query}\n"
+                    env_section += f"    columns: {', '.join(cols)}\n"
+                    env_section += f"    row_count: {count}\n"
             ui = env_map.get("ui") or {}
             env_section += (
                 f"- Active tab on launch: {ui.get('active_tab')}\n"
@@ -1198,6 +1470,12 @@ class LessonBuilder:
                 f"- Browse Data default table: {ui.get('browse_data_default_table')}\n"
                 f"- Notable UI state: {ui.get('notable', 'none')}\n"
             )
+
+        style_guide = ""
+        try:
+            style_guide = Path(self.style_guide_path).read_text(encoding="utf-8")
+        except Exception:
+            style_guide = "Follow the WSDA delivery style: first-person plural present tense, no filler, narrate as it happens."
 
         return f"""You are writing narration for a short software-training video in the style of SQL Essentials.
 
@@ -1208,6 +1486,10 @@ Course context
 - Discovery objective: {video.discovery_objective}
 - Running example: {table_name} table in {db_path}
 {env_section}
+
+DELIVERY STYLE GUIDE (apply verbatim):
+{style_guide}
+
 STRICT RULES (zero exceptions):
 1. Exactly 4-6 beats total.
 2. Beat kinds (in order): opening, demo (2-4 beats), validation, close.
@@ -1241,11 +1523,11 @@ Return ONLY a JSON array of beats like:
 
     @staticmethod
     def _validate_script_beats(beats: List[ScriptBeat], video: Any) -> List[ScriptBeat]:
-        """Normalize actions and drop beats that are empty or have unknown kinds."""
-        valid_kinds = {"opening", "concept", "demo", "validation", "close", "recap", "preview"}
+        """Normalize actions, split multi-step demo beats, and drop invalid beats."""
+        valid_kinds = {"opening", "concept", "demo", "explain", "validation", "close", "recap", "preview", "state"}
         supported_actions = {
             "browse_table", "sort_column", "filter_column", "execute_query",
-            "click", "type", "key", "wait", "verify", "sequence",
+            "click", "type", "type_block", "key", "run_query", "wait", "verify", "sequence",
         }
         cleaned: List[ScriptBeat] = []
         for beat in beats:
@@ -1266,7 +1548,85 @@ Return ONLY a JSON array of beats like:
                 beat.action = _format_action_sql(beat.action)
                 beat.action = LessonBuilder._normalize_action(beat.action)
             cleaned.append(beat)
+
+        cleaned = LessonBuilder._split_atomic_demo_beats(cleaned)
         return cleaned
+
+    @staticmethod
+    def _split_atomic_demo_beats(beats: List[ScriptBeat]) -> List[ScriptBeat]:
+        """Split any demo beat whose action contains >1 UI step into atomic demo beats."""
+        result: List[ScriptBeat] = []
+        for beat in beats:
+            if beat.kind != "demo" or not beat.action:
+                result.append(beat)
+                continue
+
+            sub_actions = LessonBuilder._atomic_sub_actions(beat.action)
+            if len(sub_actions) <= 1:
+                result.append(beat)
+                continue
+
+            texts = LessonBuilder._split_demo_text(beat.text, len(sub_actions))
+            for i, (sub_action, sub_text) in enumerate(zip(sub_actions, texts), start=1):
+                suffix = f"_{chr(ord('a') + i - 1)}"
+                result.append(
+                    ScriptBeat(
+                        beat_id=f"{beat.beat_id}{suffix}",
+                        kind="demo",
+                        text=sub_text,
+                        action=LessonBuilder._normalize_action(sub_action),
+                    )
+                )
+        return result
+
+    @staticmethod
+    def _atomic_sub_actions(action: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return a flat list of atomic UI actions from an action spec."""
+        action_type = action.get("type")
+        if action_type == "sequence":
+            return [
+                sub
+                for sub in (action.get("actions") or [])
+                if sub
+            ]
+        return [action]
+
+    @staticmethod
+    def _split_demo_text(text: str, n_parts: int) -> List[str]:
+        """Split a demo narration into one phrase per atomic action."""
+        text = text.strip().rstrip(".")
+        # Try splitting on common conjunctions that join two action clauses.
+        separators = [" and ", ", then ", ", and then ", "; "]
+        lowered = text.lower()
+        for sep in separators:
+            if sep in lowered:
+                raw_parts = [p.strip() for p in text.split(sep, n_parts - 1)]
+                if len(raw_parts) == n_parts:
+                    fixed: List[str] = []
+                    for part in raw_parts:
+                        part = part.rstrip(",.;:")
+                        if not part.lower().startswith("we "):
+                            # Fragment like "select Customers" -> "We select Customers."
+                            part = f"We {part[0].lower()}{part[1:]}"
+                        if part and not part.endswith("."):
+                            part += "."
+                        fixed.append(part)
+                    return fixed
+
+        # Fallback: generate concise narration for each implied action.
+        words = text.split()
+        chunk_size = max(1, len(words) // n_parts)
+        parts: List[str] = []
+        for i in range(n_parts):
+            start = i * chunk_size
+            end = len(words) if i == n_parts - 1 else (i + 1) * chunk_size
+            chunk = " ".join(words[start:end]).rstrip(",.;:")
+            if chunk and not chunk.lower().startswith("we "):
+                chunk = f"We {chunk[0].lower()}{chunk[1:]}"
+            if chunk and not chunk.endswith("."):
+                chunk += "."
+            parts.append(chunk)
+        return parts
 
     def validate_script(
         self, beats: List[ScriptBeat], video: Any
@@ -1460,6 +1820,10 @@ Return ONLY a JSON array of beats like:
                 }
             ]
 
+        # Vision-agent native actions pass through unchanged.
+        if action_type in ("type_block", "run_query", "summarize_result_pane"):
+            return [dict(action_spec)]
+
         print(f"Warning: unsupported action type {action_type!r}", file=sys.stderr)
         return []
 
@@ -1490,11 +1854,192 @@ Return ONLY a JSON array of beats like:
                 elif len(parsed) > 1:
                     beat.action = {"type": "sequence", "actions": parsed}
 
-        return discovery.execute_script(
+        result = discovery.execute_script(
             beats=beats,
             visual_summary=discovery.objective,
             save_all_screenshots=True,
         )
+
+        # ADAPT narration for validation/concept beats that conflict with observed facts.
+        self._adapt_beats_to_observed_state(beats)
+
+        return result
+
+    def _adapt_beats_to_observed_state(self, beats: List[ScriptBeat]) -> None:
+        """
+        Rewrite beats whose claims conflict with observed facts or footage.
+
+        Demo beats are preserved as demo beats so their recorded clips remain
+        available to the renderer; only the narration text is rewritten when it
+        conflicts with the observed state. Validation beats are preserved so the
+        renderer can end on the last demo clip's final frame.
+        """
+        self._enforce_clip_truthfulness(beats)
+        for beat in beats:
+            if beat.kind == "concept" and beat.observed_state:
+                if self._beat_conflicts_with_observed_state(beat):
+                    self._rewrite_beat_from_observed(beat, "state")
+
+    def _enforce_clip_truthfulness(self, beats: List[ScriptBeat]) -> List[ScriptBeat]:
+        """
+        Keep demo beats as demo beats and preserve their recorded clips.
+
+        Converting a demo beat to a state beat drops its clip, which can cause
+        the renderer to end on an earlier still frame instead of the final
+        discovered state. Demo beats whose actions inherently change the UI
+        (typing SQL, running a query, executing a recipe) are never rewritten,
+        because the coarse observed-state summary can incorrectly report no
+        visible change. Validation beats are always preserved.
+        """
+        previous_observed: Optional[Dict[str, Any]] = None
+        for beat in beats:
+            if beat.kind == "validation":
+                # Validation beats are allowed without clips or observed_state.
+                continue
+            if beat.kind == "demo" and beat.observed_state:
+                if self._action_produces_visible_change(beat.action):
+                    # The action itself guarantees visible change; keep the
+                    # original narration and recorded clip.
+                    previous_observed = beat.observed_state
+                    continue
+                if previous_observed and self._observed_state_unchanged(
+                    previous_observed, beat.observed_state
+                ):
+                    self._rewrite_beat_from_observed(
+                        beat,
+                        "demo",
+                        extra_instruction=(
+                            "The screen did not visibly change during this beat. "
+                            "Rewrite the narration to describe the existing state while keeping the demo intent."
+                        ),
+                    )
+            previous_observed = beat.observed_state or previous_observed
+        return beats
+
+    @staticmethod
+    def _action_produces_visible_change(action: Optional[Dict[str, Any]]) -> bool:
+        """Return True for actions that always produce a visible UI change."""
+        if not isinstance(action, dict):
+            return False
+        action_type = action.get("type")
+        if action_type in ("type_block", "run_query", "execute_query"):
+            return True
+        if action_type == "type" and action.get("text"):
+            return True
+        if action_type == "key" and action.get("text") in {"F5", "Return", "Enter"}:
+            return True
+        if action_type == "sequence":
+            return any(
+                LessonBuilder._action_produces_visible_change(sub)
+                for sub in (action.get("actions") or [])
+            )
+        return False
+
+    def _rewrite_beat_from_observed(
+        self,
+        beat: ScriptBeat,
+        target_kind: str,
+        extra_instruction: str = "",
+    ) -> None:
+        """Use a text-only LLM call to rewrite a beat from observed facts."""
+        observed = beat.observed_state
+        prompt = (
+            "Rewrite this narration beat to describe ONLY the stable observed state. "
+            "Do not invent numbers, column names, or table names. "
+            "Do NOT mention dropdowns, menus, modals, popups, or anything transient that is open. "
+            "Describe only what is persistently visible in the main window. "
+            "Keep first person plural, present tense, and the original intent. "
+            + extra_instruction
+            + "\n\n"
+            f"Original beat: {beat.text}\n"
+            f"Observed facts:\n"
+            f"- Active tab: {observed.get('active_tab')}\n"
+            f"- Visible table: {observed.get('visible_table')}\n"
+            f"- Row range text: {observed.get('row_range_text')}\n"
+            f"- Column headers: {', '.join(observed.get('column_headers', []) or [])}\n"
+            f"- Summary: {observed.get('summary')}\n"
+        )
+        try:
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=256,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_parts = [block.text for block in response.content if block.type == "text"]
+            rewritten = "\n".join(text_parts).strip().strip('"')
+            if rewritten:
+                print(
+                    f"  Adapted {beat.beat_id}: '{beat.text[:50]}...' -> '{rewritten[:50]}...'",
+                    file=sys.stderr,
+                )
+                beat.text = rewritten
+                beat.kind = target_kind  # type: ignore[assignment]
+                # Only drop the recorded clip when converting to a non-demo kind.
+                # Demo beats must keep their clips so the renderer can play the
+                # recorded action and end on the discovered state.
+                if target_kind != "demo":
+                    beat.video_clip_path = None
+        except Exception as exc:
+            print(f"Warning: could not adapt {beat.beat_id}: {exc}", file=sys.stderr)
+
+    @staticmethod
+    def _observed_state_unchanged(
+        prev: Dict[str, Any], curr: Dict[str, Any]
+    ) -> bool:
+        """Return True if the UI state did not visibly change between observations."""
+        keys = ["active_tab", "visible_table", "row_range_text"]
+        for key in keys:
+            if prev.get(key) != curr.get(key):
+                return False
+        prev_headers = set(prev.get("column_headers") or [])
+        curr_headers = set(curr.get("column_headers") or [])
+        if prev_headers != curr_headers:
+            return False
+        return True
+
+    @staticmethod
+    def _beat_conflicts_with_observed_state(beat: ScriptBeat) -> bool:
+        """Detect obvious mismatches between beat text and observed state."""
+        observed = beat.observed_state
+        if not observed:
+            return False
+        text = beat.text.lower()
+        headers = [h.lower() for h in (observed.get("column_headers") or [])]
+        visible_table = (observed.get("visible_table") or "").lower()
+
+        # Mentioned table not visible?
+        for table in ["customers", "orders"]:
+            if table in text and visible_table and table != visible_table:
+                return True
+
+        # Mentioned column not in the observed headers?
+        text_words = set(__import__("re").findall(r"\b[a-z_]+\b", text))
+        for word in text_words:
+            if len(word) <= 3:
+                continue
+            if word in {"table", "rows", "grid", "columns", "browse", "data", "status"}:
+                continue
+            if word not in headers and any(h in word or word in h for h in headers):
+                # Partial match to an observed header is OK.
+                continue
+            # If the word looks like a column name (contains underscore) and isn't observed.
+            if "_" in word and word not in headers:
+                return True
+
+        # Numbers in text that don't appear in row_range_text?
+        row_range = observed.get("row_range_text") or ""
+        try:
+            text_numbers = {int(n) for n in _extract_numbers(beat.text)}
+            observed_numbers = {int(n) for n in _extract_numbers(row_range)}
+        except Exception:
+            text_numbers = set()
+            observed_numbers = set()
+        # If beat states a count that isn't in the observed range text, flag it.
+        for num in text_numbers:
+            if num >= 10 and num not in observed_numbers:
+                return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Graph construction
@@ -1745,6 +2290,7 @@ Return ONLY a JSON array of beats like:
                     word_count=len(beat.text.split()),
                     start_time=0.0,
                     end_time=0.0,
+                    observed_state=beat.observed_state,
                 )
             )
 

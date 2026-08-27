@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import anthropic
 import pyautogui
+import pyperclip
 from PIL import Image
 
 TARGET_LONG_EDGE = 1568
@@ -245,6 +246,168 @@ class VisionAgent:
         time.sleep(0.2)
         return True
 
+    def type_block(self, text: str) -> bool:
+        """
+        Type a multi-line SQL block visibly into the active editor.
+
+        Focuses the SQL editor, then types at ~0.015 s/character so a learner can
+        follow along. After typing, asks the VLM whether the editor contains the
+        exact text. If typing fails or the VLM disagrees, fall back to clipboard
+        paste and log the fallback.
+        """
+        if not text:
+            return True
+
+        def _focus_editor() -> None:
+            """Click the SQL editor, falling back to a normalized center click."""
+            print("  [TYPE BLOCK] focusing SQL editor", file=sys.stderr)
+            if not self.find_and_click("Focus the SQL editor", "SQL editor text area"):
+                logical_w, logical_h = pyautogui.size()
+                fx, fy = int(logical_w * 0.5), int(logical_h * 0.45)
+                print(f"  [TYPE BLOCK] fallback click editor at ({fx}, {fy})", file=sys.stderr)
+                pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
+                pyautogui.click(fx, fy)
+                time.sleep(0.3)
+
+        def _close_character_viewer() -> None:
+            """Dismiss the macOS Character Viewer / Dictation dialog if it opened."""
+            for _ in range(3):
+                pyautogui.press("esc")
+                time.sleep(0.2)
+
+        def _paste_text() -> None:
+            """Select all editor text via triple-click and paste from clipboard."""
+            print("  [PASTE FALLBACK] selecting editor text and pasting from clipboard", file=sys.stderr)
+            _close_character_viewer()
+            # Triple-click the editor line to select existing partial text.
+            logical_w, logical_h = pyautogui.size()
+            pyautogui.tripleClick(int(logical_w * 0.12), int(logical_h * 0.22))
+            time.sleep(0.2)
+            original_clipboard = pyperclip.paste()
+            try:
+                pyperclip.copy(text)
+                time.sleep(0.1)
+                pyautogui.hotkey("command", "v")
+                time.sleep(0.4)
+            finally:
+                try:
+                    pyperclip.copy(original_clipboard)
+                except Exception:
+                    pass
+
+        _close_character_viewer()
+        _focus_editor()
+
+        # Attempt visible typing first, as required by the C4 spec.
+        print(f"  [TYPE BLOCK] typing {len(text)} characters", file=sys.stderr)
+        pyautogui.typewrite(text, interval=0.015)
+        time.sleep(0.3)
+
+        # Dismiss any Character Viewer / Dictation dialog the typing may have opened.
+        _close_character_viewer()
+
+        # Verify the editor shows the intended text.
+        verified = self.verify_state(
+            f"the SQL editor now contains exactly this query:\n{text}"
+        )
+        if verified:
+            return True
+
+        print("  [PASTE FALLBACK] VLM did not confirm typed text; using clipboard", file=sys.stderr)
+        _paste_text()
+        return True
+
+    def run_query(self) -> bool:
+        """
+        Execute the SQL in the active editor.
+
+        First tries the F5 shortcut. If the VLM later reports no results, falls
+        back to asking the VLM for the Execute/Run button coordinates and clicking.
+        """
+        print("  [RUN QUERY] pressing F5", file=sys.stderr)
+        self.press_key("F5")
+        time.sleep(1.5)
+
+        # Quick heuristic: if results are visible we are done.
+        # Ask the VLM whether a populated result pane is present.
+        result = self._call_vlm(
+            "Look at the DB Browser for SQLite window. Does the lower result pane "
+            "show a populated results grid, or text saying a query finished with "
+            "a row count, or text saying 'Execution finished without errors'? "
+            "Reply exactly YES or NO, nothing else.",
+            expect_json=False,
+            max_tokens=32,
+        )
+        if result.text.strip().upper().startswith("YES"):
+            print("  [RUN QUERY] F5 path succeeded", file=sys.stderr)
+            return True
+
+        print("  [RUN QUERY] F5 path did not show results; falling back to VLM result-tab click", file=sys.stderr)
+        # The query may have executed but the results pane could be showing the
+        # Execution Log tab. Ask the VLM for the Result tab coordinates.
+        result = self._call_vlm(
+            "Return ONLY a JSON object with the coordinates of the 'Result' tab in the "
+            "lower results pane of DB Browser for SQLite: "
+            '{"action": "click", "point": {"x": int, "y": int}}. '
+            "If you do not see a Result tab, return coordinates of the Execute/Run button "
+            "in the toolbar instead. Do not add any other text.",
+            expect_json=True,
+            max_tokens=256,
+        )
+        action = result.action
+        if action:
+            point = action.get("point") or action
+            if isinstance(point, dict) and "x" in point and "y" in point:
+                lx, ly = self._api_to_logical(point["x"], point["y"])
+                print(f"  [RUN QUERY] clicking at logical ({lx}, {ly})", file=sys.stderr)
+                pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+                pyautogui.click(lx, ly)
+                time.sleep(1.0)
+                return True
+
+        print("  Warning: VLM did not return a point for run_query; assuming F5 executed", file=sys.stderr)
+        return True
+
+    def summarize_result_pane(self) -> Dict[str, Any]:
+        """
+        Ask the VLM to summarize the Execute SQL result pane.
+
+        Returns a dict with columns, row_count, first_rows, and a one-sentence
+        summary. row_count may be an int, a string like 'N of M', or null.
+        """
+        prompt = (
+            "Look at the DB Browser for SQLite Execute SQL result pane and return "
+            "ONLY a JSON object with this exact shape:\n\n"
+            "{\n"
+            '  "columns": ["col1", "col2", ...],\n'
+            '  "row_count": int | "N of M" | null,\n'
+            '  "first_rows": [["val1", "val2", ...], ...],\n'
+            '  "summary": "one sentence describing the result"\n'
+            "}\n\n"
+            "Use null for unknown values. Do not add any other text."
+        )
+        result = self._call_vlm(prompt, expect_json=False, max_tokens=512)
+        data: Dict[str, Any] = {
+            "columns": [],
+            "row_count": None,
+            "first_rows": [],
+            "summary": "",
+        }
+        import re as _re
+
+        fenced = _re.search(r"```(?:json)?\s*(\{.*\})\s*```", result.text, _re.DOTALL)
+        payload = fenced.group(1) if fenced else result.text
+        try:
+            parsed = json.loads(payload)
+            if isinstance(parsed, dict):
+                data.update(parsed)
+        except json.JSONDecodeError:
+            print(
+                f"Warning: could not parse result-pane summary as JSON: {result.text[:200]}",
+                file=sys.stderr,
+            )
+        return data
+
     def press_key(self, key: str) -> bool:
         """Press a single key or key chord (e.g., 'Return', 'F5', 'cmd+a')."""
         key = key.strip()
@@ -320,6 +483,102 @@ class VisionAgent:
         )
         return False
 
+    def summarize_observed_state(self) -> Dict[str, Any]:
+        """Ask the VLM for a structured one-line summary of the current UI state."""
+        prompt = (
+            "Look at this DB Browser for SQLite screenshot and return ONLY a JSON object "
+            "with this exact shape:\n\n"
+            "{\n"
+            '  "active_tab": "current tab name",\n'
+            '  "visible_table": "table whose grid is visible, or null",\n'
+            '  "row_range_text": "e.g. 1 - 20 of 20, or null",\n'
+            '  "column_headers": ["col1", "col2", ...],\n'
+            '  "modal_or_dropdown_open": true|false,\n'
+            '  "summary": "one concise sentence describing the visible state"\n'
+            "}\n\n"
+            "Use null for unknown values. Do not add any other text."
+        )
+        result = self._call_vlm(prompt, expect_json=False)
+        text = result.text
+        data: Dict[str, Any] = {
+            "active_tab": None,
+            "visible_table": None,
+            "row_range_text": None,
+            "column_headers": [],
+            "modal_or_dropdown_open": False,
+            "summary": "",
+        }
+        import re as _re
+        fenced = _re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, _re.DOTALL)
+        payload = fenced.group(1) if fenced else text
+        try:
+            parsed = json.loads(payload)
+            if isinstance(parsed, dict):
+                data.update(parsed)
+        except json.JSONDecodeError:
+            print(
+                f"Warning: could not parse observed-state summary as JSON: {text[:200]}",
+                file=sys.stderr,
+            )
+        return data
+
+    def is_end_state_already_present(
+        self, intended_end_state: str, previous_observed_state: Optional[Dict[str, Any]] = None
+    ) -> Tuple[bool, str]:
+        """
+        Ask the VLM whether the intended end state of an action is already visible.
+        Returns (already_true, suggested_narration).
+        """
+        prev_summary = ""
+        if previous_observed_state:
+            prev_summary = previous_observed_state.get("summary", "") or ""
+            if not prev_summary:
+                prev_summary = (
+                    f"active_tab={previous_observed_state.get('active_tab')}, "
+                    f"visible_table={previous_observed_state.get('visible_table')}"
+                )
+
+        prompt = (
+            "You are checking whether a planned UI action is redundant. "
+            "Look at the CURRENT screenshot.\n\n"
+            f"Previous observed state: {prev_summary or 'None'}\n"
+            f"Planned action goal: {intended_end_state}\n\n"
+            "Is this goal ALREADY achieved in the current screenshot? "
+            "Be STRICT: answer YES only if the exact end state is clearly visible. "
+            "If the previous state did not already show this, or if there is any doubt, answer NO.\n\n"
+            "Reply in exactly this format:\n"
+            "YES: <concise reason>\n"
+            "or\n"
+            "NO: <concise reason>\n\n"
+            "If YES, also provide a one-line narration describing the existing state, "
+            "in first person plural, present tense, ≤20 words, starting with 'We '. "
+            "Put the narration on a second line after the reason, prefixed 'NARRATION: '."
+        )
+        result = self._call_vlm(prompt, expect_json=False)
+        text = result.text
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        already_true = any(ln.upper().startswith("YES") for ln in lines)
+        narration = ""
+        for ln in lines:
+            if ln.upper().startswith("NARRATION:"):
+                narration = ln.split(":", 1)[1].strip()
+                break
+        if already_true and not narration:
+            narration = f"We see that the {intended_end_state.strip('.')} is already visible."
+        return already_true, narration
+
+    def is_modal_or_dropdown_open(self) -> bool:
+        """Ask the VLM whether a transient dropdown/modal is open and should be dismissed."""
+        prompt = (
+            "Look at this DB Browser for SQLite screenshot. "
+            "Is a transient dropdown menu, modal dialog, or popup currently open on top of the main window? "
+            "Ignore the main application window, side panels, and table grids. "
+            "Reply exactly YES or NO, nothing else."
+        )
+        result = self._call_vlm(prompt, expect_json=False)
+        text = result.text.strip().upper()
+        return text.startswith("YES")
+
     def ask_recovery(self, failed_action: str) -> Optional[Dict[str, Any]]:
         """Ask the VLM what to do after a failed action."""
         prompt = (
@@ -366,6 +625,19 @@ class VisionAgent:
                 if not self.find_and_click(f"Focus the {target_label}", target_label):
                     return False
             return self.type_text(detail)
+
+        if action_type == "type_block":
+            text = beat_dict.get("text") or beat_dict.get("detail") or ""
+            return self.type_block(text)
+
+        if action_type == "run_query":
+            return self.run_query()
+
+        if action_type == "summarize_result_pane":
+            # This action does not move the UI; it only populates observed_state.
+            # Callers are responsible for storing the returned dict.
+            self.summarize_result_pane()
+            return True
 
         if action_type == "key":
             return self.press_key(detail)
