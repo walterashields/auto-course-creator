@@ -1,0 +1,146 @@
+{
+  "graph_id": "sql_sorting_fundamentals_video_1_2",
+  "learning_objective": "Sort the Orders table by the amount column in ascending order (smallest amount 85.0 at the top, largest 340.0 at the bottom)",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_091f54ed3598",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_091f54ed3598.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "63b45f200ce5c0da5d52fc17a112a6d67b2a383b00f3c72c1313aa313401fa3e",
+      "run_duration_seconds": 31.873
+    },
+    "visual_summary": "The Orders table displays amounts in ascending order: 85.0, 95.75, 120.5, 150.0, 210.25, 340.0 from top to bottom."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c978239008105b34bce262f7d0b1d6ed4c841eb603a417915ba198db5e7f6556.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "c978239008105b34bce262f7d0b1d6ed4c841eb603a417915ba198db5e7f6556",
+      "attempt": 1,
+      "reason": "The screen shows Database Structure tab, not the data sorted by amount; need to browse data first.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The screen shows Database Structure tab, not the data sorted by amount; need to browse data first."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d042c5460387fcd6eb95668fba4d4d6c9120aeff7379ae2b4768bbe543a4b1c9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d042c5460387fcd6eb95668fba4d4d6c9120aeff7379ae2b4768bbe543a4b1c9",
+        "attempt": 2,
+        "reason": "The table is currently displayed in original id order, not sorted by amount ascending.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The table is currently displayed in original id order, not sorted by amount ascending."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 748,
+        "y": 96,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "db_browser_sqlite_091f54ed3598",
+      "action_type": "click",
+      "target": {
+        "x": 200,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now DB Browser for SQLite is showing the Database Structure tab, which lists the tables and columns but not the actual Orders data. This view can't show us amount sorted at all, since we're not even looking at the data yet.",
+      "tts_text": null,
+      "word_count": 42,
+      "start_time": 0.0,
+      "end_time": 16.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Browse Data tab so we can view the Orders table contents directly.",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 16.8,
+      "end_time": 22.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "Right now the Orders table is still sitting in its original id order, with the amounts scattered instead of arranged smallest to largest. That's the opposite of the ascending order we're aiming for.",
+      "tts_text": null,
+      "word_count": 33,
+      "start_time": 22.8,
+      "end_time": 36.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Let's click the Amount column header once more so the sort switches from descending back to ascending order.",
+      "tts_text": null,
+      "word_count": 18,
+      "start_time": 36.0,
+      "end_time": 43.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_091f54ed3598",
+      "text": "And there it is — the Amount column now runs smallest to largest, starting at 85.0 and ending at 340.0, so the smallest orders sit right at the top.",
+      "tts_text": null,
+      "word_count": 29,
+      "start_time": 43.2,
+      "end_time": 54.8,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.027525,
+  "reliability_score": 0.3333333333333333
+}

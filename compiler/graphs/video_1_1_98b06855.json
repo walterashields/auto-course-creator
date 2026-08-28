@@ -1,0 +1,235 @@
+{
+  "graph_id": "video_1_1_98b06855",
+  "learning_objective": "Learner locates and opens a table in the database browser to see its raw rows and columns before any manipulation.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_005",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_d6c2e86539e4.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "1d6842fb68a35c083189feebe1de79fa1530fe902d3a23a7da82c81280d7ca46",
+      "run_duration_seconds": 77.44
+    },
+    "visual_summary": "Open the Customers table in the Browse Data tab."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_98b06855_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_98b06855_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_003"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_98b06855_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_004"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_98b06855_state_003.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_98b06855_state_004.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 0.15,
+        "y": 0.08,
+        "w": 100,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/157c015f4518_beat_beat_003.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 0.25,
+        "y": 0.13,
+        "w": 180,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/157c015f4518_beat_beat_004.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/157c015f4518_beat_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/157c015f4518_beat_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "By the end of this video, you'll see all 500 customer records laid out in front of you, exactly as they live in the database.",
+      "tts_text": null,
+      "word_count": 25,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Before you sort or filter anything, you need to see the raw data first. If you skip this step, you might mistake a filtered view for the whole picture, and that's how real business mistakes happen.",
+      "tts_text": null,
+      "word_count": 36,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click the Browse Data tab at the top of the window.",
+      "tts_text": null,
+      "word_count": 11,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Click the table dropdown menu.",
+      "tts_text": null,
+      "word_count": 5,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Click Customers in the dropdown list.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Wait for the table to load.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "The status bar at the bottom shows 500 rows, and the header row shows 6 columns: customer_id, name, email, city, state, and signup_date.",
+      "tts_text": null,
+      "word_count": 23,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "You're now looking at every one of the 500 customers in this database, across all 6 columns, with no sorting or filtering applied. Next, you'll take the Orders table and sort it by order_date in ascending order using the column header.",
+      "tts_text": null,
+      "word_count": 41,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

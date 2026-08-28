@@ -1,0 +1,241 @@
+{
+  "graph_id": "video_1_2_5e8a3ced",
+  "learning_objective": "Learner sorts a single column to reorder rows and understand why sorting reveals patterns like earliest and latest activity.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_005",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_0dd8372ea761.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "1badb59634bcb16da84338498acaa25e0870939dee38a382f9749e1b74777259",
+      "run_duration_seconds": 112.566
+    },
+    "visual_summary": "Sort the Orders table by order_date in ascending order using the column header."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_5e8a3ced_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_5e8a3ced_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_003"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_5e8a3ced_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_004"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_5e8a3ced_state_003.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_5e8a3ced_state_004.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/edbc033bb815_beat_beat_003.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/edbc033bb815_beat_beat_004.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/edbc033bb815_beat_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "click",
+      "target": {
+        "x": 0.5,
+        "y": 0.2,
+        "w": 800,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/edbc033bb815_beat_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "By the end of this video, you'll sort the Orders table by date and instantly spot the earliest and latest order in a thousand rows.",
+      "tts_text": null,
+      "word_count": 25,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Sorting a column reorders every row by that column's value, so instead of scanning a thousand random dates, you see the earliest and latest activity right at the top and bottom. That matters when you need to answer questions like 'what's our oldest order?' without hunting row by row.",
+      "tts_text": null,
+      "word_count": 49,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click the Orders table in the Browse Data tab.",
+      "tts_text": null,
+      "word_count": 9,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Click the order_date column header.",
+      "tts_text": null,
+      "word_count": 5,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Wait for the table to reorder.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Click the first row of the sorted table.",
+      "tts_text": null,
+      "word_count": 8,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "The order_date column now reads 2021-01-05 in row one, the earliest date across all 1000 rows.",
+      "tts_text": null,
+      "word_count": 16,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "Sorting order_date across all 1000 rows confirms the earliest order landed on 2021-01-05 and the latest on 2023-11-30 — a clear three-year span for the business.",
+      "tts_text": null,
+      "word_count": 26,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "Next, you'll filter the Orders table so the country column shows only rows matching a single exact value, like USA, in the filter box.",
+      "tts_text": null,
+      "word_count": 24,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

@@ -1,0 +1,533 @@
+{
+  "graph_id": "video_1_3_a5e11204",
+  "learning_objective": "Learner applies an exact text filter to isolate rows matching one value and understand why filtering narrows focus to a specific segment.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_012",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_337bdf3ffc79.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "08f95cc7ed3d5b8f7dd6c5d4589a4e0675c60d72db69dd2846abed9116bee165",
+      "attempt": 13,
+      "reason": "Script completed: Filter the Orders table so the country column shows only rows matching a single exact value in the filter box.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Script completed: Filter the Orders table so the country column shows only rows matching a single exact value in the filter box."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/5aab4276d94e0a38ba48fd671418f07f31c1c458bdc166d74fecd78183e1e6e4.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "5aab4276d94e0a38ba48fd671418f07f31c1c458bdc166d74fecd78183e1e6e4",
+      "attempt": 1,
+      "reason": "Action step 1: Click Browse Data tab",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Action step 1: Click Browse Data tab"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/854a81f6a518c7489048f96cc2a084bc8f19db5f462e4fcfca3dfe108d0e2c89.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "854a81f6a518c7489048f96cc2a084bc8f19db5f462e4fcfca3dfe108d0e2c89",
+        "attempt": 2,
+        "reason": "Action step 2: Open table dropdown",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 2: Open table dropdown"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/ce5cde41b3dabe8dfe7d050eecdf19fa97deb546517107fd46415bb7c5aba632.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "ce5cde41b3dabe8dfe7d050eecdf19fa97deb546517107fd46415bb7c5aba632",
+        "attempt": 3,
+        "reason": "Action step 3: Jump to first dropdown item",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 3: Jump to first dropdown item"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/525e44c80873a75a4df1a96c32854b199bbf5940e61001cebcbfde241dc705df.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "525e44c80873a75a4df1a96c32854b199bbf5940e61001cebcbfde241dc705df",
+        "attempt": 4,
+        "reason": "Action step 4: Navigate dropdown down toward Orders",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 4: Navigate dropdown down toward Orders"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c207cdcf8dd21bc533d674081533af67e04d9b071fb4ee679ed1dcad2dc81bba.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c207cdcf8dd21bc533d674081533af67e04d9b071fb4ee679ed1dcad2dc81bba",
+        "attempt": 5,
+        "reason": "Action step 5: Press Return to select table",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 5: Press Return to select table"
+    },
+    {
+      "state_id": "state_005",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c207cdcf8dd21bc533d674081533af67e04d9b071fb4ee679ed1dcad2dc81bba.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c207cdcf8dd21bc533d674081533af67e04d9b071fb4ee679ed1dcad2dc81bba",
+        "attempt": 6,
+        "reason": "Action step 6: Dismiss open dropdown menu",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 6: Dismiss open dropdown menu"
+    },
+    {
+      "state_id": "state_006",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d0ab03e45b25e2d286595bc0a132ac088a0ff600ad1de467eb8006bb515e0b45.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d0ab03e45b25e2d286595bc0a132ac088a0ff600ad1de467eb8006bb515e0b45",
+        "attempt": 7,
+        "reason": "Action step 7: Wait for UI to settle",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 7: Wait for UI to settle"
+    },
+    {
+      "state_id": "state_007",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d0ab03e45b25e2d286595bc0a132ac088a0ff600ad1de467eb8006bb515e0b45.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d0ab03e45b25e2d286595bc0a132ac088a0ff600ad1de467eb8006bb515e0b45",
+        "attempt": 8,
+        "reason": "Action step 8: Click filter box under country column",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 8: Click filter box under country column"
+    },
+    {
+      "state_id": "state_008",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/ae18d84c49e3d3a14c277c170bcc304e788ab339e09a59225a62685eac56911b.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "ae18d84c49e3d3a14c277c170bcc304e788ab339e09a59225a62685eac56911b",
+        "attempt": 9,
+        "reason": "Action step 9: Type USA into country filter box",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 9: Type USA into country filter box"
+    },
+    {
+      "state_id": "state_009",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d0ab03e45b25e2d286595bc0a132ac088a0ff600ad1de467eb8006bb515e0b45.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d0ab03e45b25e2d286595bc0a132ac088a0ff600ad1de467eb8006bb515e0b45",
+        "attempt": 10,
+        "reason": "Action step 10: Type USA into country filter box",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 10: Type USA into country filter box"
+    },
+    {
+      "state_id": "state_010",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/08f95cc7ed3d5b8f7dd6c5d4589a4e0675c60d72db69dd2846abed9116bee165.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "08f95cc7ed3d5b8f7dd6c5d4589a4e0675c60d72db69dd2846abed9116bee165",
+        "attempt": 11,
+        "reason": "Action step 11: Press Return to apply filter",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 11: Press Return to apply filter"
+    },
+    {
+      "state_id": "state_011",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/08f95cc7ed3d5b8f7dd6c5d4589a4e0675c60d72db69dd2846abed9116bee165.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "08f95cc7ed3d5b8f7dd6c5d4589a4e0675c60d72db69dd2846abed9116bee165",
+        "attempt": 12,
+        "reason": "Action step 12: Wait for filtered results to load",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 12: Wait for filtered results to load"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 749,
+        "y": 97,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_0.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 43,
+        "y": 133,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_1.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Home",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_2.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Down",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_3.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_4.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_006",
+      "from_state_id": "state_005",
+      "to_state_id": "state_006",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Escape",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_5.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_007",
+      "from_state_id": "state_006",
+      "to_state_id": "state_007",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_6.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_008",
+      "from_state_id": "state_007",
+      "to_state_id": "state_008",
+      "action_type": "click",
+      "target": {
+        "x": 724,
+        "y": 87,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_7.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_009",
+      "from_state_id": "state_008",
+      "to_state_id": "state_009",
+      "action_type": "click",
+      "target": {
+        "x": 434,
+        "y": 309,
+        "w": 700,
+        "h": 300
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_8.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_010",
+      "from_state_id": "state_009",
+      "to_state_id": "state_010",
+      "action_type": "type",
+      "target": {
+        "x": 434,
+        "y": 309,
+        "w": 700,
+        "h": 300
+      },
+      "payload": "USA",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_9.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_011",
+      "from_state_id": "state_010",
+      "to_state_id": "state_011",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_10.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_012",
+      "from_state_id": "state_011",
+      "to_state_id": "state_012",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c083d762492e_step_11.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "By the end of this video, you'll filter the Orders table down to only the rows where country equals USA.",
+      "tts_text": null,
+      "word_count": 20,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Filtering by exact text match narrows a table to one specific segment, like a single country. That matters because when you're checking on USA sales performance, you don't want to scroll past 1000 rows of global orders to find them.",
+      "tts_text": null,
+      "word_count": 40,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click the Orders table to open it.",
+      "tts_text": null,
+      "word_count": 7,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The table shows all 1000 rows, still sorted by order_date ascending from the last video, running from 2021-01-05 to 2023-11-30.",
+      "tts_text": null,
+      "word_count": 20,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Click the filter box under the country column header.",
+      "tts_text": null,
+      "word_count": 9,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Type USA into the filter box.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Press Return.",
+      "tts_text": null,
+      "word_count": 2,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "edge",
+      "target_id": "edge_005",
+      "text": "Wait for the table to refresh.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "The row counter at the bottom now reads 240 rows, down from 1000.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "This exact-match filter on country equals USA takes the Orders table from 1000 rows down to 240 matching rows, isolating just the USA segment for review.",
+      "tts_text": null,
+      "word_count": 26,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

@@ -1,0 +1,155 @@
+{
+  "graph_id": "test_graph",
+  "learning_objective": "Test rendering.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_end",
+    "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/test_graph_blank.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "End"
+  },
+  "start_state": {
+    "state_id": "state_start",
+    "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/test_graph_blank.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/test_graph_blank.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_001"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/test_graph_blank.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_002"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/test_graph_blank.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_003"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_start",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 0.5,
+        "y": 0.5,
+        "w": 40,
+        "h": 40
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/beat_001.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 0.5,
+        "y": 0.5,
+        "w": 40,
+        "h": 40
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/beat_002.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_render_ds7k2xp6/beat_003.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_end",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We perform the first action.",
+      "tts_text": null,
+      "word_count": 5,
+      "start_time": 0.0,
+      "end_time": 13.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "We perform the second action.",
+      "tts_text": null,
+      "word_count": 5,
+      "start_time": 13.0,
+      "end_time": 15.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "We wait briefly.",
+      "tts_text": null,
+      "word_count": 3,
+      "start_time": 15.0,
+      "end_time": 17.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": null,
+  "reliability_score": null
+}

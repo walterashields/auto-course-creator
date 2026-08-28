@@ -1,0 +1,138 @@
+{
+  "course_id": "sorting_and_filtering_data_in_sqlite_with_db_browser",
+  "title": "Sorting and Filtering Data in SQLite with DB Browser",
+  "description": "A beginner-friendly course that teaches how to explore, sort, and filter data in an e-commerce orders table using DB Browser for SQLite, building skills step by step without writing any SQL.",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browsing Your First Table",
+      "learning_objective": "Understand how data is organized into rows and columns within a table.",
+      "discovery_objective": "Open the Orders table in the Browse Data tab and display all rows with columns order_id, customer_name, order_date, amount, and status visible.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_with_db_browser_seed.db",
+        "table_name": "Orders",
+        "description": "A single table of customer orders used consistently across all videos to teach sorting and filtering."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 38,
+      "new_capability": "Opening and viewing a table's full contents in Browse Data tab",
+      "running_example_usage": "The learner opens the Orders table to see every order record before any sorting or filtering.",
+      "proof_numbers": "The Orders table contains 120 rows and 5 columns.",
+      "estimated_word_count": 450,
+      "has_recap": false,
+      "has_preview": true,
+      "recap_text_hint": null,
+      "preview_text_hint": "Next we'll sort the Orders table by amount to see the smallest orders first."
+    },
+    {
+      "video_id": "video_1_2",
+      "title": "Sorting a Column in Ascending Order",
+      "learning_objective": "Understand how clicking a column header arranges rows from smallest to largest value.",
+      "discovery_objective": "In the Browse Data tab, click the amount column header of the Orders table so rows display in ascending order.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_1"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_with_db_browser_seed.db",
+        "table_name": "Orders",
+        "description": "A single table of customer orders used consistently across all videos to teach sorting and filtering."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 63,
+      "new_capability": "Sorting a single column in ascending order by clicking its header",
+      "running_example_usage": "The learner sorts the Orders table by amount to find the cheapest orders first.",
+      "proof_numbers": "After sorting ascending, the smallest amount value appears at the top of 120 rows.",
+      "estimated_word_count": 450,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we opened the Orders table and saw all 120 rows with order_id, customer_name, order_date, amount, and status columns.",
+      "preview_text_hint": "Next we'll click the same column header again to reverse the sort order and find the largest orders."
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Reversing the Sort Order",
+      "learning_objective": "Understand how clicking a sorted column header again reverses the order from largest to smallest.",
+      "discovery_objective": "In the Browse Data tab, click the amount column header of the Orders table a second time so rows display in descending order.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_with_db_browser_seed.db",
+        "table_name": "Orders",
+        "description": "A single table of customer orders used consistently across all videos to teach sorting and filtering."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 76,
+      "new_capability": "Toggling a column sort from ascending to descending order",
+      "running_example_usage": "The learner reverses the amount sort on the Orders table to see the highest-value orders first.",
+      "proof_numbers": "After sorting descending, the largest amount value appears at the top of 120 rows.",
+      "estimated_word_count": 400,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we sorted the Orders table by amount in ascending order, placing the smallest amount at the top.",
+      "preview_text_hint": "Next we'll filter the Orders table to show only rows with a specific status value."
+    },
+    {
+      "video_id": "video_1_4",
+      "title": "Filtering Rows by a Single Condition",
+      "learning_objective": "Understand how typing a value into a column filter box narrows the visible rows to matching records.",
+      "discovery_objective": "In the Browse Data tab, type Shipped into the status column filter box of the Orders table so only matching rows are displayed.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_3"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_with_db_browser_seed.db",
+        "table_name": "Orders",
+        "description": "A single table of customer orders used consistently across all videos to teach sorting and filtering."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 83,
+      "new_capability": "Filtering a table by entering a value in a single column's filter box",
+      "running_example_usage": "The learner filters the Orders table to isolate only orders with a status of Shipped.",
+      "proof_numbers": "Filtering status equal to Shipped reduces the visible rows from 120 to 46.",
+      "estimated_word_count": 500,
+      "has_recap": true,
+      "has_preview": false,
+      "recap_text_hint": "In the last video we reversed the sort on the Orders table so the highest amount appeared first among 120 rows.",
+      "preview_text_hint": null
+    }
+  ],
+  "running_example": {
+    "name": "E-commerce Orders",
+    "description": "A single table of customer orders used consistently across all videos to teach sorting and filtering.",
+    "tables": [
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "order_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_name",
+            "type": "TEXT"
+          },
+          {
+            "name": "order_date",
+            "type": "TEXT"
+          },
+          {
+            "name": "amount",
+            "type": "REAL"
+          },
+          {
+            "name": "status",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 120
+      }
+    ]
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "graph_id": "sorting_and_filtering_data_in_sqlite_with_db_browser_video_1_3",
+  "learning_objective": "Understand how clicking a sorted column header again reverses the order from largest to smallest.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_c725b9807f11",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_c725b9807f11.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "85b1f5a228654967fbc583eccabe171b10fa3e310585dcc80f348b5dd8e8f1f7",
+      "run_duration_seconds": 33.976
+    },
+    "visual_summary": "The amount column shows a descending sort order (values decreasing from 3048.0 down), with the arrow indicator showing descending sort on the amount column header."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/82a95cf2bd79a27de159097666a80db164be22e7a2a21fefe9569b7fa0f91fc9.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "82a95cf2bd79a27de159097666a80db164be22e7a2a21fefe9569b7fa0f91fc9",
+      "attempt": 1,
+      "reason": "We are currently on the Database Structure tab, not the Browse Data tab, so the amount column header cannot be clicked yet.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "We are currently on the Database Structure tab, not the Browse Data tab, so the amount column header cannot be clicked yet."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c95b88099ea02a93fa689ac1fbd564f5ef5ea4170ef0772c53187de11bb6142b.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c95b88099ea02a93fa689ac1fbd564f5ef5ea4170ef0772c53187de11bb6142b",
+        "attempt": 2,
+        "reason": "Data is currently sorted by order_id, not by amount; the amount column header hasn't been clicked yet.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Data is currently sorted by order_id, not by amount; the amount column header hasn't been clicked yet."
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/63356eebaa3403310d49b20d6223baeded6e0d1f2171ac3bd1b9a5ad9696d383.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "63356eebaa3403310d49b20d6223baeded6e0d1f2171ac3bd1b9a5ad9696d383",
+        "attempt": 3,
+        "reason": "The amount column is currently sorted ascending (arrow pointing up), need to click header again for descending order.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The amount column is currently sorted ascending (arrow pointing up), need to click header again for descending order."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 748,
+        "y": 96,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 366,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "db_browser_sqlite_c725b9807f11",
+      "action_type": "click",
+      "target": {
+        "x": 359,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Last time, we arranged the Orders table so the smallest amount rose to the very top of the list.",
+      "tts_text": null,
+      "word_count": 19,
+      "start_time": 0.0,
+      "end_time": 7.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now DB Browser for SQLite is showing the Database Structure tab, which lists tables and columns rather than actual row data. Sorting by clicking a column header only works on the Browse Data tab.",
+      "tts_text": null,
+      "word_count": 35,
+      "start_time": 7.6,
+      "end_time": 21.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click the Browse Data tab so you can work with the table's rows and columns.",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 21.6,
+      "end_time": 27.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "Right now the rows are ordered by order_id, with the amount column showing no particular arrangement of its own. This order runs opposite to the largest-to-smallest arrangement we're aiming for.",
+      "tts_text": null,
+      "word_count": 30,
+      "start_time": 27.6,
+      "end_time": 39.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Click the Amount column header once to sort the data by that column.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 39.6,
+      "end_time": 44.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The Amount column header shows an arrow pointing up, indicating rows are ordered from smallest to largest. This ascending order is the opposite of what's needed.",
+      "tts_text": null,
+      "word_count": 26,
+      "start_time": 44.8,
+      "end_time": 55.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Click the Amount column header a second time.",
+      "tts_text": null,
+      "word_count": 8,
+      "start_time": 55.2,
+      "end_time": 58.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_c725b9807f11",
+      "text": "And there it is — the amount column now runs largest to smallest, topping out at 3048.0, with the descending arrow confirming the reversed order.",
+      "tts_text": null,
+      "word_count": 25,
+      "start_time": 58.4,
+      "end_time": 68.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_c725b9807f11",
+      "text": "Coming up, we'll narrow things down further by filtering the Orders table so only rows matching a specific status appear.",
+      "tts_text": null,
+      "word_count": 20,
+      "start_time": 68.4,
+      "end_time": 76.4,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.038682,
+  "reliability_score": 0.25
+}

@@ -1,0 +1,522 @@
+{
+  "graph_id": "video_1_4_bf7740f8",
+  "learning_objective": "The learner filters rows by a numeric comparison to isolate higher-value orders for analysis.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_012",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_e69a1a8d260c.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "b94db0595ba9c17f944788f2e55c46b4e182ce1d97dce34f61b0669f5d8503ca",
+      "attempt": 13,
+      "reason": "Script completed: Filter the Orders table so only rows with order_amount greater than 100 appear, using the filter box in the Browse Data tab.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Script completed: Filter the Orders table so only rows with order_amount greater than 100 appear, using the filter box in the Browse Data tab."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/5556f61e76f8d59e49fc8c2fbf4fa080b54777ba675dc6266d37d38323c3a873.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "5556f61e76f8d59e49fc8c2fbf4fa080b54777ba675dc6266d37d38323c3a873",
+      "attempt": 1,
+      "reason": "Action step 1: Click Browse Data tab",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Action step 1: Click Browse Data tab"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/70314d18dc2d78ac93b38b178a9671f109ef42a86b17dc3b5b88e8bc0d1b23fc.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "70314d18dc2d78ac93b38b178a9671f109ef42a86b17dc3b5b88e8bc0d1b23fc",
+        "attempt": 2,
+        "reason": "Action step 2: Open table dropdown",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 2: Open table dropdown"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c165c6edcc1831124b29d49fbd837b1ad5ee2da7030ee7eeb00b97ff75503723.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c165c6edcc1831124b29d49fbd837b1ad5ee2da7030ee7eeb00b97ff75503723",
+        "attempt": 3,
+        "reason": "Action step 3: Jump to first dropdown item",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 3: Jump to first dropdown item"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c165c6edcc1831124b29d49fbd837b1ad5ee2da7030ee7eeb00b97ff75503723.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c165c6edcc1831124b29d49fbd837b1ad5ee2da7030ee7eeb00b97ff75503723",
+        "attempt": 4,
+        "reason": "Action step 4: Navigate dropdown down toward Orders",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 4: Navigate dropdown down toward Orders"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/ec85d698c58a3f8e4b83be370229d5def3cf13b120e6acc98b25b735259bb936.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "ec85d698c58a3f8e4b83be370229d5def3cf13b120e6acc98b25b735259bb936",
+        "attempt": 5,
+        "reason": "Action step 5: Press Return to select table",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 5: Press Return to select table"
+    },
+    {
+      "state_id": "state_005",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384",
+        "attempt": 6,
+        "reason": "Action step 6: Dismiss open dropdown menu",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 6: Dismiss open dropdown menu"
+    },
+    {
+      "state_id": "state_006",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384",
+        "attempt": 7,
+        "reason": "Action step 7: Wait for UI to settle",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 7: Wait for UI to settle"
+    },
+    {
+      "state_id": "state_007",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384",
+        "attempt": 8,
+        "reason": "Action step 8: Click Execute SQL tab",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 8: Click Execute SQL tab"
+    },
+    {
+      "state_id": "state_008",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384",
+        "attempt": 9,
+        "reason": "Action step 9: Type numeric filter query",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 9: Type numeric filter query"
+    },
+    {
+      "state_id": "state_009",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be3812856f7ec5ce0508a1bdc085391119ce9bd75c1d5223667a8168f2438384",
+        "attempt": 10,
+        "reason": "Action step 10: Type numeric filter query",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 10: Type numeric filter query"
+    },
+    {
+      "state_id": "state_010",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/758afc903d7035f4be86ef3eed835553f60782077ca16f32cc20c8aa6356ad83.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "758afc903d7035f4be86ef3eed835553f60782077ca16f32cc20c8aa6356ad83",
+        "attempt": 11,
+        "reason": "Action step 11: Press Return",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 11: Press Return"
+    },
+    {
+      "state_id": "state_011",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b94db0595ba9c17f944788f2e55c46b4e182ce1d97dce34f61b0669f5d8503ca.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "b94db0595ba9c17f944788f2e55c46b4e182ce1d97dce34f61b0669f5d8503ca",
+        "attempt": 12,
+        "reason": "Action step 12: Wait for results",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 12: Wait for results"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 749,
+        "y": 97,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_0.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 43,
+        "y": 133,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_1.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Home",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_2.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Down",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_3.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_4.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_006",
+      "from_state_id": "state_005",
+      "to_state_id": "state_006",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Escape",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_5.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_007",
+      "from_state_id": "state_006",
+      "to_state_id": "state_007",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_6.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_008",
+      "from_state_id": "state_007",
+      "to_state_id": "state_008",
+      "action_type": "click",
+      "target": {
+        "x": 724,
+        "y": 87,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_7.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_009",
+      "from_state_id": "state_008",
+      "to_state_id": "state_009",
+      "action_type": "click",
+      "target": {
+        "x": 434,
+        "y": 309,
+        "w": 700,
+        "h": 300
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_8.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_010",
+      "from_state_id": "state_009",
+      "to_state_id": "state_010",
+      "action_type": "type",
+      "target": {
+        "x": 434,
+        "y": 309,
+        "w": 700,
+        "h": 300
+      },
+      "payload": "SELECT * FROM Orders WHERE order_amount > 100",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_9.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_011",
+      "from_state_id": "state_010",
+      "to_state_id": "state_011",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_10.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_012",
+      "from_state_id": "state_011",
+      "to_state_id": "state_012",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fdf32bf5a41b_step_11.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "By the end of this video, you'll filter the Orders table to show only the higher-value orders, the ones over one hundred dollars.",
+      "tts_text": null,
+      "word_count": 23,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Numeric filters let you draw a line at a threshold, kind of like setting a minimum price cutoff when you're shopping online. Instead of matching an exact word, you're asking the data 'is this number bigger than my cutoff?'",
+      "tts_text": null,
+      "word_count": 39,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's start where we left off. Here's the Orders table with all 500 rows visible. Last time, we filtered this to status equals 'Shipped' and found 210 matches. Today we're leaving status alone and going after a different column: order_amount.",
+      "tts_text": null,
+      "word_count": 40,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Exact-match filtering worked fine for text like 'Shipped,' but 'greater than one hundred' isn't a single value we can click — it's a comparison. For that, we need the Execute SQL tab, right here. Think of this as a direct typing box for database questions, more flexible than clicking filter menus, because you can describe conditions like 'greater than' that a simple dropdown can't express. This is the first time we're using it, so take a moment: everything you type here runs as a real command against the table.",
+      "tts_text": null,
+      "word_count": 89,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Now we type our condition directly into the query box: select everything from Orders where order_amount is greater than 100. That greater-than sign is the comparison operator doing the work — it's the line in the sand between 'lower-value' and 'higher-value' orders.",
+      "tts_text": null,
+      "word_count": 42,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Press Return to run it. This tells the database: stop showing me everything, only show me rows that clear this threshold.",
+      "tts_text": null,
+      "word_count": 21,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "edge",
+      "target_id": "edge_005",
+      "text": "Give it a second to process the comparison across all 500 rows.",
+      "tts_text": null,
+      "word_count": 12,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "Look at the result count at the bottom of the screen: 187 of the 500 orders have an order_amount greater than 100. That's your re-checkable number — run this same query again later, and you should see 187 every time, as long as the data hasn't changed.",
+      "tts_text": null,
+      "word_count": 47,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "So where last video's status filter narrowed 500 orders down to 210 shipped ones, this numeric filter narrows them down to 187 higher-value orders — exactly the group you'd hand to a sales team focused on big spenders.",
+      "tts_text": null,
+      "word_count": 38,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

@@ -1328,8 +1328,8 @@ class LessonBuilder:
 
         if video_id == "video_1_1":
             comment = self._make_comment_block("Customer contact list for management")
-            select_clause = "SELECT\n    FirstName,\n    LastName,\n    Email"
-            from_clause = "FROM Customer;"
+            select_clause = "\n\nSELECT\n    FirstName,\n    LastName,\n    Email"
+            from_clause = "\nFROM Customer;"
             beats = [
                 ScriptBeat(
                     beat_id="beat_001",
@@ -1451,12 +1451,12 @@ class LessonBuilder:
         elif video_id == "video_1_2":
             comment = self._make_comment_block("Readable customer contact headers")
             select_clause = (
-                "SELECT\n"
+                "\n\nSELECT\n"
                 "    FirstName AS \"First Name\",\n"
                 "    LastName AS \"Last Name\",\n"
                 "    Email AS \"Email Address\""
             )
-            from_clause = "FROM Customer;"
+            from_clause = "\nFROM Customer;"
             beats = [
                 ScriptBeat(
                     beat_id="beat_001",
@@ -1576,13 +1576,13 @@ class LessonBuilder:
         elif video_id == "video_1_3":
             comment = self._make_comment_block("Customer contact list sorted by last name")
             select_clause = (
-                "SELECT\n"
+                "\n\nSELECT\n"
                 "    FirstName AS \"First Name\",\n"
                 "    LastName AS \"Last Name\",\n"
                 "    Email AS \"Email Address\""
             )
-            from_clause = "FROM Customer"
-            order_clause = "ORDER BY LastName;"
+            from_clause = "\nFROM Customer"
+            order_clause = "\nORDER BY LastName;"
             top_last = ""
             if db_path and Path(db_path).exists():
                 top_last = self._top_value(db_path, "Customer", "LastName", "asc") or ""
@@ -1709,14 +1709,14 @@ class LessonBuilder:
         elif video_id == "video_1_4":
             comment = self._make_comment_block("Preview of customer contacts")
             select_clause = (
-                "SELECT\n"
+                "\n\nSELECT\n"
                 "    FirstName AS \"First Name\",\n"
                 "    LastName AS \"Last Name\",\n"
                 "    Email AS \"Email Address\""
             )
-            from_clause = "FROM Customer"
-            order_clause = "ORDER BY LastName"
-            limit_clause = "LIMIT 5;"
+            from_clause = "\nFROM Customer"
+            order_clause = "\nORDER BY LastName"
+            limit_clause = "\nLIMIT 5;"
             beats = [
                 ScriptBeat(
                     beat_id="beat_001",
@@ -1846,14 +1846,14 @@ class LessonBuilder:
         elif video_id == "video_1_5":
             comment = self._make_comment_block("Clean, documented customer contact preview")
             select_clause = (
-                "SELECT\n"
+                "\n\nSELECT\n"
                 "    FirstName AS \"First Name\",\n"
                 "    LastName AS \"Last Name\",\n"
                 "    Email AS \"Email Address\""
             )
-            from_clause = "FROM Customer"
-            order_clause = "ORDER BY LastName"
-            limit_clause = "LIMIT 5;"
+            from_clause = "\nFROM Customer"
+            order_clause = "\nORDER BY LastName"
+            limit_clause = "\nLIMIT 5;"
             beats = [
                 ScriptBeat(
                     beat_id="beat_001",

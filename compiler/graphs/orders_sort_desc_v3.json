@@ -1,0 +1,245 @@
+{
+  "graph_id": "orders_sort_desc_v3",
+  "learning_objective": "Sort a SQLite table by a numeric column in descending order",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_ae6d7aa34d0f",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_ae6d7aa34d0f.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "a460c3bed71acaf0491f74a033e09f4e18e15d73bb49a94a4866a70f0e8b4bf1",
+      "run_duration_seconds": 74.907
+    },
+    "visual_summary": "The Orders table is open and rows are sorted by amount in descending order (340.0, 210.25, 150.0, 120.5, 95.75, 85.0)."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/bb873d04862d76e15f5e603930cf1c5cccdca86d9a24d9011c6d2bf7a38e6c22.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "bb873d04862d76e15f5e603930cf1c5cccdca86d9a24d9011c6d2bf7a38e6c22",
+      "attempt": 1,
+      "reason": "The Orders table is open but not sorted by amount descending; data appears in original id order.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The Orders table is open but not sorted by amount descending; data appears in original id order."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/8747514526e0bc9c2b7ffd3c2f502e8e9713294fd0656cbdb160df5d540c7746.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "8747514526e0bc9c2b7ffd3c2f502e8e9713294fd0656cbdb160df5d540c7746",
+        "attempt": 2,
+        "reason": "Model did not respond with YES/NO format.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Model did not respond with YES/NO format."
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a460c3bed71acaf0491f74a033e09f4e18e15d73bb49a94a4866a70f0e8b4bf1.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "a460c3bed71acaf0491f74a033e09f4e18e15d73bb49a94a4866a70f0e8b4bf1",
+        "attempt": 3,
+        "reason": "Model did not respond with YES/NO format.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Model did not respond with YES/NO format."
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/2817034ac4698bb4c1375976fe07319964320d22266b143fe689403b8ae50016.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "2817034ac4698bb4c1375976fe07319964320d22266b143fe689403b8ae50016",
+        "attempt": 4,
+        "reason": "Model did not respond with YES/NO format.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Model did not respond with YES/NO format."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 234,
+        "y": 181,
+        "w": 90,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 227,
+        "y": 172,
+        "w": 80,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "click",
+      "target": {
+        "x": 227,
+        "y": 165,
+        "w": 90,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "db_browser_sqlite_ae6d7aa34d0f",
+      "action_type": "click",
+      "target": {
+        "x": 225,
+        "y": 172,
+        "w": 90,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the Orders table is just sitting in its original id order, with amounts scattered top to bottom in no particular sequence. That's the opposite of what we want — we need the largest amounts sorted to the top.",
+      "word_count": 40,
+      "start_time": 0.0,
+      "end_time": 16.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Amount column header once to sort the table by that column.",
+      "word_count": 14,
+      "start_time": 16.0,
+      "end_time": 21.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The Amount column is now sorted ascending — smallest to largest — so the biggest orders are buried at the bottom. That's the opposite of what we want.",
+      "word_count": 28,
+      "start_time": 21.6,
+      "end_time": 32.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Now let's click the Amount column header a second time to flip the sort to descending.",
+      "word_count": 16,
+      "start_time": 32.8,
+      "end_time": 39.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The Amount column is now sorted ascending, so the smallest orders sit at the top while the biggest orders are buried at the bottom. That's the opposite of what we want.",
+      "word_count": 31,
+      "start_time": 39.2,
+      "end_time": 51.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Let's click the Amount column header one more time to sort it in descending order.",
+      "word_count": 15,
+      "start_time": 51.6,
+      "end_time": 57.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_003",
+      "text": "The Amount column is now sorted ascending — smallest to largest — so the biggest orders are buried at the bottom. That's the opposite of what we want.",
+      "word_count": 28,
+      "start_time": 57.6,
+      "end_time": 68.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Let's click the Amount column header once more to complete the descending sort.",
+      "word_count": 13,
+      "start_time": 68.8,
+      "end_time": 74.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_ae6d7aa34d0f",
+      "text": "And there it is — the biggest orders are now right at the top, running from 340.0 down to 85.0, so you can spot the largest amounts instantly without scanning the whole table.",
+      "word_count": 33,
+      "start_time": 74.0,
+      "end_time": 87.2,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.076992,
+  "reliability_score": 0.2
+}

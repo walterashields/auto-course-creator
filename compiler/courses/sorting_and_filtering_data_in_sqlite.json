@@ -1,0 +1,160 @@
+{
+  "course_id": "sorting_and_filtering_data_in_sqlite",
+  "title": "Sorting and Filtering Data in SQLite",
+  "description": "A short, hands-on course teaching beginner data analysts how to browse, sort, and filter e-commerce order data directly in the DB Browser for SQLite UI before writing any SQL.",
+  "target_audience": "Beginner data analysts",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browse the Orders Table",
+      "learning_objective": "Recognize the structure of a raw data table before manipulating it with sorting or filtering.",
+      "discovery_objective": "Open the Orders table in the Browse Data tab, identify the 5 columns (order_id, customer_id, order_date, amount, status) by name, scroll through the first page of rows, and note that some status cells appear blank.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_seed.db",
+        "table_name": "Customers",
+        "description": "A two-table dataset of customers and their orders used to demonstrate sorting and filtering in DB Browser for SQLite."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 68,
+      "video_type": "orientation",
+      "new_capability": "Open a table in the Browse Data tab",
+      "running_example_usage": "Learner opens the Orders table for the e-commerce dataset and inspects its columns and rows.",
+      "proof_numbers": "The Orders table contains 500 rows and 5 columns, with 42 rows showing a blank status value.",
+      "estimated_word_count": 170,
+      "has_recap": false,
+      "has_preview": true,
+      "recap_text_hint": null,
+      "preview_text_hint": "Next we'll sort the amount column in the Browse Data tab by clicking its column header."
+    },
+    {
+      "video_id": "video_1_2",
+      "title": "Sort Orders by Amount",
+      "learning_objective": "Use column sorting to quickly identify extreme values in a dataset.",
+      "discovery_objective": "Click the amount column header in the Orders table's Browse Data tab to sort rows in ascending order, then click again to sort descending.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_1"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_seed.db",
+        "table_name": "Customers",
+        "description": "A two-table dataset of customers and their orders used to demonstrate sorting and filtering in DB Browser for SQLite."
+      },
+      "format_tier": "micro",
+      "estimated_duration_seconds": 36,
+      "video_type": "demo",
+      "new_capability": "Sort a column by clicking its header",
+      "running_example_usage": "Learner sorts the 500 Orders rows by the amount column to find the smallest and largest orders.",
+      "proof_numbers": "Ascending sort places a $12.50 order at the top; descending sort places a $998.75 order at the top.",
+      "estimated_word_count": 90,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we opened the Orders table and saw 500 rows across 5 columns, including 42 blank status cells.",
+      "preview_text_hint": "Next we'll filter Orders by an exact status match using the column filter box."
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Filter Orders by Exact Status",
+      "learning_objective": "Isolate rows matching a specific category value using UI filtering.",
+      "discovery_objective": "Type 'Shipped' into the status column's filter box in the Orders table's Browse Data tab to display only matching rows.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_seed.db",
+        "table_name": "Customers",
+        "description": "A two-table dataset of customers and their orders used to demonstrate sorting and filtering in DB Browser for SQLite."
+      },
+      "format_tier": "micro",
+      "estimated_duration_seconds": 38,
+      "video_type": "demo",
+      "new_capability": "Filter rows by exact text match",
+      "running_example_usage": "Learner filters the Orders table to show only rows where status equals 'Shipped'.",
+      "proof_numbers": "The filter reduces 500 total rows to 210 rows where status equals 'Shipped'.",
+      "estimated_word_count": 95,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we sorted 500 orders by amount, finding a $12.50 order at the low end and a $998.75 order at the high end.",
+      "preview_text_hint": "Next we'll filter Orders by a numeric comparison on the amount column using the filter box."
+    },
+    {
+      "video_id": "video_1_4",
+      "title": "Filter Orders by Amount Threshold",
+      "learning_objective": "Narrow a dataset to rows exceeding a numeric threshold using UI filtering.",
+      "discovery_objective": "Type '>500' into the amount column's filter box in the Orders table's Browse Data tab to display only rows above that value.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_3"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/sorting_and_filtering_data_in_sqlite_seed.db",
+        "table_name": "Customers",
+        "description": "A two-table dataset of customers and their orders used to demonstrate sorting and filtering in DB Browser for SQLite."
+      },
+      "format_tier": "micro",
+      "estimated_duration_seconds": 38,
+      "video_type": "demo",
+      "new_capability": "Filter rows by numeric comparison",
+      "running_example_usage": "Learner filters the Orders table to show only orders with an amount greater than 500.",
+      "proof_numbers": "The filter reduces 500 total rows to 76 rows where amount is greater than 500.",
+      "estimated_word_count": 95,
+      "has_recap": true,
+      "has_preview": false,
+      "recap_text_hint": "In the last video we filtered 500 orders down to 210 rows with status equal to 'Shipped'.",
+      "preview_text_hint": null
+    }
+  ],
+  "running_example": {
+    "name": "E-commerce Orders Dataset",
+    "description": "A two-table dataset of customers and their orders used to demonstrate sorting and filtering in DB Browser for SQLite.",
+    "tables": [
+      {
+        "name": "Customers",
+        "columns": [
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "name",
+            "type": "TEXT"
+          },
+          {
+            "name": "country",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 50
+      },
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "order_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "order_date",
+            "type": "TEXT"
+          },
+          {
+            "name": "amount",
+            "type": "REAL"
+          },
+          {
+            "name": "status",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 500
+      }
+    ]
+  }
+}

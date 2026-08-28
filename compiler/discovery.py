@@ -1106,10 +1106,10 @@ def _extract_query_from_objective(objective: str) -> str:
 
 def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
     """
-    Pull the SQL query associated with a beat.
+    Pull the SQL query associated with a beat, including ORDER BY and LIMIT.
 
-    Prefer an explicit type_block action, then fall back to a SELECT/FROM
-    statement embedded in the beat narration.
+    Prefer an explicit type_block or type_segments action, then fall back to a
+    SELECT statement embedded in the beat narration.
     """
     candidates: List[str] = []
     action = beat.action or {}
@@ -1126,13 +1126,9 @@ def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
     candidates.append(beat.text)
 
     for candidate in candidates:
-        match = re.search(
-            r"(SELECT\s+.+?\s+FROM\s+\w+)(?:\s+WHERE|\s+ORDER|\s+GROUP|\s+LIMIT|;|$)",
-            candidate,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if match:
-            return match.group(1).strip()
+        query = extract_first_query(candidate)
+        if query:
+            return query
     return None
 
 
@@ -2312,13 +2308,12 @@ class EndStateDiscovery:
                 if query_to_type:
                     agent.append_block(query_to_type)
                     agent.execute_beat({"type": "run_query"})
-                    full_history = (
-                        history_to_paste
-                        + "\n\n"
-                        + self._wrap_query_as_history(query_to_type)
-                    )
+                    # The history already contains the prior query commented out;
+                    # clear the active query and re-paste only the commented history
+                    # so the editor matches the state beat (previous queries above,
+                    # commented out) without duplicating the just-run query.
                     agent.prepare_sql_editor()
-                    agent.paste_history_block(full_history)
+                    agent.paste_history_block(history_to_paste)
                 agent.dismiss_transient_ui()
                 observed = agent.summarize_observed_state()
                 observed["history_pasted"] = True
@@ -2487,6 +2482,15 @@ class EndStateDiscovery:
                     )
                     break
 
+        # Caller-provided intended cumulative block for segmented typing. If a
+        # segment fails, the fallback paste uses this instead of the live editor
+        # content, so a corrupted editor cannot poison the recovery.
+        segment_fallback_text = ""
+        if opening_state_history:
+            segment_fallback_text += opening_state_history
+        if new_query:
+            segment_fallback_text += ("\n\n" if segment_fallback_text else "") + new_query
+
         failed_reason = ""
         previous_observed_state: Optional[Dict[str, Any]] = None
         executed_demo_count = 0
@@ -2502,7 +2506,11 @@ class EndStateDiscovery:
             if beat.kind == "demo" and action.get("type") != "wait":
                 intended = self._intended_state_description(action)
                 later_demos = [j for j in range(idx + 1, len(beats)) if beats[j].kind == "demo"]
-                can_skip = executed_demo_count > 0 or len(later_demos) > 0
+                # Segmented typing builds the query clause-by-clause; each segment
+                # must execute so the cumulative text is correct. Skipping a segment
+                # would leave an incomplete query (e.g. SELECT without FROM).
+                is_segmented = action.get("type") == "type_segments"
+                can_skip = (executed_demo_count > 0 or len(later_demos) > 0) and not is_segmented
                 skip_reason = (
                     f"can_skip={can_skip} (executed_demo_count={executed_demo_count}, "
                     f"later_demos={len(later_demos)})"
@@ -2561,7 +2569,10 @@ class EndStateDiscovery:
                     # Stage prep before recording: clear editor for standalone typing
                     # beats, but keep the commented history in place for continuity
                     # videos. Dismiss any transient UI that would clutter the frame.
-                    if action.get("type") in ("type_block", "type_segments") and not self.opening_state_history:
+                    # Segmented typing builds the query incrementally, so the editor
+                    # must keep whatever was typed in previous segments. Only clear for
+                    # a monolithic type_block (or when there is no history to preserve).
+                    if action.get("type") == "type_block" and not self.opening_state_history:
                         agent.prepare_sql_editor()
                     else:
                         agent.dismiss_transient_ui()
@@ -2574,8 +2585,15 @@ class EndStateDiscovery:
                         file=sys.stderr,
                     )
                     if not skipped:
+                        # Segmented beats get the intended cumulative block as a
+                        # fallback so a failed segment recovers to the real target.
+                        beat_fallback = (
+                            segment_fallback_text
+                            if action.get("type") == "type_segments"
+                            else None
+                        )
                         for attempt in range(3):
-                            if agent.execute_beat(action):
+                            if agent.execute_beat(action, fallback_text=beat_fallback):
                                 beat_ok = True
                                 break
                             print(

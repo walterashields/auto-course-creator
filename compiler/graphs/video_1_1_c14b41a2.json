@@ -1,0 +1,242 @@
+{
+  "graph_id": "video_1_1_c14b41a2",
+  "learning_objective": "Write and run your first SELECT query to return a customer contact list",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_002",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_17c2b86116ef.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "65f1087be665e3d2edf7a737b32693159ba56c5b413572598ebc5b7990b4a14c",
+      "run_duration_seconds": 142.047
+    },
+    "visual_summary": "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer;, run it with F5, and show the result pane with the contact list"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_c14b41a2_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_c14b41a2_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_003"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/44ed865e2d5c_beat_003.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will write our first SELECT query to pull a customer contact",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "SELECT tells the database which columns we want, and FROM tells it which table holds",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We open the Execute SQL tab.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "summary": "The Execute SQL tab is active with an empty query editor and no results displayed yet."
+      }
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We're in the Execute SQL tab with an empty query editor, ready to write a comment block so we remember what this query is, with no results shown yet and the wsda_music.db database open in DB Browser for SQLite.",
+      "tts_text": null,
+      "word_count": 39,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "summary": "The Execute SQL tab is active with an empty query editor and no results, showing the wsda_music.db database open in DB Browser for SQLite."
+      }
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We are on the Execute SQL tab, where the query editor is empty and the execution log shows that execution finished without errors.",
+      "tts_text": null,
+      "word_count": 23,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "summary": "The Execute SQL tab is active with an empty query editor, and the execution log shows 'Execution finished without errors.'",
+        "query_result": {
+          "columns": [
+            "FirstName",
+            "LastName",
+            "Email"
+          ],
+          "row_count": 60,
+          "first_rows": [
+            [
+              "Luís",
+              "Gonçalves",
+              "luisg@embraer.com.br"
+            ],
+            [
+              "Leonie",
+              "Köhler",
+              "leonekohler@surfeu.de"
+            ],
+            [
+              "François",
+              "Tremblay",
+              "ftremblay@gmail.com"
+            ],
+            [
+              "Bjørn",
+              "Hansen",
+              "bjorn.hansen@yahoo.no"
+            ],
+            [
+              "František",
+              "Wichterlová",
+              "frantisekw@jetbrains.com"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We are on the Execute SQL tab, where the query editor is empty and the execution status shows the query completed with no errors.",
+      "tts_text": null,
+      "word_count": 24,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "summary": "The Execute SQL tab is active with an empty query editor and a completed execution message showing no errors."
+      }
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The result pane shows 60 rows with FirstName, LastName, Email, giving us the complete customer",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We see 60 rows returned in the result pane, confirming the contact list is complete.",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We have written our first SELECT query and pulled the customer contact list. Next, we",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

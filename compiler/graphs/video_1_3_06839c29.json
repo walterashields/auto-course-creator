@@ -1,0 +1,279 @@
+{
+  "graph_id": "video_1_3_06839c29",
+  "learning_objective": "Sort query results by a specific column using ORDER BY",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_003",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_5761256a9c66.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "7b3abd14e75f94db329ad4b05cfe7a4c87260d93903f04d4b841d0fd2807b259",
+      "run_duration_seconds": 232.866
+    },
+    "visual_summary": "Open the Execute SQL tab, type SELECT FirstName AS \"First Name\", LastName AS \"Last Name\", Email AS \"Email Address\" FROM Customer ORDER BY LastName, run it with F5, and show the result pane sorted by Last Name"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_3_06839c29_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_3_06839c29_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_3_06839c29_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/708036aef3c9_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/708036aef3c9_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will sort the customer contact list alphabetically by last name using the ORDER BY clause. Last lesson we made the headers readable with aliases; now we control the order in which the rows appear in the result pane.",
+      "tts_text": null,
+      "word_count": 42,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "We are on the Execute SQL tab, where the course's previous queries sit above, commented out, and our new aliased query is being added below them. No results are currently displayed in the pane below.",
+      "tts_text": null,
+      "word_count": 35,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab is active showing commented-out SQL SELECT statements querying Customer table fields, with no results displayed yet.",
+        "opening_state_strategy": "established",
+        "opening_state_log": "[OPENING STATE] established: commented SQL history pasted into editor",
+        "history_pasted": true
+      }
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "ORDER BY tells the database how to sort the returned rows. It does not change which rows are selected or the columns that come back; it only rearranges the order in which they appear. By default, text columns sort alphabetically from A to Z, which is what we want for a contact list that managers can scan quickly.",
+      "tts_text": null,
+      "word_count": 58,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the rows appear in the order they are stored in the table. After we add ORDER BY LastName, the same rows will reorder so the earliest last name appears at the top and the rest follow alphabetically down the result pane.",
+      "tts_text": null,
+      "word_count": 43,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 10
+        },
+        "summary": "The Execute SQL tab is active showing a commented-out SQL query selecting FirstName, LastName, and Email from the Customer table, with no results displayed."
+      }
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We are on the Execute SQL tab, with a commented header and a query that aliases each column and orders the results by last name.",
+      "tts_text": null,
+      "word_count": 25,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab is active, showing a SQL query that selects and sorts customer contact information, with no results displayed yet."
+      }
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "We run the query and the rows reorder alphabetically in the result pane.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 12
+        },
+        "summary": "The Execute SQL tab shows a query selecting customer first name, last name, and email, ordered by last name, with 60 rows returned and results displayed in a grid below."
+      }
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We see 60 rows returned, with Almeida at the top of the Last Name column, confirming the ascending alphabetical sort is active and the rows follow A-to-Z order.",
+      "tts_text": null,
+      "word_count": 28,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 15
+        },
+        "summary": "The Execute SQL tab shows a query selecting and sorting customer contact info, with results displayed in a grid below and execution log at the bottom."
+      }
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The rows are now arranged alphabetically by last name, with the earliest last name at the top of the list. This makes it easy to scan contacts from A to Z when looking for a specific person. The selected columns and aliases did not change; only the sequence of rows changed to match the ORDER BY clause.",
+      "tts_text": null,
+      "word_count": 57,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "ORDER BY belongs at the end of the SELECT statement, after the column list and FROM clause. Putting it last is a readability convention that helps the team see the sort rule at a glance. It also makes the query easier to edit when we later add filtering or limiting clauses before the final sort.",
+      "tts_text": null,
+      "word_count": 55,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We have sorted the customer contact list alphabetically by last name with ORDER BY. The rows now appear in A-to-Z order, ready for scanning. Next, we will limit the result to a small preview using LIMIT.",
+      "tts_text": null,
+      "word_count": 36,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

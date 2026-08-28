@@ -1,0 +1,172 @@
+{
+  "course_id": "sql_fundamentals_for_data_analysts_ui_foundations",
+  "title": "SQL Fundamentals for Data Analysts: UI Foundations",
+  "description": "A short, beginner-focused course that introduces data analysts to browsing, sorting, and filtering e-commerce data in a database browser before any SQL is written.",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browse the Customers Table",
+      "learning_objective": "The learner navigates a database browser interface and recognizes how a table organizes records into rows and columns.",
+      "discovery_objective": "Open the Customers table in the Browse Data tab, identify the 4 columns by name, scroll through the first page of rows, and explain what each column represents.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_ui_foundations_seed.db",
+        "table_name": "Customers",
+        "description": "A small e-commerce dataset with a Customers table and an Orders table linked by customer_id, spanning multiple countries and 12+ months of order history."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 119,
+      "video_type": "orientation",
+      "new_capability": "Open the Customers table in the Browse Data tab",
+      "key_concept": "A database table is like a filing cabinet drawer: every folder (row) has the same labeled tabs (columns), here holding one customer per folder.",
+      "prerequisite_knowledge": "None - this is the first video in the course.",
+      "running_example_usage": "Introduces the Customers table, which will be joined to Orders later in the course.",
+      "proof_numbers": "The Customers table contains 50 rows and 4 columns: customer_id, customer_name, country, and signup_date.",
+      "estimated_word_count": 180,
+      "has_recap": false,
+      "has_preview": true,
+      "recap_text_hint": null,
+      "preview_text_hint": "Next we'll sort the Orders table by order_amount in ascending order using the column header in the Browse Data tab."
+    },
+    {
+      "video_id": "video_1_2",
+      "title": "Sort the Orders Table by Amount in Ascending Order",
+      "learning_objective": "The learner uses column-header sorting to answer a real question about which order was smallest, without altering the underlying data.",
+      "discovery_objective": "Sort the Orders table by order_amount in ascending order using the column header in the Browse Data tab.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_1"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_ui_foundations_seed.db",
+        "table_name": "Customers",
+        "description": "A small e-commerce dataset with a Customers table and an Orders table linked by customer_id, spanning multiple countries and 12+ months of order history."
+      },
+      "format_tier": "micro",
+      "estimated_duration_seconds": 131,
+      "video_type": "demo",
+      "new_capability": "Sort the Orders table by order_amount in ascending order",
+      "key_concept": "Sorting reorders rows for viewing purposes, like reshuffling a stack of receipts by price without changing any receipt's contents.",
+      "prerequisite_knowledge": "The learner knows how to open a table in the Browse Data tab from the previous video.",
+      "running_example_usage": "Uses the Orders table's order_amount column to surface the lowest-value order among 500 rows.",
+      "proof_numbers": "After sorting ascending, the lowest order_amount is $8.50, now at the top of 500 rows.",
+      "estimated_word_count": 130,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we opened the Customers table and saw 50 rows across 4 columns: customer_id, customer_name, country, and signup_date.",
+      "preview_text_hint": "Next we'll filter the Orders table by status equal to Shipped using the filter box in the Browse Data tab."
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Filter the Orders Table by Status",
+      "learning_objective": "The learner filters rows by an exact text match to isolate a meaningful subset of orders for analysis.",
+      "discovery_objective": "Filter the Orders table so only rows with status equal to Shipped appear, using the filter box in the Browse Data tab.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_ui_foundations_seed.db",
+        "table_name": "Customers",
+        "description": "A small e-commerce dataset with a Customers table and an Orders table linked by customer_id, spanning multiple countries and 12+ months of order history."
+      },
+      "format_tier": "micro",
+      "estimated_duration_seconds": 120,
+      "video_type": "demo",
+      "new_capability": "Filter the Orders table by exact text match on status",
+      "key_concept": "Filtering hides non-matching rows temporarily, like a sieve that only lets through grains of a certain size while the rest stays behind.",
+      "prerequisite_knowledge": "The learner knows how to sort a column in the Browse Data tab from the previous video.",
+      "running_example_usage": "Uses the Orders table's status column, which includes some NULL values for orders that were never marked with a status.",
+      "proof_numbers": "Filtering to status = 'Shipped' returns 210 of the 500 orders.",
+      "estimated_word_count": 140,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we sorted 500 orders by order_amount ascending and found the smallest order at $8.50.",
+      "preview_text_hint": "Next we'll filter the Orders table by order_amount greater than 100 using the filter box in the Browse Data tab."
+    },
+    {
+      "video_id": "video_1_4",
+      "title": "Filter the Orders Table by Amount",
+      "learning_objective": "The learner filters rows by a numeric comparison to isolate higher-value orders for analysis.",
+      "discovery_objective": "Filter the Orders table so only rows with order_amount greater than 100 appear, using the filter box in the Browse Data tab.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_3"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_ui_foundations_seed.db",
+        "table_name": "Customers",
+        "description": "A small e-commerce dataset with a Customers table and an Orders table linked by customer_id, spanning multiple countries and 12+ months of order history."
+      },
+      "format_tier": "micro",
+      "estimated_duration_seconds": 140,
+      "video_type": "demo",
+      "new_capability": "Filter the Orders table by numeric comparison on order_amount",
+      "key_concept": "Numeric filters use comparison operators to draw a line at a threshold, like setting a minimum price cutoff when shopping online.",
+      "prerequisite_knowledge": "The learner knows how to filter by exact text match from the previous video.",
+      "running_example_usage": "Uses the Orders table's order_amount column to isolate higher-value orders out of the full 500-row set.",
+      "proof_numbers": "Filtering to order_amount > 100 returns 187 of the 500 orders.",
+      "estimated_word_count": 140,
+      "has_recap": true,
+      "has_preview": false,
+      "recap_text_hint": "In the last video we filtered the Orders table to status = 'Shipped' and saw 210 of the 500 orders match.",
+      "preview_text_hint": null
+    }
+  ],
+  "running_example": {
+    "name": "E-Commerce Orders and Customers",
+    "description": "A small e-commerce dataset with a Customers table and an Orders table linked by customer_id, spanning multiple countries and 12+ months of order history.",
+    "tables": [
+      {
+        "name": "Customers",
+        "columns": [
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_name",
+            "type": "TEXT"
+          },
+          {
+            "name": "country",
+            "type": "TEXT"
+          },
+          {
+            "name": "signup_date",
+            "type": "DATE"
+          }
+        ],
+        "rows": 50
+      },
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "order_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "order_date",
+            "type": "DATE"
+          },
+          {
+            "name": "order_amount",
+            "type": "DECIMAL"
+          },
+          {
+            "name": "status",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 500
+      }
+    ]
+  }
+}

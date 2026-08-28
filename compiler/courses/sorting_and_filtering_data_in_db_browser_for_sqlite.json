@@ -1,0 +1,122 @@
+{
+  "course_id": "sorting_and_filtering_data_in_db_browser_for_sqlite",
+  "title": "Sorting and Filtering Data in DB Browser for SQLite",
+  "description": "A short, hands-on course that teaches beginners how to explore, sort, and filter data using DB Browser for SQLite, built entirely around a single e-commerce orders dataset.",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browsing Your Data",
+      "learning_objective": "Understand how data is organized into rows and columns and view it inside DB Browser for SQLite.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases from an online store."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 180,
+      "new_capability": "Opening a table and viewing its rows and columns in the Browse Data tab",
+      "running_example_usage": "The learner opens the Orders table containing customer purchase records.",
+      "proof_numbers": "The Orders table has 250 rows and 6 columns; the first row shows OrderID 1001.",
+      "estimated_word_count": 450
+    },
+    {
+      "video_id": "video_1_2",
+      "title": "Sorting by One Column",
+      "learning_objective": "Learn to sort a table's rows by a single column in ascending or descending order.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_1"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases from an online store."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 200,
+      "new_capability": "Clicking a column header to sort rows ascending or descending",
+      "running_example_usage": "The learner sorts the Orders table by TotalAmount to find the cheapest and priciest orders.",
+      "proof_numbers": "Sorted ascending, the lowest TotalAmount is $5.99; sorted descending, the highest is $499.99.",
+      "estimated_word_count": 500
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Filtering by an Exact Match",
+      "learning_objective": "Learn to filter rows that exactly match a text value using the column filter box.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases from an online store."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 200,
+      "new_capability": "Typing a value into a column's filter box to show only matching rows",
+      "running_example_usage": "The learner filters the Orders table to show only rows where Status equals 'Shipped'.",
+      "proof_numbers": "Filtering Status = 'Shipped' returns 132 of the 250 total orders.",
+      "estimated_word_count": 500
+    },
+    {
+      "video_id": "video_1_4",
+      "title": "Filtering by a Numeric Condition",
+      "learning_objective": "Learn to filter rows using numeric comparison operators like greater-than in the filter box.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_3"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_data_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases from an online store."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 200,
+      "new_capability": "Using comparison operators (e.g., >100) in a numeric column's filter box",
+      "running_example_usage": "The learner filters the Orders table to find high-value purchases above $200.",
+      "proof_numbers": "Filtering TotalAmount > 200 returns 47 of the 250 total orders.",
+      "estimated_word_count": 500
+    }
+  ],
+  "running_example": {
+    "name": "E-commerce Orders Dataset",
+    "description": "A single Orders table representing customer purchases from an online store.",
+    "tables": [
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "OrderID",
+            "type": "INTEGER"
+          },
+          {
+            "name": "CustomerName",
+            "type": "TEXT"
+          },
+          {
+            "name": "Status",
+            "type": "TEXT"
+          },
+          {
+            "name": "OrderDate",
+            "type": "TEXT"
+          },
+          {
+            "name": "TotalAmount",
+            "type": "REAL"
+          },
+          {
+            "name": "ItemCount",
+            "type": "INTEGER"
+          }
+        ],
+        "rows": 250
+      }
+    ]
+  }
+}

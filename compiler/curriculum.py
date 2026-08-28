@@ -356,11 +356,47 @@ def _close_application(app_name: str) -> None:
     time.sleep(2)
 
 
+def _full_sql_from_video(video: VideoManifest) -> Optional[str]:
+    """
+    Return the full cumulative SQL text represented by a video's demo beats.
+
+    Segmented beats split a single query across multiple actions; this helper
+    concatenates those segments in order so the continuity history and prior
+    query extraction see the complete query, not just the last clause.
+    """
+    if video.script_beats:
+        parts: List[str] = []
+        has_sql_action = False
+        for beat_dict in video.script_beats:
+            action = beat_dict.get("action") or {}
+            action_type = action.get("type")
+            if action_type == "type_block":
+                parts.append(action.get("text") or "")
+                has_sql_action = True
+            elif action_type == "type_segments":
+                segments = action.get("segments") or []
+                parts.append(
+                    "".join(
+                        (seg.get("text", "") if isinstance(seg, dict) else str(seg))
+                        for seg in segments
+                    )
+                )
+                has_sql_action = True
+            elif action_type == "execute_query":
+                parts.append(action.get("query") or "")
+                has_sql_action = True
+        if has_sql_action:
+            return "".join(parts).strip() or None
+    if video.planned_queries:
+        return video.planned_queries[0]
+    return None
+
+
 def _derive_opening_state_query(
     manifest: CourseManifest, video: VideoManifest
 ) -> Optional[str]:
     """
-    Return the final typed query from the immediate prerequisite video, if any.
+    Return the full cumulative query from the immediate prerequisite video, if any.
 
     This lets the discovery harness establish the UI state that the opening
     state-beat describes (execution tab open with the previous query).
@@ -369,22 +405,9 @@ def _derive_opening_state_query(
         return None
     prereq_id = video.prerequisite_videos[0]
     prereq_video = next((v for v in manifest.videos if v.video_id == prereq_id), None)
-    if prereq_video is None or not prereq_video.script_beats:
+    if prereq_video is None:
         return None
-    for beat_dict in reversed(prereq_video.script_beats):
-        action = beat_dict.get("action") or {}
-        action_type = action.get("type")
-        if action_type == "type_block":
-            return action.get("text")
-        if action_type == "type_segments":
-            segments = action.get("segments") or []
-            return "".join(
-                (seg.get("text", "") if isinstance(seg, dict) else str(seg))
-                for seg in segments
-            )
-        if action_type == "execute_query":
-            return action.get("query")
-    return None
+    return _full_sql_from_video(prereq_video)
 
 
 def _strip_outer_comment_block(text: str) -> str:
@@ -415,26 +438,6 @@ def _derive_sql_history(
     the history.
     """
 
-    def _final_query_of(v: VideoManifest) -> Optional[str]:
-        if not v.script_beats:
-            if v.planned_queries:
-                return v.planned_queries[0]
-            return None
-        for beat_dict in reversed(v.script_beats):
-            action = beat_dict.get("action") or {}
-            action_type = action.get("type")
-            if action_type in ("type_block", "execute_query"):
-                return action.get("text") or action.get("query")
-            if action_type == "type_segments":
-                segments = action.get("segments") or []
-                return "".join(
-                    (seg.get("text", "") if isinstance(seg, dict) else str(seg))
-                    for seg in segments
-                )
-        if v.planned_queries:
-            return v.planned_queries[0]
-        return None
-
     by_id = {v.video_id: v for v in manifest.videos}
 
     # Collect the full prerequisite chain in dependency order.
@@ -457,12 +460,12 @@ def _derive_sql_history(
 
     history_parts: List[str] = []
     for v in prior:
-        q = _final_query_of(v)
+        q = _full_sql_from_video(v)
         if q:
             history_parts.append(_wrap_query_as_history(q))
 
     history = "\n\n".join(history_parts) if history_parts else None
-    new_query = _final_query_of(video)
+    new_query = _full_sql_from_video(video)
     return history, new_query
 
 

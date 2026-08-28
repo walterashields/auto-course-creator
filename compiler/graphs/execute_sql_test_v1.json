@@ -1,0 +1,237 @@
+{
+  "graph_id": "execute_sql_test_v1",
+  "learning_objective": "Run a SELECT * query",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_9f5641600ec3",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_9f5641600ec3.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "cf066da800768da5d2cbe0ea9f3b3e053668f7d8d504f920960f7ed6eb019f05",
+      "run_duration_seconds": 59.711
+    },
+    "visual_summary": "Executed query 'SELECT * FROM Orders' in the Execute SQL tab and displayed the result grid."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/de609f907cb25bc0768b2f5cf344b6871849b1a68dcf4b948e30a42b958e5843.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "de609f907cb25bc0768b2f5cf344b6871849b1a68dcf4b948e30a42b958e5843",
+      "attempt": 1,
+      "reason": "Recipe step 1: Click Execute SQL tab",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Recipe step 1: Click Execute SQL tab"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/6ae3140ca846f2bf99d51cee117777a63b71c59304a3d56145f68a0a40c32bb6.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "6ae3140ca846f2bf99d51cee117777a63b71c59304a3d56145f68a0a40c32bb6",
+        "attempt": 2,
+        "reason": "Recipe step 2: Click SQL editor text area",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Recipe step 2: Click SQL editor text area"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/ce14bbc45c4625ae2515bf53c9cf8c61b98a115eb130b6065cf6f7533e424021.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "ce14bbc45c4625ae2515bf53c9cf8c61b98a115eb130b6065cf6f7533e424021",
+        "attempt": 3,
+        "reason": "Recipe step 3: Select all existing SQL text",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Recipe step 3: Select all existing SQL text"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/89d00aa5005f675718c1011dfe1db0c3738b8a86469fd855bb93ad50a1e11262.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "89d00aa5005f675718c1011dfe1db0c3738b8a86469fd855bb93ad50a1e11262",
+        "attempt": 4,
+        "reason": "Recipe step 4: Delete selected SQL text",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Recipe step 4: Delete selected SQL text"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d71a1027aefe583f1dc6b125353f788fadb9cea0d4b728dd27bfbb42cff5bb9f.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d71a1027aefe583f1dc6b125353f788fadb9cea0d4b728dd27bfbb42cff5bb9f",
+        "attempt": 5,
+        "reason": "Recipe step 5: Type query: FROM Orders;",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Recipe step 5: Type query: FROM Orders;"
+    },
+    {
+      "state_id": "state_005",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c82e92bd4cedda5f557653babc1f94ca9a82d64d449ae2488ea1bbfe5dcac633.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c82e92bd4cedda5f557653babc1f94ca9a82d64d449ae2488ea1bbfe5dcac633",
+        "attempt": 6,
+        "reason": "Recipe step 6: Press F5 to execute query",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Recipe step 6: Press F5 to execute query"
+    },
+    {
+      "state_id": "state_006",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/cf066da800768da5d2cbe0ea9f3b3e053668f7d8d504f920960f7ed6eb019f05.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "cf066da800768da5d2cbe0ea9f3b3e053668f7d8d504f920960f7ed6eb019f05",
+        "attempt": 7,
+        "reason": "Recipe step 7: Wait for results to appear",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Recipe step 7: Wait for results to appear"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 972,
+        "y": 97,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_0.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 434,
+        "y": 309,
+        "w": 700,
+        "h": 300
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_1.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "hotkey",
+      "target": {},
+      "payload": "cmd+a",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_2.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "hotkey",
+      "target": {},
+      "payload": "delete",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_3.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "type",
+      "target": {
+        "x": 434,
+        "y": 309,
+        "w": 700,
+        "h": 300
+      },
+      "payload": "/*\\nCreated By: Walter Shields\\nCreate Date: 08/25/2026\\nDescription: Returns rows from Orders.\\n*/\\nSELECT\\n    *\\nFROM Orders;",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_4.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_006",
+      "from_state_id": "state_005",
+      "to_state_id": "state_006",
+      "action_type": "hotkey",
+      "target": {},
+      "payload": "F5",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_5.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_007",
+      "from_state_id": "state_006",
+      "to_state_id": "db_browser_sqlite_9f5641600ec3",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/35cd8813255a_step_6.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

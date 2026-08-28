@@ -619,22 +619,17 @@ class VisionAgent:
 
     def _type_segment_cadence(self, text: str) -> None:
         """
-        Type ``text`` at a human cadence: ~0.04 s/char, slower on shifted chars.
+        Enter ``text`` as a single segment at the current cursor position.
 
-        Newlines are entered as explicit Return presses to keep the editor layout
-        intact. This is the primary explain-as-you-type path; paste is the fallback.
+        Character-level typing proved unreliable in DB Browser for SQLite (shifted
+        characters mangled, keystrokes leaked to other apps on focus loss). Each
+        segment is therefore pasted deterministically from the clipboard, keeping
+        the segment bound to its narration beat while guaranteeing the exact text
+        appears. Newlines inside the segment are preserved by the paste.
         """
         self._ensure_frontmost()
-        print(f"  [SEGMENT] typing {len(text)} characters", file=sys.stderr)
-        lines = text.split("\n")
-        for line_idx, line in enumerate(lines):
-            if line_idx > 0:
-                pyautogui.press("return")
-                time.sleep(0.1)
-            for char in line:
-                interval = 0.06 if self._is_shifted_char(char) else 0.04
-                pyautogui.typewrite(char, interval=0.0)
-                time.sleep(interval)
+        print(f"  [SEGMENT] entering {len(text)} characters", file=sys.stderr)
+        self._append_text(text)
         time.sleep(0.3)
         self._dismiss_character_viewer()
 
@@ -646,7 +641,28 @@ class VisionAgent:
         self.press_key("cmd+z")
         time.sleep(0.2)
 
-    def type_segments(self, segments: List[Dict[str, Any]]) -> bool:
+    def _editor_texts_match(self, expected: str, actual: str) -> bool:
+        """
+        Lenient comparison for VLM read-back of the SQL editor.
+
+        The editor content may be taller than the viewport, so the VLM sometimes
+        returns only the visible tail. Accept exact match, or one normalized text
+        being a suffix of the other.
+        """
+        expected_norm = self._normalize_editor_text(expected)
+        actual_norm = self._normalize_editor_text(actual)
+        if expected_norm == actual_norm:
+            return True
+        if expected_norm and actual_norm:
+            if expected_norm.endswith(actual_norm) or actual_norm.endswith(expected_norm):
+                return True
+        return False
+
+    def type_segments(
+        self,
+        segments: List[Dict[str, Any]],
+        fallback_text: Optional[str] = None,
+    ) -> bool:
         """
         Type a list of segments into the editor, verifying after each one.
 
@@ -655,12 +671,32 @@ class VisionAgent:
           - narration (optional): the narration line for the segment
 
         On a segment mismatch the segment is undone and retyped (up to 2 tries).
-        After 2 segment failures the remaining intended text is pasted as a fallback.
+        After 2 segment failures the ``fallback_text`` (the intended cumulative
+        block) is pasted so the editor is never left with partially-corrupted
+        content. If ``fallback_text`` is not supplied, it defaults to the editor
+        content observed at the start plus all segments.
         """
         if not segments:
             return True
 
-        expected_sofar = ""
+        self._ensure_frontmost()
+        # Capture any content already in the editor (e.g. commented history from
+        # stage-prep) so segmented typing appends rather than replacing it.
+        initial = self._read_editor_content() or ""
+        segments_text = "".join(
+            (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
+        )
+        full_text = initial + segments_text
+        # Use the caller-provided intended block if available; this guarantees the
+        # fallback pastes the real target text even if the live editor is corrupted.
+        intended_fallback = fallback_text if fallback_text is not None else full_text
+        # Move the cursor to the end of the document before appending.
+        pyautogui.keyDown("command")
+        pyautogui.keyDown("end")
+        pyautogui.keyUp("end")
+        pyautogui.keyUp("command")
+        time.sleep(0.1)
+        expected_sofar = initial
         for seg_idx, segment in enumerate(segments):
             text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
             if not text:
@@ -675,7 +711,7 @@ class VisionAgent:
                 self._type_segment_cadence(text)
                 expected_sofar += text
                 read_back = self._read_editor_content()
-                if self._normalize_editor_text(expected_sofar) == self._normalize_editor_text(read_back):
+                if self._editor_texts_match(expected_sofar, read_back):
                     print(f"  [SEGMENTS] segment {seg_idx + 1} read-back OK", file=sys.stderr)
                     segment_ok = True
                     break
@@ -692,14 +728,12 @@ class VisionAgent:
                     f"  [SEGMENTS] segment {seg_idx + 1} failed twice; falling back to paste",
                     file=sys.stderr,
                 )
-                remaining = "".join(
-                    (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments[seg_idx:]
-                )
-                # Replace the current partial content with the full remaining text.
+                # Paste the intended cumulative block so the fallback never leaves a
+                # partially-typed or corrupted query.
                 self._clear_editor()
-                self._paste_text(remaining)
+                self._paste_text(intended_fallback)
                 read_back = self._read_editor_content()
-                if self._normalize_editor_text(remaining) == self._normalize_editor_text(read_back):
+                if self._editor_texts_match(intended_fallback, read_back):
                     print("  [SEGMENTS] paste fallback OK", file=sys.stderr)
                     return True
                 print("  [SEGMENTS] paste fallback FAILED", file=sys.stderr)
@@ -1130,7 +1164,11 @@ class VisionAgent:
         result = self._call_vlm(prompt, expect_json=True)
         return result.action
 
-    def execute_beat(self, beat_dict: Dict[str, Any]) -> bool:
+    def execute_beat(
+        self,
+        beat_dict: Dict[str, Any],
+        fallback_text: Optional[str] = None,
+    ) -> bool:
         """
         Execute a single vision-agent beat.
 
@@ -1139,6 +1177,10 @@ class VisionAgent:
           - action_detail: human description or text to type/press
           - target (optional for type): element to click before typing
           - actions (for "sequence"): list of sub-beat dicts
+
+        ``fallback_text`` is passed through to segmented typing so that a failed
+        segment can recover by pasting the intended cumulative block instead of
+        whatever happens to be in the editor.
         """
         action_type = beat_dict.get("action_type") or beat_dict.get("type")
         detail = beat_dict.get("action_detail") or beat_dict.get("detail") or ""
@@ -1170,7 +1212,7 @@ class VisionAgent:
 
         if action_type == "type_segments":
             segments = beat_dict.get("segments") or []
-            return self.type_segments(segments)
+            return self.type_segments(segments, fallback_text=fallback_text)
 
         if action_type == "append_block":
             text = beat_dict.get("text") or beat_dict.get("detail") or ""

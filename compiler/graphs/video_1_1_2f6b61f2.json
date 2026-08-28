@@ -1,0 +1,92 @@
+{
+  "graph_id": "video_1_1_2f6b61f2",
+  "learning_objective": "Open the Orders table.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_001",
+    "screenshot_path": "/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/tmp40djzq68/end.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "abc123",
+      "attempt": 2,
+      "reason": "Orders table visible",
+      "api_width_px": 1000,
+      "api_height_px": 800
+    },
+    "visual_summary": "Orders table visible"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/tmp40djzq68/abc123.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "abc123",
+      "attempt": 1,
+      "reason": "Start state",
+      "api_width_px": 1000,
+      "api_height_px": 800
+    },
+    "visual_summary": "Start state"
+  },
+  "states": [],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 500,
+        "y": 400,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "b1",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Open the Orders table.",
+      "tts_text": null,
+      "word_count": 4,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "b2",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click Browse Data.",
+      "tts_text": null,
+      "word_count": 3,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "b3",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The Orders table is visible.",
+      "tts_text": null,
+      "word_count": 5,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

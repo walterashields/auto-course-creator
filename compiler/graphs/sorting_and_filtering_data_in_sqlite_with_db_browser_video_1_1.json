@@ -1,0 +1,61 @@
+{
+  "graph_id": "sorting_and_filtering_data_in_sqlite_with_db_browser_video_1_1",
+  "learning_objective": "Understand how data is organized into rows and columns within a table.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_eaf782d9a2ae",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_eaf782d9a2ae.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "d549fbe23efe75b02eb89ac2a704ace38948c4a1aecda47546f7558dd2a7bb53",
+      "run_duration_seconds": 8.622
+    },
+    "visual_summary": "Orders table is open in Browse Data tab with all five columns (order_id, customer_name, order_date, amount, status) visible and no filters applied, showing all 120 rows (paginated)."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d549fbe23efe75b02eb89ac2a704ace38948c4a1aecda47546f7558dd2a7bb53.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "d549fbe23efe75b02eb89ac2a704ace38948c4a1aecda47546f7558dd2a7bb53",
+      "attempt": 1,
+      "reason": "Orders table is open in Browse Data tab with all five columns (order_id, customer_name, order_date, amount, status) visible and no filters applied, showing all 120 rows (paginated).",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Orders table is open in Browse Data tab with all five columns (order_id, customer_name, order_date, amount, status) visible and no filters applied, showing all 120 rows (paginated)."
+  },
+  "states": [],
+  "edges": [],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Here is the Orders table, organized into five columns — order_id, customer_name, order_date, amount, and status — with all 120 rows displayed across pages.",
+      "tts_text": null,
+      "word_count": 24,
+      "start_time": 0.0,
+      "end_time": 9.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_eaf782d9a2ae",
+      "text": "Coming up, we'll take the Orders table and arrange it by amount so the smallest orders rise to the top.",
+      "tts_text": null,
+      "word_count": 20,
+      "start_time": 9.6,
+      "end_time": 17.6,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.011106,
+  "reliability_score": 1.0
+}

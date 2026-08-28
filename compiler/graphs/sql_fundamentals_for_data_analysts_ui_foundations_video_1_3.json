@@ -1,0 +1,522 @@
+{
+  "graph_id": "sql_fundamentals_for_data_analysts_ui_foundations_video_1_3",
+  "learning_objective": "The learner filters rows by an exact text match to isolate a meaningful subset of orders for analysis.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_012",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_2ff83150d5a2.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "7d91ac283f0ebced7a38ed7c3fc69169b2286310ff2a37100ecd0920a60db73f",
+      "attempt": 13,
+      "reason": "Script completed: Filter the Orders table so only rows with status equal to Shipped appear, using the filter box in the Browse Data tab.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Script completed: Filter the Orders table so only rows with status equal to Shipped appear, using the filter box in the Browse Data tab."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c3b1d6704f39fd2120407c5e8972adbea17d33c8eb06365c085cd14ffc03ee33.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "c3b1d6704f39fd2120407c5e8972adbea17d33c8eb06365c085cd14ffc03ee33",
+      "attempt": 1,
+      "reason": "Action step 1: Click Browse Data tab",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Action step 1: Click Browse Data tab"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/c151a38f9c2619be904db00248ddbdd981b8af9e6ae9fa65774cbe66a4f7d399.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "c151a38f9c2619be904db00248ddbdd981b8af9e6ae9fa65774cbe66a4f7d399",
+        "attempt": 2,
+        "reason": "Action step 2: Open table dropdown",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 2: Open table dropdown"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be085ebebe22693321daac27a74ca5e9abb11fc6468941091baeb1d24d28af4a.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be085ebebe22693321daac27a74ca5e9abb11fc6468941091baeb1d24d28af4a",
+        "attempt": 3,
+        "reason": "Action step 3: Jump to first dropdown item",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 3: Jump to first dropdown item"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/be085ebebe22693321daac27a74ca5e9abb11fc6468941091baeb1d24d28af4a.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "be085ebebe22693321daac27a74ca5e9abb11fc6468941091baeb1d24d28af4a",
+        "attempt": 4,
+        "reason": "Action step 4: Navigate dropdown down toward Orders",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 4: Navigate dropdown down toward Orders"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/09b336c3e37b9a46a228cdaccdd27841d5d084f0e208de32bf2ac1d613ea23e9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "09b336c3e37b9a46a228cdaccdd27841d5d084f0e208de32bf2ac1d613ea23e9",
+        "attempt": 5,
+        "reason": "Action step 5: Press Return to select table",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 5: Press Return to select table"
+    },
+    {
+      "state_id": "state_005",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/91bbdc21e674466f41e84bd92018c3b543e28560cd70c36ab316c29a386584d9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "91bbdc21e674466f41e84bd92018c3b543e28560cd70c36ab316c29a386584d9",
+        "attempt": 6,
+        "reason": "Action step 6: Dismiss open dropdown menu",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 6: Dismiss open dropdown menu"
+    },
+    {
+      "state_id": "state_006",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/91bbdc21e674466f41e84bd92018c3b543e28560cd70c36ab316c29a386584d9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "91bbdc21e674466f41e84bd92018c3b543e28560cd70c36ab316c29a386584d9",
+        "attempt": 7,
+        "reason": "Action step 7: Wait for UI to settle",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 7: Wait for UI to settle"
+    },
+    {
+      "state_id": "state_007",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/91bbdc21e674466f41e84bd92018c3b543e28560cd70c36ab316c29a386584d9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "91bbdc21e674466f41e84bd92018c3b543e28560cd70c36ab316c29a386584d9",
+        "attempt": 8,
+        "reason": "Action step 8: Click the filter box under the status column header",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 8: Click the filter box under the status column header"
+    },
+    {
+      "state_id": "state_008",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/5b4dcc81bcf94aaa45788ee5a5124b79e8f41de43200dcd97fb2a58ec4427b31.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "5b4dcc81bcf94aaa45788ee5a5124b79e8f41de43200dcd97fb2a58ec4427b31",
+        "attempt": 9,
+        "reason": "Action step 9: Type Shipped into the status filter box",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 9: Type Shipped into the status filter box"
+    },
+    {
+      "state_id": "state_009",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/9c7e34039bf5a5e51cf2e551bd82a7aac7fb1a82c1d546b68317b243febc37ed.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "9c7e34039bf5a5e51cf2e551bd82a7aac7fb1a82c1d546b68317b243febc37ed",
+        "attempt": 10,
+        "reason": "Action step 10: Type Shipped into the status filter box",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 10: Type Shipped into the status filter box"
+    },
+    {
+      "state_id": "state_010",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a48cffb03086241670dd79a50679b7e628efbaa846448e57bc35864f3f1463c5.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "a48cffb03086241670dd79a50679b7e628efbaa846448e57bc35864f3f1463c5",
+        "attempt": 11,
+        "reason": "Action step 11: Press Return to apply the status filter",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 11: Press Return to apply the status filter"
+    },
+    {
+      "state_id": "state_011",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/7d91ac283f0ebced7a38ed7c3fc69169b2286310ff2a37100ecd0920a60db73f.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "7d91ac283f0ebced7a38ed7c3fc69169b2286310ff2a37100ecd0920a60db73f",
+        "attempt": 12,
+        "reason": "Action step 12: Wait for the filtered results to finish loading",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 12: Wait for the filtered results to finish loading"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 749,
+        "y": 97,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_0.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 43,
+        "y": 133,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_1.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Home",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_2.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Down",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_3.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_4.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_006",
+      "from_state_id": "state_005",
+      "to_state_id": "state_006",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Escape",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_5.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_007",
+      "from_state_id": "state_006",
+      "to_state_id": "state_007",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_6.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_008",
+      "from_state_id": "state_007",
+      "to_state_id": "state_008",
+      "action_type": "click",
+      "target": {
+        "x": 489,
+        "y": 212,
+        "w": 120,
+        "h": 24
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_7.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_009",
+      "from_state_id": "state_008",
+      "to_state_id": "state_009",
+      "action_type": "click",
+      "target": {
+        "x": 489,
+        "y": 212,
+        "w": 120,
+        "h": 24
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_8.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_010",
+      "from_state_id": "state_009",
+      "to_state_id": "state_010",
+      "action_type": "type",
+      "target": {
+        "x": 489,
+        "y": 212,
+        "w": 120,
+        "h": 24
+      },
+      "payload": "Shipped",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_9.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_011",
+      "from_state_id": "state_010",
+      "to_state_id": "state_011",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_10.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_012",
+      "from_state_id": "state_011",
+      "to_state_id": "state_012",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b75698f3b3c8_step_11.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "By the end of this video, you'll isolate just the shipped orders out of all 500, so you can analyze that group on its own.",
+      "tts_text": null,
+      "word_count": 25,
+      "start_time": 0.0,
+      "end_time": 10.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Filtering acts like a sieve: it lets rows that match your exact condition fall through to the view, while every other row stays hidden but safe underneath. Nothing gets deleted—you're just choosing what to look at right now.",
+      "tts_text": null,
+      "word_count": 38,
+      "start_time": 10.0,
+      "end_time": 25.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Last time, we sorted this same Orders table by order_amount and found the smallest order was $8.50. Let's start back in that same Browse Data tab, looking at all 500 orders again.",
+      "tts_text": null,
+      "word_count": 32,
+      "start_time": 25.2,
+      "end_time": 38.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "See the row of filter boxes just below the column headers? That's new—each column gets its own box, and typing into one tells DB Browser 'only show me rows where this column matches exactly.' Click into the filter box under the 'status' column now.",
+      "tts_text": null,
+      "word_count": 44,
+      "start_time": 38.0,
+      "end_time": 55.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Now type the word 'Shipped'—exactly as it appears in the status column. This tells the sieve which grain size to let through: only rows where status equals Shipped, nothing else.",
+      "tts_text": null,
+      "word_count": 30,
+      "start_time": 55.6,
+      "end_time": 67.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Press Return to apply the filter. This is the moment the sieve actually shakes—rows that don't say 'Shipped' drop out of view immediately.",
+      "tts_text": null,
+      "word_count": 23,
+      "start_time": 67.6,
+      "end_time": 76.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "edge",
+      "target_id": "edge_005",
+      "text": "Give it a second to refresh the row list so you're seeing the filtered result, not a half-updated table.",
+      "tts_text": null,
+      "word_count": 19,
+      "start_time": 76.8,
+      "end_time": 84.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "Look at the row count at the bottom of the Browse Data tab: it now reads 210 rows, out of the original 500. That's your concrete, re-checkable number—210 shipped orders, filtered from the full set.",
+      "tts_text": null,
+      "word_count": 35,
+      "start_time": 84.4,
+      "end_time": 98.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "So instead of scanning all 500 orders to find the shipped ones, you've isolated exactly 210 rows worth analyzing—say, for delivery time or shipping cost. Next video, we'll open the filter box again, this time on order_amount, and keep only orders greater than 100 to see how many big-ticket orders you're really working with.",
+      "tts_text": null,
+      "word_count": 54,
+      "start_time": 98.4,
+      "end_time": 120.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

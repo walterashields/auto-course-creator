@@ -1,0 +1,141 @@
+{
+  "course_id": "sql_fundamentals_for_data_analysts",
+  "title": "SQL Fundamentals for Data Analysts",
+  "description": "A short, hands-on introduction to exploring relational data using a database browser, built around a stable e-commerce Customers and Orders dataset.",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browse the Customers Table",
+      "learning_objective": "Learner locates and opens a table in the database browser to see its raw rows and columns before any manipulation.",
+      "discovery_objective": "Open the Customers table in the Browse Data tab.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_seed.db",
+        "table_name": "Customers",
+        "description": "A small online store dataset with a Customers table linked to an Orders table via customer_id, spanning multiple countries and over a year of order dates."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 16,
+      "video_type": "orientation",
+      "new_capability": "Open the Customers table in the Browse Data tab",
+      "key_concept": "Opening a table in a database browser lets you see the raw, unmodified rows and columns before any sorting or filtering is applied.",
+      "prerequisite_knowledge": "None",
+      "running_example_usage": "The learner opens the Customers table and observes its 500 rows and 6 columns (customer_id, name, email, country, signup_date, status) in the Browse Data tab.",
+      "proof_numbers": "Customers table contains 500 rows and 6 columns.",
+      "estimated_word_count": 170,
+      "has_recap": false,
+      "has_preview": true,
+      "recap_text_hint": null,
+      "preview_text_hint": "Next, you will sort the Orders table by order_date in ascending order using the column header.",
+      "script_beats": [
+        {
+          "text": "In this video, we will open the Customers table in the Browse Data tab.",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "beat_id": "beat_001",
+          "kind": "opening"
+        },
+        {
+          "text": "We click the Browse Data tab.",
+          "action": {
+            "type": "click",
+            "detail": "Browse Data tab",
+            "target": {}
+          },
+          "beat_id": "beat_002_a",
+          "kind": "demo"
+        },
+        {
+          "text": "We select Customers.",
+          "action": {
+            "type": "click",
+            "detail": "Customers table in the table dropdown",
+            "target": {}
+          },
+          "beat_id": "beat_002_b",
+          "kind": "demo"
+        },
+        {
+          "text": "We see 4 columns in the grid: customer_id, customer_name, country, signup_date.",
+          "action": {
+            "type": "verify",
+            "detail": "the Customers table is visible with columns customer_id, customer_name, country, signup_date"
+          },
+          "beat_id": "beat_003",
+          "kind": "validation"
+        },
+        {
+          "text": "We have opened the Customers table and confirmed its structure.",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "beat_id": "beat_004",
+          "kind": "close"
+        }
+      ]
+    }
+  ],
+  "running_example": {
+    "name": "E-commerce Orders and Customers",
+    "description": "A small online store dataset with a Customers table linked to an Orders table via customer_id, spanning multiple countries and over a year of order dates.",
+    "tables": [
+      {
+        "name": "Customers",
+        "columns": [
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_name",
+            "type": "TEXT"
+          },
+          {
+            "name": "country",
+            "type": "TEXT"
+          },
+          {
+            "name": "signup_date",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 25
+      },
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "order_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "order_date",
+            "type": "TEXT"
+          },
+          {
+            "name": "amount",
+            "type": "REAL"
+          },
+          {
+            "name": "status",
+            "type": "TEXT"
+          },
+          {
+            "name": "country",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 120
+      }
+    ]
+  }
+}

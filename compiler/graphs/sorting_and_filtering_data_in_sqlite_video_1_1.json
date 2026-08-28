@@ -1,0 +1,157 @@
+{
+  "graph_id": "sorting_and_filtering_data_in_sqlite_video_1_1",
+  "learning_objective": "Recognize the structure of a raw data table before manipulating it with sorting or filtering.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_22893e524e72",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/db_browser_sqlite_22893e524e72.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "d84f02b380b22e13657611a493f4a84ad3e220346ae689a0bb8fad8257963df6",
+      "run_duration_seconds": 53.542
+    },
+    "visual_summary": "The Orders table is open in Browse Data tab, all 5 columns (order_id, customer_id, order_date, amount, status) are visible with names, rows are displayed, and several NULL status cells are visible (rows 9-11, 18)."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/78b424f6eaaf56a32a1d12790c524224fe62da74b5831ca3b01f1209c51bbe25.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "78b424f6eaaf56a32a1d12790c524224fe62da74b5831ca3b01f1209c51bbe25",
+      "attempt": 1,
+      "reason": "The current table shown is Customers, not Orders; need to switch to the Orders table.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The current table shown is Customers, not Orders; need to switch to the Orders table."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/a267790f960068ae5af3874e0bd8d7d78482a62d4c9a6e623891059aff93d185.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "a267790f960068ae5af3874e0bd8d7d78482a62d4c9a6e623891059aff93d185",
+        "attempt": 2,
+        "reason": "The Customers table is currently displayed, not the Orders table.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The Customers table is currently displayed, not the Orders table."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 143,
+        "y": 128,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "db_browser_sqlite_22893e524e72",
+      "action_type": "click",
+      "target": {
+        "x": 29,
+        "y": 160,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the Customers table is open in DB Browser for SQLite, showing its own set of columns and rows for that data. This isn't the table this lesson focuses on — the raw data we'll sort and filter lives in the Orders table, so what's on screen currently runs opposite to where this lesson is headed.",
+      "tts_text": null,
+      "word_count": 57,
+      "start_time": 0.0,
+      "end_time": 22.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Orders table name in the list to switch over to it.",
+      "tts_text": null,
+      "word_count": 14,
+      "start_time": 22.8,
+      "end_time": 28.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "Right now the screen shows the Customers table, with its own set of rows and columns laid out in the data grid. This is a different table from the Orders table, holding a separate set of records entirely, and its structure — the columns and rows visible here — belongs to customer information rather than order information. The current direction here is the opposite of the goal.",
+      "tts_text": null,
+      "word_count": 67,
+      "start_time": 28.4,
+      "end_time": 55.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Click the Orders table listed in the left panel to select it.",
+      "tts_text": null,
+      "word_count": 12,
+      "start_time": 55.2,
+      "end_time": 60.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_22893e524e72",
+      "text": "And there it is — the Orders table shows all five columns: order_id, customer_id, order_date, amount, and status, with rows laid out beneath each. A few status cells sit empty, showing NULL, in rows nine through eleven and row eighteen. This raw layout, columns and gaps included, is the structure we'd examine before sorting or filtering it in any meaningful way.",
+      "tts_text": null,
+      "word_count": 61,
+      "start_time": 60.0,
+      "end_time": 84.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_22893e524e72",
+      "text": "Coming up, we'll take a closer look at the amount column and discover how sorting can reveal patterns in your data.",
+      "tts_text": null,
+      "word_count": 21,
+      "start_time": 84.4,
+      "end_time": 92.8,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.029103,
+  "reliability_score": 0.3333333333333333
+}

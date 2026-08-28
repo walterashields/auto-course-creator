@@ -1,0 +1,102 @@
+{
+  "graph_id": "sorting_and_filtering_orders_in_db_browser_for_sqlite_video_1_1",
+  "learning_objective": "Understand how a table organizes data into rows and columns before any manipulation is applied.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_3f8f8f1f8162",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_3f8f8f1f8162.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "d09eec5790743c10549830626a463830cfe5daf5736fbae625bc6d26f53f76b0",
+      "run_duration_seconds": 19.582
+    },
+    "visual_summary": "Browse Data tab is open showing Orders table with all 6 columns and 500 rows total, as indicated at the bottom \"1 - 22 of 500\"."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/e4f53f01579d8c1c4e67e1edf34134364d834d2224ce6a02d6e7b954f8695381.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "e4f53f01579d8c1c4e67e1edf34134364d834d2224ce6a02d6e7b954f8695381",
+      "attempt": 1,
+      "reason": "The Database Structure tab is currently active, not the Browse Data tab showing the Orders table rows.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The Database Structure tab is currently active, not the Browse Data tab showing the Orders table rows."
+  },
+  "states": [],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "db_browser_sqlite_3f8f8f1f8162",
+      "action_type": "click",
+      "target": {
+        "x": 748,
+        "y": 96,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Here in the Database Structure tab, we can see how the database itself is organized into tables, columns, and data types, before we ever look at a single row.",
+      "tts_text": "Here in the Database Structure tab, we can see how the database itself is organized into tables, columns, and data types, before we ever look at a single row.",
+      "word_count": 29,
+      "start_time": 0.0,
+      "end_time": 11.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Browse Data tab so we can look at the actual rows inside the Orders table.",
+      "tts_text": null,
+      "word_count": 18,
+      "start_time": 11.6,
+      "end_time": 18.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_3f8f8f1f8162",
+      "text": "And there it is — the Orders table shows all 6 columns and 500 rows total, with rows 1 through 22 currently in view, ready for closer inspection.",
+      "tts_text": null,
+      "word_count": 28,
+      "start_time": 18.8,
+      "end_time": 30.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_3f8f8f1f8162",
+      "text": "Coming up next, we will sort the Orders table by amount, giving us an easy way to spot the smallest and largest orders at a glance.",
+      "tts_text": null,
+      "word_count": 26,
+      "start_time": 30.0,
+      "end_time": 40.4,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.018981,
+  "reliability_score": 0.5
+}

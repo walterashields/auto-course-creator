@@ -1,0 +1,50 @@
+{
+  "graph_id": "sql_sorting_fundamentals_video_1_1",
+  "learning_objective": "Open the Orders table in DB Browser and display all rows",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_392e16091f4d",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_392e16091f4d.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "08672e783c9cef63aa9759c79cf587fa0038eb57f0aa878e6ee5728ced78c6ab",
+      "run_duration_seconds": 4.824
+    },
+    "visual_summary": "The Orders table is open in Browse Data view showing all 6 rows."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/08672e783c9cef63aa9759c79cf587fa0038eb57f0aa878e6ee5728ced78c6ab.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "08672e783c9cef63aa9759c79cf587fa0038eb57f0aa878e6ee5728ced78c6ab",
+      "attempt": 1,
+      "reason": "The Orders table is open in Browse Data view showing all 6 rows.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The Orders table is open in Browse Data view showing all 6 rows."
+  },
+  "states": [],
+  "edges": [],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Here in Browse Data, we can see all 6 rows of the Orders table laid out in full, giving us a complete, unfiltered view of every order recorded.",
+      "tts_text": null,
+      "word_count": 28,
+      "start_time": 0.0,
+      "end_time": 11.2,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.007761,
+  "reliability_score": 1.0
+}

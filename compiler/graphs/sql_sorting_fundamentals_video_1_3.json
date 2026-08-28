@@ -1,0 +1,200 @@
+{
+  "graph_id": "sql_sorting_fundamentals_video_1_3",
+  "learning_objective": "Sort the Orders table by the amount column in descending order (largest amount 340.0 at the top, smallest 85.0 at the bottom)",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_73aab4a15c10",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_73aab4a15c10.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "d923eccc5ea777ccf0306520cddf0925f861796d5d6ffc7549f88a7c914ada85",
+      "run_duration_seconds": 46.918
+    },
+    "visual_summary": "The Orders table is sorted by amount descending (340.0 at top, 85.0 at bottom)."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/b295c943006d7ba618fec76b69fcdb44df824fa7da8a0e9e60afda3ddef5c638.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "b295c943006d7ba618fec76b69fcdb44df824fa7da8a0e9e60afda3ddef5c638",
+      "attempt": 1,
+      "reason": "The current view shows Database Structure tab, not the data sorted by amount; need to browse data and sort.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The current view shows Database Structure tab, not the data sorted by amount; need to browse data and sort."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d392b832f10c4afce626c2b59736c6e221a181eacef5a921e1fcf9cc39f1f47e.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d392b832f10c4afce626c2b59736c6e221a181eacef5a921e1fcf9cc39f1f47e",
+        "attempt": 2,
+        "reason": "The table is currently sorted by id, not by amount descending.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The table is currently sorted by id, not by amount descending."
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d2503569c55d1b5e74fcf51323aa16b9ca46e9f2b33ae477311418dc74033aad.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d2503569c55d1b5e74fcf51323aa16b9ca46e9f2b33ae477311418dc74033aad",
+        "attempt": 3,
+        "reason": "The table is currently sorted by amount in ascending order, not descending.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The table is currently sorted by amount in ascending order, not descending."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 748,
+        "y": 96,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 200,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "db_browser_sqlite_73aab4a15c10",
+      "action_type": "click",
+      "target": {
+        "x": 193,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now DB Browser for SQLite is showing the Database Structure tab, which lists the tables and columns in this file rather than the actual Orders data. This isn't sorted at all yet, so it's the opposite of our goal of largest to smallest amount.",
+      "tts_text": null,
+      "word_count": 45,
+      "start_time": 0.0,
+      "end_time": 18.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Amount column header once to sort the Orders table by that column.",
+      "tts_text": null,
+      "word_count": 15,
+      "start_time": 18.0,
+      "end_time": 24.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The Amount column is sorted ascending right now, so the smallest orders are at the top and the largest ones are buried at the bottom. That's the opposite direction from what we actually want.",
+      "tts_text": null,
+      "word_count": 34,
+      "start_time": 24.0,
+      "end_time": 37.6,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Now let's click the Amount column header a second time to flip the sort to descending.",
+      "tts_text": null,
+      "word_count": 16,
+      "start_time": 37.6,
+      "end_time": 44.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The Amount column is now sorted ascending — smallest to largest — so the biggest orders are buried at the bottom. That's the opposite of what we want.",
+      "tts_text": null,
+      "word_count": 28,
+      "start_time": 44.0,
+      "end_time": 55.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Let's click the Amount column header one more time to complete the sort.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 55.2,
+      "end_time": 60.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_73aab4a15c10",
+      "text": "And there it is — the biggest orders are now right at the top, running from 340.0 down to 85.0, so you can spot the largest amounts instantly without scanning the whole table.",
+      "tts_text": null,
+      "word_count": 33,
+      "start_time": 60.4,
+      "end_time": 73.6,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.033588,
+  "reliability_score": 0.25
+}

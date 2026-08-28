@@ -1,0 +1,278 @@
+{
+  "graph_id": "video_1_2_585539c5",
+  "learning_objective": "Use the AS keyword to give query results readable column headers",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_003",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_73fbcefdbc87.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "62375b6adb7925e8fc17b5c41d0cf851bb1081fd1142e0215e6b35913c599407",
+      "run_duration_seconds": 245.56
+    },
+    "visual_summary": "Open the Execute SQL tab, type SELECT FirstName AS First Name, LastName AS Last Name, Email AS Email Address FROM Customer, run it with F5, and show the aliased headers"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_585539c5_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_585539c5_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_2_585539c5_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/ac9046992675_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/ac9046992675_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will use the AS keyword to give our query results readable column headers that match management language. Last lesson we pulled the raw contact list; now we want friendly labels like First Name instead of FirstName in the report.",
+      "tts_text": null,
+      "word_count": 43,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "The Execute SQL tab is still open from the last query. The editor shows our previous SELECT statement, and the result pane below still displays the raw headers. We can clear the editor and type a new query that replaces each raw column name with a friendly alias using the AS keyword.",
+      "tts_text": null,
+      "word_count": 52,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 8
+        },
+        "summary": "The Execute SQL tab is active showing a commented-out SQL query selecting FirstName, LastName, and Email from the Customer table, with no results displayed yet.",
+        "opening_state_strategy": "established",
+        "opening_state_log": "[OPENING STATE] established: commented SQL history pasted into editor"
+      }
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "The AS keyword gives a column an alias, which is the name that appears in the result header instead of the raw column name. Aliases make reports easier to read without changing the underlying data or the table structure. They are especially useful when managers want headers in plain English while the database keeps its original column names.",
+      "tts_text": null,
+      "word_count": 58,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the result headers show the raw column names. After we run the aliased query, those same three headers will display with spaces, while the rows underneath stay exactly the same. This is a before-and-after change we can verify at a glance.",
+      "tts_text": null,
+      "word_count": 43,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab is open showing a commented-out SQL query selecting FirstName, LastName, and Email from the Customer table, with no results displayed yet."
+      }
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We are in the Execute SQL tab with our SQL script in view, showing a SELECT statement that aliases each customer field to a readable header. No query results are displayed yet.",
+      "tts_text": null,
+      "word_count": 32,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab is active showing a SQL script with a SELECT statement aliasing customer fields, with no query results displayed yet."
+      }
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "We run the query and the result pane fills with the aliased list.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 8
+        },
+        "summary": "The Execute SQL tab shows a query aliasing Customer table columns as First Name, Last Name, and Email Address, returning 60 rows displayed in a results grid."
+      }
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We see 60 rows returned with headers reading First Name, Last Name, and Email Address, confirming the AS aliases took effect and the report is readable for management.",
+      "tts_text": null,
+      "word_count": 28,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 8
+        },
+        "summary": "DB Browser for SQLite showing the Execute SQL tab with a query selecting FirstName, LastName, and Email as readable headers from the Customer table, returning 60 rows."
+      }
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The headers now show the friendly aliases, giving management the readable view they requested. The underlying values did not change; only the labels at the top of each column did. This means the same query can serve both technical users who know the original schema and managers who need a polished report for presentations.",
+      "tts_text": null,
+      "word_count": 54,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "Aliases also help when a column name is long or unclear. A short, descriptive alias keeps the header visible in a narrow spreadsheet column and makes formulas easier to write. Using spaces in quoted aliases is common in reports, but the quotes are required so the database recognizes the whole multi-word header.",
+      "tts_text": null,
+      "word_count": 52,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We have used the AS keyword to create readable headers for the customer contact list. The result now speaks management's language without changing any data. Next, we will sort that list alphabetically by last name using ORDER BY.",
+      "tts_text": null,
+      "word_count": 38,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

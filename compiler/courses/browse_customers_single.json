@@ -1,0 +1,163 @@
+{
+  "course_id": "browse_customers_single",
+  "title": "Browse the Customers Table",
+  "description": "Single video test",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browse the Customers Table",
+      "learning_objective": "Learner locates and opens a table in the database browser to see its raw rows and columns before any manipulation.",
+      "discovery_objective": "Open the Customers table in the Browse Data tab.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_seed.db",
+        "table_name": "Customers",
+        "description": "A small online store dataset with a Customers table linked to an Orders table via customer_id, spanning multiple countries and over a year of order dates."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 61,
+      "video_type": "orientation",
+      "new_capability": "Open the Customers table in the Browse Data tab",
+      "key_concept": "Opening a table in a database browser lets you see the raw, unmodified rows and columns before any sorting or filtering is applied.",
+      "prerequisite_knowledge": "None",
+      "running_example_usage": "The learner opens the Customers table and observes its 500 rows and 6 columns (customer_id, name, email, country, signup_date, status) in the Browse Data tab.",
+      "proof_numbers": "Customers table contains 500 rows and 6 columns.",
+      "estimated_word_count": 170,
+      "has_recap": false,
+      "has_preview": true,
+      "recap_text_hint": null,
+      "preview_text_hint": "Next, you will sort the Orders table by order_date in ascending order using the column header.",
+      "script_beats": [
+        {
+          "beat_id": "beat_001",
+          "kind": "opening",
+          "text": "By the end of this video, you'll see all 500 customer records laid out in front of you, exactly as they live in the database."
+        },
+        {
+          "beat_id": "beat_002",
+          "kind": "concept",
+          "text": "Before you sort or filter anything, you need to see the raw data first. If you skip this step, you might mistake a filtered view for the whole picture, and that's how real business mistakes happen."
+        },
+        {
+          "beat_id": "beat_003",
+          "kind": "demo",
+          "text": "Click the Browse Data tab at the top of the window.",
+          "action": {
+            "type": "click",
+            "target": {
+              "x": 0.15,
+              "y": 0.08,
+              "w": 100,
+              "h": 30
+            },
+            "description": "Click Browse Data tab"
+          }
+        },
+        {
+          "beat_id": "beat_004",
+          "kind": "demo",
+          "text": "Click the table dropdown menu.",
+          "action": {
+            "type": "click",
+            "target": {
+              "x": 0.25,
+              "y": 0.13,
+              "w": 180,
+              "h": 28
+            },
+            "description": "Click table selector dropdown"
+          }
+        },
+        {
+          "beat_id": "beat_005",
+          "kind": "demo",
+          "text": "Click Customers in the dropdown list.",
+          "action": {
+            "type": "browse_table",
+            "table": "Customers"
+          }
+        },
+        {
+          "beat_id": "beat_006",
+          "kind": "demo",
+          "text": "Wait for the table to load.",
+          "action": {
+            "type": "wait",
+            "duration": 1.5,
+            "description": "Wait for Customers table to render"
+          }
+        },
+        {
+          "beat_id": "beat_007",
+          "kind": "validation",
+          "text": "The status bar at the bottom shows 500 rows, and the header row shows 6 columns: customer_id, name, email, city, state, and signup_date."
+        },
+        {
+          "beat_id": "beat_008",
+          "kind": "close",
+          "text": "You're now looking at every one of the 500 customers in this database, across all 6 columns, with no sorting or filtering applied. Next, you'll take the Orders table and sort it by order_date in ascending order using the column header."
+        }
+      ]
+    }
+  ],
+  "running_example": {
+    "name": "E-commerce Orders and Customers",
+    "description": "A small online store dataset with a Customers table linked to an Orders table via customer_id, spanning multiple countries and over a year of order dates.",
+    "tables": [
+      {
+        "name": "Customers",
+        "columns": [
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_name",
+            "type": "TEXT"
+          },
+          {
+            "name": "country",
+            "type": "TEXT"
+          },
+          {
+            "name": "signup_date",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 25
+      },
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "order_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "order_date",
+            "type": "TEXT"
+          },
+          {
+            "name": "amount",
+            "type": "REAL"
+          },
+          {
+            "name": "status",
+            "type": "TEXT"
+          },
+          {
+            "name": "country",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 120
+      }
+    ]
+  }
+}

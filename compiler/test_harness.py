@@ -817,7 +817,8 @@ class TestSegmentedTyping(unittest.TestCase):
         ):
             self.assertTrue(agent.type_segments(segments))
             self.assertEqual(mock_type.call_count, 3)
-            self.assertEqual(mock_frontmost.call_count, 3)
+            # One frontmost check at entry plus one before each of the 3 segments.
+            self.assertEqual(mock_frontmost.call_count, 4)
 
     def test_segment_retry_then_paste_fallback(self) -> None:
         """After two segment mismatches, type_segments falls back to paste."""
@@ -827,8 +828,8 @@ class TestSegmentedTyping(unittest.TestCase):
             {"text": "SELECT 2;"},
         ]
         remaining = "".join(s["text"] for s in segments)
-        # Two read-back attempts fail; the fallback paste read-back succeeds.
-        read_values = ["WRONG", "WRONG", remaining]
+        # Initial empty editor read, two failed read-backs, then fallback paste read-back succeeds.
+        read_values = ["", "WRONG", "WRONG", remaining]
         with (
             mock.patch.object(agent, "_ensure_frontmost"),
             mock.patch.object(agent, "_type_segment_cadence"),

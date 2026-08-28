@@ -1,0 +1,279 @@
+{
+  "graph_id": "sql_essential_training_ch4_video_1_4",
+  "learning_objective": "Limit the number of returned rows using the LIMIT clause",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_003",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_8c71aa6f6b7c.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "236922b53d9d3242e082d15b6646f823559c4e2090a86e6865a21e58a36e1c62",
+      "run_duration_seconds": 237.376
+    },
+    "visual_summary": "Open the Execute SQL tab, type SELECT FirstName AS \"First Name\", LastName AS \"Last Name\", Email AS \"Email Address\" FROM Customer ORDER BY LastName LIMIT 5, run it with F5, and show exactly five rows in the result pane"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_4_763eb28b_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_4_763eb28b_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_4_763eb28b_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/2425a3cfab08_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/2425a3cfab08_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will limit the sorted customer contact list to a small preview using the LIMIT clause. Last lesson we sorted the full list alphabetically; now management only needs the first few rows for a quick look.",
+      "tts_text": "In this video, we will limit the sorted customer contact list to a small preview using the LIMIT clause. Last lesson we sorted the full list alphabetically; now management only needs the first few rows for a quick look.",
+      "word_count": 39,
+      "start_time": 0.0,
+      "end_time": 13.235,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "We are on the Execute SQL tab. The editor holds our previous queries, commented out, with our new sorted query added below them. The result pane below shows the full alphabetical list by last name. We can add one more clause at the end of the statement to control exactly how many rows the database returns.",
+      "tts_text": "We are on the Execute S Q L tab. The editor holds our previous queries, commented out, with our new sorted query added below them. The result pane below shows the full alphabetical list by last name. We can add one more clause at the end of the statement to control exactly how many rows the database returns.",
+      "word_count": 56,
+      "start_time": 13.235,
+      "end_time": 29.21,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 10
+        },
+        "summary": "The Execute SQL tab is active showing commented-out SQL queries selecting customer name and email fields, with no query results displayed yet.",
+        "opening_state_strategy": "established",
+        "opening_state_log": "[OPENING STATE] established: commented SQL history pasted into editor",
+        "history_pasted": true
+      }
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "LIMIT returns only the requested number of rows from the result set. It is useful when a full result is larger than we need, such as when a manager asks for a quick preview before running the full report. The database still sorts the rows first, because LIMIT comes after ORDER BY in the statement.",
+      "tts_text": "LIMIT returns only the requested number of rows from the result set. It is useful when a full result is larger than we need, such as when a manager asks for a quick preview before running the full report. The database still sorts the rows first, because LIMIT comes after ORDER BY in the statement.",
+      "word_count": 55,
+      "start_time": 29.21,
+      "end_time": 48.901,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the result pane shows the full alphabetical list. After we add a LIMIT clause, only the first few rows will remain visible, while the sort order stays the same. This turns a long report into a manageable preview.",
+      "tts_text": "Right now the result pane shows the full alphabetical list. After we add a LIMIT clause, only the first few rows will remain visible, while the sort order stays the same. This turns a long report into a manageable preview.",
+      "word_count": 40,
+      "start_time": 48.901,
+      "end_time": 63.344,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab is active showing a commented-out SQL query selecting customer name and email fields, with no results displayed yet."
+      }
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We are in the Execute SQL tab, where the editor holds our commented, sorted, and aliased query selecting First Name, Last Name, and Email Address from the Customer table with a LIMIT clause; the results area remains empty since the query has not yet been executed.",
+      "tts_text": "We are in the Execute S Q L tab, where the editor holds our commented, sorted, and aliased query selecting First Name, Last Name, and Email Address from the Customer table with a LIMIT clause; the results area remains empty since the query has not yet been executed.",
+      "word_count": 46,
+      "start_time": 63.344,
+      "end_time": 78.762,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 10
+        },
+        "summary": "The Execute SQL tab is active showing a query that selects First Name, Last Name, and Email Address from the Customer table, but it has not yet been executed as the results area is empty."
+      }
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "We run the query and the result pane shows only the preview rows.",
+      "tts_text": "We run the query and the result pane shows only the preview rows.",
+      "word_count": 13,
+      "start_time": 78.762,
+      "end_time": 96.162,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 11
+        },
+        "summary": "The Execute SQL tab shows a query selecting First Name, Last Name, and Email from the Customer table, ordered by Last Name and limited to 5, with results displayed below."
+      }
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We see exactly 5 rows returned, confirming the LIMIT clause trimmed the sorted result to the requested preview size. The rows still appear in alphabetical order, so the preview is representative.",
+      "tts_text": "We see exactly 5 rows returned, confirming the LIMIT clause trimmed the sorted result to the requested preview size. The rows still appear in alphabetical order, so the preview is representative.",
+      "word_count": 31,
+      "start_time": 96.162,
+      "end_time": 107.865,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 13
+        },
+        "summary": "The Execute SQL tab shows a query selecting First Name, Last Name, and Email from the Customer table, ordered by Last Name and limited to 5, with results displayed below."
+      }
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "LIMIT trimmed the sorted result to a small preview, and the rows still appear in alphabetical order by last name. The database stopped after the requested number of rows, so the result loads faster and fits neatly on one screen. This is ideal for summaries and quick checks before a manager requests the full data set.",
+      "tts_text": "LIMIT trimmed the sorted result to a small preview, and the rows still appear in alphabetical order by last name. The database stopped after the requested number of rows, so the result loads faster and fits neatly on one screen. This is ideal for summaries and quick checks before a manager requests the full data set.",
+      "word_count": 56,
+      "start_time": 107.865,
+      "end_time": 127.509,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "LIMIT always comes after ORDER BY in a SELECT statement. If it came before the sort, the database would trim the rows first and then sort, which could return the wrong rows for the preview. Keeping the order SELECT, FROM, ORDER BY, LIMIT makes the query predictable and easy for the team to maintain.",
+      "tts_text": "LIMIT always comes after ORDER BY in a SELECT statement. If it came before the sort, the database would trim the rows first and then sort, which could return the wrong rows for the preview. Keeping the order SELECT, FROM, ORDER BY, LIMIT makes the query predictable and easy for the team to maintain.",
+      "word_count": 54,
+      "start_time": 127.509,
+      "end_time": 145.806,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We have limited the result set with LIMIT, and the preview remains sorted alphabetically by last name. Next, we will recap the chapter with one clean, well-documented query that combines comments, aliases, ORDER BY, and LIMIT.",
+      "tts_text": "We have limited the result set with LIMIT, and the preview remains sorted alphabetically by last name. Next, we will recap the chapter with one clean, well-documented query that combines comments, aliases, ORDER BY, and LIMIT.",
+      "word_count": 36,
+      "start_time": 145.806,
+      "end_time": 159.274,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

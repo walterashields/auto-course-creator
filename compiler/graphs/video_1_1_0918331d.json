@@ -1,0 +1,143 @@
+{
+  "graph_id": "video_1_1_0918331d",
+  "learning_objective": "Learner locates and opens a table in the database browser to see its raw rows and columns before any manipulation.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_002",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_f23bf6c31b02.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "d4b7c923f15a3976b1200d0e1a5aa2e8a2958d376ce3439307e4fd39a936679f",
+      "run_duration_seconds": 70.917
+    },
+    "visual_summary": "Open the Customers table in the Browse Data tab."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_0918331d_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_0918331d_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_002"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/fa9285d23939_beat_002.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will open the Customers table in the Browse Data tab.",
+      "tts_text": null,
+      "word_count": 14,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We click the Browse Data tab and select Customers.",
+      "tts_text": null,
+      "word_count": 9,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Browse Data",
+        "visible_table": "Customers",
+        "row_range_text": "1 - 20 of 20",
+        "column_headers": [
+          "customer_id",
+          "customer_name",
+          "country",
+          "signup_date"
+        ],
+        "modal_or_dropdown_open": true,
+        "summary": "The Browse Data tab shows the Customers table with 20 rows displayed and a table selection dropdown currently open."
+      }
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We see 4 columns in the grid: customer_id, customer_name, country, signup_date.",
+      "tts_text": null,
+      "word_count": 11,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Browse Data",
+        "visible_table": "Customers",
+        "row_range_text": "1 - 20 of 20",
+        "column_headers": [
+          "customer_id",
+          "customer_name",
+          "country",
+          "signup_date"
+        ],
+        "modal_or_dropdown_open": true,
+        "summary": "The Browse Data tab shows the Customers table with 20 rows visible, while a table selection dropdown listing Customers and Orders is open."
+      }
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "We have opened the Customers table and confirmed its structure.",
+      "tts_text": null,
+      "word_count": 10,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

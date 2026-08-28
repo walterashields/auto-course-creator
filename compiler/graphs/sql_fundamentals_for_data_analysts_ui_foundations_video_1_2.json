@@ -1,0 +1,500 @@
+{
+  "graph_id": "sql_fundamentals_for_data_analysts_ui_foundations_video_1_2",
+  "learning_objective": "The learner uses column-header sorting to answer a real question about which order was smallest, without altering the underlying data.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_012",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_e8f1e6509354.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "d8f9b1e9ef9c8697d261f9ceb95eae520e781fb19a278d80d2093617f63909ad",
+      "attempt": 13,
+      "reason": "Script completed: Sort the Orders table by order_amount in ascending order using the column header in the Browse Data tab.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Script completed: Sort the Orders table by order_amount in ascending order using the column header in the Browse Data tab."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/0415859e1471949a6185c1b58919ca6fb65b23f7f94d955a6f5ce17ee07eb68b.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "0415859e1471949a6185c1b58919ca6fb65b23f7f94d955a6f5ce17ee07eb68b",
+      "attempt": 1,
+      "reason": "Action step 1: Click Browse Data tab",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "Action step 1: Click Browse Data tab"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/3a883dae92e1b9453f5e62f1574c8cf34632fb5a9adc2710ef04e4e5113e78b7.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "3a883dae92e1b9453f5e62f1574c8cf34632fb5a9adc2710ef04e4e5113e78b7",
+        "attempt": 2,
+        "reason": "Action step 2: Open table dropdown",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 2: Open table dropdown"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/969abbc59b74908007336caae5f4b2b15d45b50d9a4aff6ac85e4b515f4b47a9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "969abbc59b74908007336caae5f4b2b15d45b50d9a4aff6ac85e4b515f4b47a9",
+        "attempt": 3,
+        "reason": "Action step 3: Jump to first dropdown item",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 3: Jump to first dropdown item"
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/8d949ec5ca5d2b0a5f9d4aacd862f9981ccc3687b066afed5e470ade81ea5689.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "8d949ec5ca5d2b0a5f9d4aacd862f9981ccc3687b066afed5e470ade81ea5689",
+        "attempt": 4,
+        "reason": "Action step 4: Navigate dropdown down toward Orders",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 4: Navigate dropdown down toward Orders"
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/f90c8d35602a0fc95d64f281c681e39bdf298b0c76bdc0381fc22191d9c71b8d.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "f90c8d35602a0fc95d64f281c681e39bdf298b0c76bdc0381fc22191d9c71b8d",
+        "attempt": 5,
+        "reason": "Action step 5: Press Return to select table",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 5: Press Return to select table"
+    },
+    {
+      "state_id": "state_005",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96",
+        "attempt": 6,
+        "reason": "Action step 6: Dismiss open dropdown menu",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 6: Dismiss open dropdown menu"
+    },
+    {
+      "state_id": "state_006",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96",
+        "attempt": 7,
+        "reason": "Action step 7: Wait for UI to settle",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 7: Wait for UI to settle"
+    },
+    {
+      "state_id": "state_007",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96",
+        "attempt": 8,
+        "reason": "Action step 8: Click Browse Data tab",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 8: Click Browse Data tab"
+    },
+    {
+      "state_id": "state_008",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96",
+        "attempt": 9,
+        "reason": "Action step 9: Select Orders from table dropdown",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 9: Select Orders from table dropdown"
+    },
+    {
+      "state_id": "state_009",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/9c41bd466f5ebd00d165dc450f7b4a91fb0ea98c2c0054c1cd2e60ed645e49dc.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "9c41bd466f5ebd00d165dc450f7b4a91fb0ea98c2c0054c1cd2e60ed645e49dc",
+        "attempt": 10,
+        "reason": "Action step 10: Dismiss open dropdown menu",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 10: Dismiss open dropdown menu"
+    },
+    {
+      "state_id": "state_010",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "556be33c509f4c26af0a9a9bdbd6c1887bc9acdd778c0196fcfd545622796a96",
+        "attempt": 11,
+        "reason": "Action step 11: Click amount column header",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 11: Click amount column header"
+    },
+    {
+      "state_id": "state_011",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/d8f9b1e9ef9c8697d261f9ceb95eae520e781fb19a278d80d2093617f63909ad.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "d8f9b1e9ef9c8697d261f9ceb95eae520e781fb19a278d80d2093617f63909ad",
+        "attempt": 12,
+        "reason": "Action step 12: Wait for results to re-sort on screen",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Action step 12: Wait for results to re-sort on screen"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 749,
+        "y": 97,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_0.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 43,
+        "y": 133,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_1.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Home",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_2.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Down",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_3.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_4.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_006",
+      "from_state_id": "state_005",
+      "to_state_id": "state_006",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Escape",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_5.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_007",
+      "from_state_id": "state_006",
+      "to_state_id": "state_007",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_6.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_008",
+      "from_state_id": "state_007",
+      "to_state_id": "state_008",
+      "action_type": "click",
+      "target": {
+        "x": 809,
+        "y": 97,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_7.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_009",
+      "from_state_id": "state_008",
+      "to_state_id": "state_009",
+      "action_type": "click",
+      "target": {
+        "x": 43,
+        "y": 133,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_8.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_010",
+      "from_state_id": "state_009",
+      "to_state_id": "state_010",
+      "action_type": "hotkey",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": "Escape",
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_9.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_011",
+      "from_state_id": "state_010",
+      "to_state_id": "state_011",
+      "action_type": "click",
+      "target": {
+        "x": 200,
+        "y": 151,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_10.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_012",
+      "from_state_id": "state_011",
+      "to_state_id": "state_012",
+      "action_type": "wait",
+      "target": {
+        "x": 724,
+        "y": 494,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/a35039e7287a_step_11.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "By the end of this video, you'll know exactly which order was the smallest dollar amount out of all 500 rows in the Orders table.",
+      "tts_text": null,
+      "word_count": 25,
+      "start_time": 0.0,
+      "end_time": 10.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Sorting just reorders the rows on your screen, like reshuffling a stack of receipts by price without changing a single receipt's contents. That means you can find the smallest or largest order instantly, and the underlying data in your database stays exactly as it was.",
+      "tts_text": null,
+      "word_count": 45,
+      "start_time": 10.0,
+      "end_time": 28.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Last time, we opened the Customers table and saw 50 rows across 4 columns. Now let's open a new table. Click Browse Data and select Orders from the table dropdown. This is the Orders table — it holds one row for every purchase a customer made, so it's naturally bigger. Give it a second to load, because this is the first time you're seeing it: notice it has 500 rows, not 50, and one of its columns is order_amount, the dollar value of each purchase.",
+      "tts_text": null,
+      "word_count": 85,
+      "start_time": 28.0,
+      "end_time": 62.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Right now the rows are just sitting in whatever order they were entered — that won't help you find the cheapest order fast. Click the order_amount column header to sort ascending. This tells the smallest values to rise to the top, so instead of scanning 500 rows by eye, the answer floats right into view.",
+      "tts_text": null,
+      "word_count": 55,
+      "start_time": 62.0,
+      "end_time": 84.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Watch the rows shuffle into their new order. This is display-only — nothing in the database file itself has changed, only the view you're looking at.",
+      "tts_text": null,
+      "word_count": 26,
+      "start_time": 84.0,
+      "end_time": 94.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "state_003",
+      "text": "Look at the top row now: order_amount reads $8.50. That's the lowest value out of all 500 rows in the Orders table, and you can re-check it anytime just by glancing at row one after sorting ascending.",
+      "tts_text": null,
+      "word_count": 37,
+      "start_time": 94.4,
+      "end_time": 109.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_003",
+      "text": "You just answered a real question — 'what was our smallest order?' — with one click, and the answer is $8.50, sitting at the top of 500 rows, all without touching the actual data. Next, we'll filter the Orders table by status equal to Shipped using the filter box in the Browse Data tab.",
+      "tts_text": null,
+      "word_count": 54,
+      "start_time": 109.2,
+      "end_time": 130.8,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

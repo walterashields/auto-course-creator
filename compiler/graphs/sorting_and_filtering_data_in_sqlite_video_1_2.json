@@ -1,0 +1,492 @@
+{
+  "graph_id": "sorting_and_filtering_data_in_sqlite_video_1_2",
+  "learning_objective": "Use column sorting to quickly identify extreme values in a dataset.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_4c26592341ad",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/db_browser_sqlite_4c26592341ad.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "c2aba9c71849c6a3621d439d99215f73e7596f53f89c0db6bf7771de36370269",
+      "run_duration_seconds": 159.503
+    },
+    "visual_summary": "The amount column is sorted in descending order (highlighted blue), indicating the header was clicked twice to sort ascending then descending."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/59e6e058125ed638f6a32e95f94b87917d21ab7945e2a9e9c0838f849a873eb1.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "59e6e058125ed638f6a32e95f94b87917d21ab7945e2a9e9c0838f849a873eb1",
+      "attempt": 1,
+      "reason": "The Browse Data tab hasn't been opened yet; currently on Database Structure tab.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The Browse Data tab hasn't been opened yet; currently on Database Structure tab."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/62787ae3bf1a80c0178926a19d994f82290de1dedb10fb7e26baa588fe849149.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "62787ae3bf1a80c0178926a19d994f82290de1dedb10fb7e26baa588fe849149",
+        "attempt": 2,
+        "reason": "Currently showing Customers table, not Orders table",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Currently showing Customers table, not Orders table"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/bd7cd8dff2ff789536da4239887286e3e02899cb92c0d056cb4fb24985a45ded.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "bd7cd8dff2ff789536da4239887286e3e02899cb92c0d056cb4fb24985a45ded",
+        "attempt": 3,
+        "reason": "Currently on Customers table; need to switch to Orders table first.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Currently on Customers table; need to switch to Orders table first."
+    },
+    {
+      "state_id": "state_003",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/5445d3d94c1fe0e3da88fb48e4862c6f6b791ed8159824bb58b834fe76f6cefd.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "5445d3d94c1fe0e3da88fb48e4862c6f6b791ed8159824bb58b834fe76f6cefd",
+        "attempt": 4,
+        "reason": "The table is still in original order (not sorted), so the amount column header has not been clicked yet.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The table is still in original order (not sorted), so the amount column header has not been clicked yet."
+    },
+    {
+      "state_id": "state_004",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/963080ead741c1e8778fffac9523b872b9a88a7ee5315d75a029de342b2ad33d.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "963080ead741c1e8778fffac9523b872b9a88a7ee5315d75a029de342b2ad33d",
+        "attempt": 5,
+        "reason": "The table is currently sorted by order_date, not amount; the amount column header hasn't been clicked yet.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The table is currently sorted by order_date, not amount; the amount column header hasn't been clicked yet."
+    },
+    {
+      "state_id": "state_005",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/89f1e3fe5e8afd79f6b76be2ae8b4b06e9bfef585b7c21fcb81a21f9c5b93106.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "89f1e3fe5e8afd79f6b76be2ae8b4b06e9bfef585b7c21fcb81a21f9c5b93106",
+        "attempt": 6,
+        "reason": "The status column is currently sorted, not the amount column.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The status column is currently sorted, not the amount column."
+    },
+    {
+      "state_id": "state_006",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/89f1e3fe5e8afd79f6b76be2ae8b4b06e9bfef585b7c21fcb81a21f9c5b93106.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "89f1e3fe5e8afd79f6b76be2ae8b4b06e9bfef585b7c21fcb81a21f9c5b93106",
+        "attempt": 7,
+        "reason": "The status column is currently sorted (ascending), not the amount column.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The status column is currently sorted (ascending), not the amount column."
+    },
+    {
+      "state_id": "state_007",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-video-engine/compiler/discovery_output/57a82d3ef6dd5701c0b769cdb180910d28973b6c232fbc27570fb9d7202f847d.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "57a82d3ef6dd5701c0b769cdb180910d28973b6c232fbc27570fb9d7202f847d",
+        "attempt": 8,
+        "reason": "The status column is currently sorted, not the amount column.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The status column is currently sorted, not the amount column."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 748,
+        "y": 96,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {
+        "x": 73,
+        "y": 128,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "click",
+      "target": {
+        "x": 28,
+        "y": 160,
+        "w": 150,
+        "h": 25
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_004",
+      "from_state_id": "state_003",
+      "to_state_id": "state_004",
+      "action_type": "click",
+      "target": {
+        "x": 333,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_005",
+      "from_state_id": "state_004",
+      "to_state_id": "state_005",
+      "action_type": "click",
+      "target": {
+        "x": 332,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_006",
+      "from_state_id": "state_005",
+      "to_state_id": "state_006",
+      "action_type": "click",
+      "target": {
+        "x": 333,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_007",
+      "from_state_id": "state_006",
+      "to_state_id": "state_007",
+      "action_type": "click",
+      "target": {
+        "x": 333,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_008",
+      "from_state_id": "state_007",
+      "to_state_id": "db_browser_sqlite_4c26592341ad",
+      "action_type": "click",
+      "target": {
+        "x": 333,
+        "y": 167,
+        "w": 130,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Previously, we opened the Orders table together and found 500 rows spread across 5 columns, with 42 status cells sitting empty.",
+      "tts_text": null,
+      "word_count": 21,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now we're on the Database Structure tab, which lists the tables and columns in this database rather than the actual row data itself.",
+      "tts_text": null,
+      "word_count": 24,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Browse Data tab to switch over and explore the table's contents.",
+      "tts_text": null,
+      "word_count": 14,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "Right now the Customers table is displayed on screen, showing customer records rather than the Orders data. This view is the reverse of the table this lesson's sorting work is meant to focus on.",
+      "tts_text": null,
+      "word_count": 34,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Click the button labeled Orders near the top left to switch tables.",
+      "tts_text": null,
+      "word_count": 12,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "Right now the Customers table is on screen, showing customer records rather than order data. This is the opposite table from where the extreme values we're looking for actually live.",
+      "tts_text": null,
+      "word_count": 30,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Click the Orders table entry in the list to select it.",
+      "tts_text": null,
+      "word_count": 11,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_003",
+      "text": "Right now the table appears in its original order, with rows listed as they were entered rather than arranged by the amount column. This order runs opposite to what would surface the extreme values at a glance.",
+      "tts_text": null,
+      "word_count": 37,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "edge",
+      "target_id": "edge_004",
+      "text": "Click the Amount column header once to sort the table by that column.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "Right now the rows are arranged by order_date, with each entry following the last in date order rather than by dollar amount. That ordering runs opposite to what's needed for spotting the largest orders.",
+      "tts_text": null,
+      "word_count": 34,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_011",
+      "attaches_to": "edge",
+      "target_id": "edge_005",
+      "text": "Click the Amount column header once to sort the table by that column.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_012",
+      "attaches_to": "state",
+      "target_id": "state_005",
+      "text": "Right now the Status column controls the sort order, with its values arranged in sequence across the rows. That direction doesn't reveal anything about which Amount values are largest or smallest.",
+      "tts_text": null,
+      "word_count": 31,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_013",
+      "attaches_to": "edge",
+      "target_id": "edge_006",
+      "text": "Let's click the Amount column header once to sort by it.",
+      "tts_text": null,
+      "word_count": 11,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_014",
+      "attaches_to": "state",
+      "target_id": "state_006",
+      "text": "Right now the Status column is arranged in ascending order, grouping rows alphabetically by their status label rather than by dollar value. That direction doesn't surface the largest amounts, since it's sorting text, not the Amount column.",
+      "tts_text": null,
+      "word_count": 37,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_015",
+      "attaches_to": "edge",
+      "target_id": "edge_007",
+      "text": "Click the Amount column header once to sort by it.",
+      "tts_text": null,
+      "word_count": 10,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_016",
+      "attaches_to": "state",
+      "target_id": "state_007",
+      "text": "Right now the Status column is sorted, showing groupings by order status rather than by dollar amount. This arranges records in a direction unrelated to identifying the largest or smallest amounts.",
+      "tts_text": null,
+      "word_count": 31,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_017",
+      "attaches_to": "edge",
+      "target_id": "edge_008",
+      "text": "Click the Amount column header once to sort by it.",
+      "tts_text": null,
+      "word_count": 10,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_018",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_4c26592341ad",
+      "text": "And there it is — the Amount column header sits highlighted in blue with the largest values at the top, putting the extreme high figure in the very first row.",
+      "tts_text": null,
+      "word_count": 30,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_019",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_4c26592341ad",
+      "text": "Coming up, we will narrow down the Orders table to show only rows matching one exact status using a handy column filter.",
+      "tts_text": null,
+      "word_count": 22,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.085176,
+  "reliability_score": 0.1111111111111111
+}

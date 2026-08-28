@@ -1,0 +1,279 @@
+{
+  "graph_id": "video_1_5_43ccb45e",
+  "learning_objective": "Combine comment headers, aliases, ORDER BY, and LIMIT in one clean query",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_003",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_ce45420ee4de.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "a3ed18240d38f389c492573cc2d133d003623dfd7a287f2af218d6a4c646ba1a",
+      "run_duration_seconds": 249.764
+    },
+    "visual_summary": "Open the Execute SQL tab, type a commented query that aliases columns, orders by LastName, and limits to 5 rows, run it with F5, and show the documented preview"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_5_43ccb45e_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_5_43ccb45e_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_5_43ccb45e_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/94d5d48d39b6_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/94d5d48d39b6_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will combine comment headers, aliases, ORDER BY, and LIMIT into one clean query. The previous lessons built each skill step by step; now we use them together in a single professional statement that is ready to share.",
+      "tts_text": null,
+      "word_count": 41,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "The Execute SQL tab is open, with the course's previous queries commented out above and an empty results panel below. We are adding our new query beneath them, building it step by step: the comment block first, followed by SELECT with aliases, then FROM, ORDER BY, and finally LIMIT. Each clause has a specific job that we have already practiced in the earlier videos.",
+      "tts_text": null,
+      "word_count": 64,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 12
+        },
+        "summary": "The Execute SQL tab is open showing a commented-out SQL query selecting customer names and emails, with empty results panel below.",
+        "opening_state_strategy": "established",
+        "opening_state_log": "[OPENING STATE] established: commented SQL history pasted into editor",
+        "history_pasted": true
+      }
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "A comment header documents the query's purpose for anyone who opens it later. Aliases make the headers readable, ORDER BY sorts the rows alphabetically, and LIMIT keeps the output concise. Together these four techniques turn a raw database query into a polished, shareable report for management, showing both technical precision and professional presentation.",
+      "tts_text": null,
+      "word_count": 53,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the editor is empty. After we finish, it will hold one contiguous comment block followed by a SELECT statement that uses aliases, ORDER BY LastName, and a LIMIT clause. The result pane will then show the documented preview in a single clean view.",
+      "tts_text": null,
+      "word_count": 45,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 8
+        },
+        "summary": "The Execute SQL tab is active, showing a commented-out SQL query selecting customer names and emails, with no results displayed yet."
+      }
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We are on the Execute SQL tab, where our query selecting First Name, Last Name, and Email from the Customer table with aliases, an order by Last Name, and a limit is present but not yet executed.",
+      "tts_text": null,
+      "word_count": 37,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 12
+        },
+        "summary": "The Execute SQL tab is active showing a query that selects First Name, Last Name, and Email from the Customer table, ordered by Last Name with a limit of 5, but no results have been executed yet."
+      }
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "We run the query and the result pane shows the documented preview.",
+      "tts_text": null,
+      "word_count": 12,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 10
+        },
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, ordered by LastName, limited to 5 rows, with results displayed below."
+      }
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We see 5 rows returned with readable headers sorted alphabetically by last name, confirming the combined query works as one clean statement. The comment block at the top documents the purpose for anyone who opens the file later.",
+      "tts_text": null,
+      "word_count": 38,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "First Name",
+          "Last Name",
+          "Email Address"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, ordered by LastName with a limit of 5, displaying results in a grid below."
+      }
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The result pane shows a professional preview with readable rows sorted by last name, demonstrating all three presentation techniques in one statement. The comment header makes the query's intent clear at a glance, while aliases, ORDER BY, and LIMIT handle the headers, order, and size. This is the kind of query a data analyst can confidently share with a manager.",
+      "tts_text": null,
+      "word_count": 60,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "Clean query etiquette matters when other people will read or maintain the code. A comment header explains intent, aliases remove jargon, ORDER BY removes ambiguity about row order, and LIMIT prevents accidental overload of a report. These habits separate a quick scratch query from production-ready SQL that a team can trust.",
+      "tts_text": null,
+      "word_count": 51,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We have recapped the chapter with a clean, documented query that combines comment headers, aliases, ORDER BY, and LIMIT. The result is a readable, sorted, and appropriately sized preview. Next, we will filter results with WHERE clauses so we can return only the rows that match specific conditions.",
+      "tts_text": null,
+      "word_count": 48,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

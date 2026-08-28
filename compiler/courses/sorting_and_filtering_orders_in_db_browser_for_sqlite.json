@@ -1,0 +1,142 @@
+{
+  "course_id": "sorting_and_filtering_orders_in_db_browser_for_sqlite",
+  "title": "Sorting and Filtering Orders in DB Browser for SQLite",
+  "description": "A short, hands-on course for beginners that builds core data-analysis skills—browsing, sorting, and filtering—using a single e-commerce orders dataset in DB Browser for SQLite.",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browsing the Orders Table",
+      "learning_objective": "Understand how a table organizes data into rows and columns before any manipulation is applied.",
+      "discovery_objective": "Open the Browse Data tab and display the Orders table with all 500 rows and 6 columns (order_id, customer_name, region, order_date, amount, status) visible.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_orders_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases used consistently throughout the course."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 180,
+      "new_capability": "Opening and viewing a raw table in Browse Data",
+      "running_example_usage": "The learner opens the Orders table for the first time to see its full structure.",
+      "proof_numbers": "500 total rows, 6 columns visible.",
+      "estimated_word_count": 450,
+      "has_recap": false,
+      "has_preview": true,
+      "recap_text_hint": null,
+      "preview_text_hint": "Next we'll sort the Orders table by amount to see the smallest and largest orders."
+    },
+    {
+      "video_id": "video_1_2",
+      "title": "Sorting by One Column",
+      "learning_objective": "Understand how clicking a column header reorders rows by that column's value.",
+      "discovery_objective": "Click the amount column header in the Orders table within the Browse Data tab so rows display in ascending order with $4.99 as the top value.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_1"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_orders_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases used consistently throughout the course."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 200,
+      "new_capability": "Sorting a single column by clicking its header",
+      "running_example_usage": "The learner sorts the same Orders table by the amount column to find the cheapest order.",
+      "proof_numbers": "Lowest amount after sorting: $4.99; total rows unchanged at 500.",
+      "estimated_word_count": 500,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we opened the Orders table and saw all 500 rows with 6 columns including order_id, amount, and status.",
+      "preview_text_hint": "Next we'll filter the Orders table to show only rows where status equals 'Shipped'."
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Filtering by an Exact Match",
+      "learning_objective": "Understand how typing a value into a column's filter box narrows visible rows to an exact match.",
+      "discovery_objective": "Type Shipped into the filter box under the status column in the Orders table within the Browse Data tab so only matching rows remain visible.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_orders_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases used consistently throughout the course."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 200,
+      "new_capability": "Filtering rows by exact text match using a column filter box",
+      "running_example_usage": "The learner filters the Orders table to isolate only shipped orders.",
+      "proof_numbers": "210 of 500 rows remain visible after filtering status = 'Shipped'.",
+      "estimated_word_count": 500,
+      "has_recap": true,
+      "has_preview": true,
+      "recap_text_hint": "In the last video we sorted the Orders table by amount and saw $4.99 as the smallest value.",
+      "preview_text_hint": "Next we'll filter the Orders table using a comparison so only high-value orders remain."
+    },
+    {
+      "video_id": "video_1_4",
+      "title": "Filtering with a Comparison Operator",
+      "learning_objective": "Understand how a comparison expression in a filter box narrows rows by a numeric threshold rather than an exact match.",
+      "discovery_objective": "Type >200 into the filter box under the amount column in the Orders table within the Browse Data tab so only rows with amount greater than 200 remain visible.",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_3"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sorting_and_filtering_orders_in_db_browser_for_sqlite_seed.db",
+        "table_name": "Orders",
+        "description": "A single Orders table representing customer purchases used consistently throughout the course."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 192,
+      "new_capability": "Filtering numeric rows using a comparison operator",
+      "running_example_usage": "The learner filters the same Orders table to reveal only high-value orders above $200.",
+      "proof_numbers": "85 of 500 rows remain visible after filtering amount > 200.",
+      "estimated_word_count": 480,
+      "has_recap": true,
+      "has_preview": false,
+      "recap_text_hint": "In the last video we filtered the Orders table to show only the 210 rows where status equals 'Shipped'.",
+      "preview_text_hint": null
+    }
+  ],
+  "running_example": {
+    "name": "E-commerce Orders",
+    "description": "A single Orders table representing customer purchases used consistently throughout the course.",
+    "tables": [
+      {
+        "name": "Orders",
+        "columns": [
+          {
+            "name": "order_id",
+            "type": "INTEGER"
+          },
+          {
+            "name": "customer_name",
+            "type": "TEXT"
+          },
+          {
+            "name": "region",
+            "type": "TEXT"
+          },
+          {
+            "name": "order_date",
+            "type": "TEXT"
+          },
+          {
+            "name": "amount",
+            "type": "REAL"
+          },
+          {
+            "name": "status",
+            "type": "TEXT"
+          }
+        ],
+        "rows": 500
+      }
+    ]
+  }
+}

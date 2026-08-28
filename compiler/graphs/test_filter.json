@@ -1,0 +1,117 @@
+{
+  "graph_id": "test_filter",
+  "learning_objective": "Learn how filtering narrows a table to only rows matching a specific value, isolating relevant subsets of data.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_efc71fe842a7",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_efc71fe842a7.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "ab0df10e644b079bba2ba4c8a96f428c0205822a9da5611602de7a0ce25ed01e",
+      "run_duration_seconds": 30.304
+    },
+    "visual_summary": "The region filter box already contains \"West\" and the table shows only West region rows."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/207396a64dd983d3f50b6fbc384605fdbbe1f539e58c951868a0533ca75d550f.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "207396a64dd983d3f50b6fbc384605fdbbe1f539e58c951868a0533ca75d550f",
+      "attempt": 1,
+      "reason": "The region filter box is still empty; no filter has been applied to show only West rows.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The region filter box is still empty; no filter has been applied to show only West rows."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/517450543d6a0f64ec05f7a4d3eedf8f487a22a5cac4799b2689fe37dbbb284e.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "517450543d6a0f64ec05f7a4d3eedf8f487a22a5cac4799b2689fe37dbbb284e",
+        "attempt": 2,
+        "reason": "Typing 'West' into the focused filter box.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Typing 'West' into the focused filter box."
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/69ef666f945b7aa30a4d5df8057dae516a7879e7139430bf5f37b5df161b9979.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "69ef666f945b7aa30a4d5df8057dae516a7879e7139430bf5f37b5df161b9979",
+        "attempt": 3,
+        "reason": "Pressing Return to apply the filter.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "Pressing Return to apply the filter."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 255,
+        "y": 194,
+        "w": 120,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "type",
+      "target": {
+        "x": 255,
+        "y": 194,
+        "w": 120,
+        "h": 28
+      },
+      "payload": "West",
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "db_browser_sqlite_efc71fe842a7",
+      "action_type": "hotkey",
+      "target": {},
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [],
+  "generation_cost_usd": 0.01836,
+  "reliability_score": 0.25
+}

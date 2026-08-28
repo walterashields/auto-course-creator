@@ -1,0 +1,206 @@
+{
+  "graph_id": "sorting_and_filtering_data_in_sqlite_with_db_browser_video_1_4_test",
+  "learning_objective": "Understand how typing a value into a column filter box narrows the visible rows to matching records.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_4c9135d54019",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_4c9135d54019.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "31b80795a2266ae9f9f0475dee5c688e33de1014da753f838d0cade9e3c89b33",
+      "run_duration_seconds": 25.759
+    },
+    "visual_summary": "The status filter box contains \"Shipped\" and only rows with status \"Shipped\" are displayed in the table."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/83d82e28d1e5e0fb483620a56e616a7866478ddcc4f815d235f690ab3b4c5813.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "83d82e28d1e5e0fb483620a56e616a7866478ddcc4f815d235f690ab3b4c5813",
+      "attempt": 1,
+      "reason": "The status filter box is still empty; all rows are shown, not just Shipped.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The status filter box is still empty; all rows are shown, not just Shipped."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/83d82e28d1e5e0fb483620a56e616a7866478ddcc4f815d235f690ab3b4c5813.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "83d82e28d1e5e0fb483620a56e616a7866478ddcc4f815d235f690ab3b4c5813",
+        "attempt": 2,
+        "reason": "The filter box is now focused and empty; the table still shows all rows because no filter value has been entered yet.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The filter box is now focused and empty; the table still shows all rows because no filter value has been entered yet."
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/3e2f290a2cddf18abe40c86061e6fdadc6490bd057c7afaeff51438e4c61faa9.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "3e2f290a2cddf18abe40c86061e6fdadc6490bd057c7afaeff51438e4c61faa9",
+        "attempt": 3,
+        "reason": "The filter box now contains 'Shipped'; the table still shows all rows because the filter has not been applied yet.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The filter box now contains 'Shipped'; the table still shows all rows because the filter has not been applied yet."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 464,
+        "y": 194,
+        "w": 120,
+        "h": 28
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "type",
+      "target": {
+        "x": 464,
+        "y": 194,
+        "w": 120,
+        "h": 28
+      },
+      "payload": "Shipped",
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "db_browser_sqlite_4c9135d54019",
+      "action_type": "hotkey",
+      "target": {},
+      "payload": "Return",
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Last time, we sorted all 120 rows in the Orders table in reverse, bringing the highest amount right to the top.",
+      "tts_text": null,
+      "word_count": 21,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the Status filter box is empty, and every row in the table is on display with no distinction between them. That's the opposite of the goal, which is seeing only the rows that match a specific status.",
+      "tts_text": null,
+      "word_count": 39,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click the filter box under the Status column to focus it for typing.",
+      "tts_text": null,
+      "word_count": 13,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The filter box sits empty and focused, with every row from the table displayed below it. No matching or narrowing has happened, since no value has been entered into it.",
+      "tts_text": null,
+      "word_count": 30,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Type Shipped into the focused filter box under the Status column.",
+      "tts_text": null,
+      "word_count": 11,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The filter box shows the word \"Shipped\" typed into it, while the table below displays every row, unfiltered. The visible rows don't reflect that value at all.",
+      "tts_text": null,
+      "word_count": 27,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "edge",
+      "target_id": "edge_003",
+      "text": "Press Return to apply the filter.",
+      "tts_text": null,
+      "word_count": 6,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_4c9135d54019",
+      "text": "And there it is — only rows with status \"Shipped\" are displayed, this exact match instantly proving how a filter box narrows a full table down to matching records.",
+      "tts_text": null,
+      "word_count": 29,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.018516,
+  "reliability_score": 0.25
+}

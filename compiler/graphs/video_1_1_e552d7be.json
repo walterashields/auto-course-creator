@@ -1,0 +1,323 @@
+{
+  "graph_id": "video_1_1_e552d7be",
+  "learning_objective": "Write and run your first SELECT query to return a customer contact list",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_003",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_972131cada49.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "141983282bb769db9a0a9f773014cc220bbf042a53de2fd92434c523fb91bfde",
+      "run_duration_seconds": 333.087
+    },
+    "visual_summary": "Open the Execute SQL tab, type the commented query SELECT FirstName, LastName, Email FROM Customer, run it with F5, and show the result pane with the contact list"
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_e552d7be_start.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start state"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_e552d7be_state_001.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_005"
+    },
+    {
+      "state_id": "state_002",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_e552d7be_state_002.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_006"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/e80cd5b904ff_beat_005.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_002",
+      "action_type": "click",
+      "target": {},
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/e80cd5b904ff_beat_006.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_003",
+      "from_state_id": "state_002",
+      "to_state_id": "state_003",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. The goal is to return only the columns we need from the Customer table, so the result is focused and immediately useful.",
+      "tts_text": null,
+      "word_count": 43,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "DB Browser for SQLite shows the Browse Data view and the Execute SQL view. Browse Data displays raw table rows, while Execute SQL opens the SQL editor on top and an empty result pane below. The toolbar sits above the view area, and the editor is the large white area where we type.",
+      "tts_text": null,
+      "word_count": 53,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Database Structure",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [
+          "Name",
+          "Type",
+          "Schema"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 5
+        },
+        "summary": "DB Browser for SQLite showing the Database Structure tab with a list of 11 tables, 10 indices, views, and triggers for the wsda_music.db database, alongside macOS notification center widgets."
+      }
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "SELECT is the SQL command that chooses which columns to return, and FROM chooses which table holds those columns. Together they form the simplest useful query pattern: ask for specific data from one table. This keeps the result small and fast because the database does not waste time returning columns we do not need.",
+      "tts_text": null,
+      "word_count": 54,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the editor is empty and the result pane below it is blank. When we finish, the editor will hold a comment block followed by a formatted SELECT statement, and the result pane will show the customer contact list.",
+      "tts_text": null,
+      "word_count": 40,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Database Structure",
+        "visible_table": null,
+        "row_range_text": null,
+        "column_headers": [
+          "Name",
+          "Type",
+          "Schema"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 4,
+          "buttons": 5
+        },
+        "summary": "The DB Browser for SQLite window shows the Database Structure tab with a list of 11 tables and 10 indices for the wsda_music.db database, alongside a macOS notification center panel on the right."
+      }
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "We type a comment header and the formatted query as one contiguous block in the SQL editor.",
+      "tts_text": null,
+      "word_count": 17,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "FirstName",
+          "LastName",
+          "Email"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with 60 rows returned successfully.",
+        "query_result": {
+          "columns": [
+            "FirstName",
+            "LastName",
+            "Email"
+          ],
+          "row_count": 60,
+          "first_rows": [
+            [
+              "Luís",
+              "Gonçalves",
+              "luisg@embraer.com.br"
+            ],
+            [
+              "Leonie",
+              "Köhler",
+              "leonekohler@surfeu.de"
+            ],
+            [
+              "François",
+              "Tremblay",
+              "ftremblay@gmail.com"
+            ],
+            [
+              "Bjørn",
+              "Hansen",
+              "bjorn.hansen@yahoo.no"
+            ],
+            [
+              "František",
+              "Wichterlová",
+              "frantisekw@jetbrains.com"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "We press F5 and the result pane fills with the contact list.",
+      "tts_text": null,
+      "word_count": 12,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "FirstName",
+          "LastName",
+          "Email"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 10
+        },
+        "summary": "DB Browser for SQLite shows the Execute SQL tab with a query selecting FirstName, LastName, and Email from the Customer table, returning 60 rows displayed in a results grid below."
+      }
+    },
+    {
+      "beat_id": "beat_007",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We see 60 rows returned with FirstName, LastName, and Email for each customer, confirming the contact list is complete and the query ran exactly as intended.",
+      "tts_text": null,
+      "word_count": 26,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "FirstName",
+          "LastName",
+          "Email"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 9
+        },
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with 60 rows returned and results displayed below."
+      }
+    },
+    {
+      "beat_id": "beat_008",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "The result pane shows the complete customer contact list, with each customer record appearing exactly once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view. Because the database returned only the columns we requested, the output is compact and fast to scan.",
+      "tts_text": null,
+      "word_count": 59,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_009",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation that the whole team can trust and maintain.",
+      "tts_text": null,
+      "word_count": 54,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    },
+    {
+      "beat_id": "beat_010",
+      "attaches_to": "state",
+      "target_id": "state_002",
+      "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
+      "tts_text": null,
+      "word_count": 42,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "observed_state": null
+    }
+  ],
+  "generation_cost_usd": 0.0,
+  "reliability_score": 1.0
+}

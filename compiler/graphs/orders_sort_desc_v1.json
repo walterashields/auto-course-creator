@@ -1,0 +1,141 @@
+{
+  "graph_id": "orders_sort_desc_v1",
+  "learning_objective": "Sort a SQLite table by a numeric column in descending order",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_245dfd90d608",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_245dfd90d608.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "cf24c2a2be9fbd2aa14eff77c6ee60dbb7dfee751244069612c58e36d8da3654",
+      "run_duration_seconds": 38.094
+    },
+    "visual_summary": "Orders table is open and data is sorted by amount descending (340.0 to 85.0) as indicated by the arrow next to \"amount\" column header."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/5eb2ff692659df86df7ed564e2dae8844a49e521832e57eefc28cb30c123bb3a.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "5eb2ff692659df86df7ed564e2dae8844a49e521832e57eefc28cb30c123bb3a",
+      "attempt": 1,
+      "reason": "The Orders table is open but not sorted by amount descending; data still appears in original id order.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The Orders table is open but not sorted by amount descending; data still appears in original id order."
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/dd1cda3a0c1192bec2cb4ffebfc9fc0e41b2bc1a669e3aeba6c3517c915bda9c.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {
+        "screenshot_sha256": "dd1cda3a0c1192bec2cb4ffebfc9fc0e41b2bc1a669e3aeba6c3517c915bda9c",
+        "attempt": 2,
+        "reason": "The Orders table is sorted by amount ascending, not descending.",
+        "api_width_px": 1568,
+        "api_height_px": 1019
+      },
+      "visual_summary": "The Orders table is sorted by amount ascending, not descending."
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 265,
+        "y": 181,
+        "w": 60,
+        "h": 15
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "db_browser_sqlite_245dfd90d608",
+      "action_type": "click",
+      "target": {
+        "x": 261,
+        "y": 181,
+        "w": 20,
+        "h": 15
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now the Orders table is still showing rows in their original id order, with no sorting applied to the amount column at all. That's the opposite of what we want, since we're trying to see the largest amounts first, not the order rows happened to be entered.",
+      "word_count": 48,
+      "start_time": 0.0,
+      "end_time": 19.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Let's click the Amount column header once to sort the Orders table by that column.",
+      "word_count": 15,
+      "start_time": 19.2,
+      "end_time": 25.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "state_001",
+      "text": "The Amount column is now sorted ascending — smallest to largest — so the biggest orders are buried at the bottom. That's the opposite of what we want.",
+      "word_count": 28,
+      "start_time": 25.2,
+      "end_time": 36.4,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "edge",
+      "target_id": "edge_002",
+      "text": "Now let's click the Amount column header a second time to flip the sort to descending.",
+      "word_count": 16,
+      "start_time": 36.4,
+      "end_time": 42.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_005",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_245dfd90d608",
+      "text": "And there it is — the biggest orders are now right at the top, running from 340.0 down to 85.0, so you can spot the largest amounts instantly without scanning the whole table.",
+      "word_count": 33,
+      "start_time": 42.8,
+      "end_time": 56.0,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.02439,
+  "reliability_score": 0.3333333333333333
+}

@@ -1,0 +1,102 @@
+{
+  "graph_id": "sql_fundamentals_subset_video_1_1",
+  "learning_objective": "Learner becomes familiar with navigating a database browser to view raw table data.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "db_browser_sqlite_34951ba2dea1",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_34951ba2dea1.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "api_width_px": 1568,
+      "api_height_px": 1019,
+      "scale_to_logical": 0.9375,
+      "screenshot_sha256": "c8e3611aaf73bec187b30854362d806afc047f707c74d401a397b177d20bd6f2",
+      "run_duration_seconds": 15.456
+    },
+    "visual_summary": "Browse Data tab is active, Customers table selected, rows displayed in grid."
+  },
+  "start_state": {
+    "state_id": "state_000",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/83b87a18a257703fac6c58f009e33affaeaf31ecb7af17e761a923240daa497c.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {
+      "screenshot_sha256": "83b87a18a257703fac6c58f009e33affaeaf31ecb7af17e761a923240daa497c",
+      "attempt": 1,
+      "reason": "The current screen shows Database Structure tab, not Browse Data with Customers table selected.",
+      "api_width_px": 1568,
+      "api_height_px": 1019
+    },
+    "visual_summary": "The current screen shows Database Structure tab, not Browse Data with Customers table selected."
+  },
+  "states": [],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_000",
+      "to_state_id": "db_browser_sqlite_34951ba2dea1",
+      "action_type": "click",
+      "target": {
+        "x": 748,
+        "y": 96,
+        "w": 120,
+        "h": 30
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "state",
+      "target_id": "state_000",
+      "text": "Right now DB Browser for SQLite is open on the Database Structure tab, listing tables like Customers in a tree view rather than showing their actual data. This view maps the schema, not the rows inside it.",
+      "tts_text": null,
+      "word_count": 37,
+      "start_time": 0.0,
+      "end_time": 14.8,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_002",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Click the Browse Data tab at the top to switch views.",
+      "tts_text": null,
+      "word_count": 11,
+      "start_time": 14.8,
+      "end_time": 19.2,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_003",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_34951ba2dea1",
+      "text": "And there it is — only West region rows are displayed, 47 rows instead of the full 250, giving a quick, verifiable count for that region alone.",
+      "tts_text": null,
+      "word_count": 27,
+      "start_time": 19.2,
+      "end_time": 30.0,
+      "audio_path": null
+    },
+    {
+      "beat_id": "beat_004",
+      "attaches_to": "state",
+      "target_id": "db_browser_sqlite_34951ba2dea1",
+      "text": "Coming up, you'll see how customer_id links the Customers table to the Orders table, tying related data together.",
+      "tts_text": null,
+      "word_count": 18,
+      "start_time": 30.0,
+      "end_time": 37.2,
+      "audio_path": null
+    }
+  ],
+  "generation_cost_usd": 0.018405,
+  "reliability_score": 0.5
+}

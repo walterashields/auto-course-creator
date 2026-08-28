@@ -1,0 +1,64 @@
+{
+  "course_id": "sql_sorting_fundamentals",
+  "title": "SQL Sorting Fundamentals",
+  "description": "Learn to browse, sort ascending, and sort descending in DB Browser for SQLite",
+  "target_audience": "Beginner data analysts with no SQL experience",
+  "videos": [
+    {
+      "video_id": "video_1_1",
+      "title": "Browse the Orders Table",
+      "learning_objective": "Open the Orders table in DB Browser and display all rows",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sample.db",
+        "table_name": "Orders",
+        "description": "Sample Orders table with id, region, order_date, and amount columns."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 11
+    },
+    {
+      "video_id": "video_1_2",
+      "title": "Sort by Amount Ascending",
+      "learning_objective": "Sort the Orders table by the amount column in ascending order (smallest amount 85.0 at the top, largest 340.0 at the bottom)",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_1"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sample.db",
+        "table_name": "Orders",
+        "description": "Sample Orders table with id, region, order_date, and amount columns."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 55
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Sort by Amount Descending",
+      "learning_objective": "Sort the Orders table by the amount column in descending order (largest amount 340.0 at the top, smallest 85.0 at the bottom)",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sample.db",
+        "table_name": "Orders",
+        "description": "Sample Orders table with id, region, order_date, and amount columns."
+      },
+      "format_tier": "short",
+      "estimated_duration_seconds": 74
+    }
+  ],
+  "running_example": {
+    "name": "Orders",
+    "description": "A simple e-commerce orders table.",
+    "schema": {
+      "id": "INTEGER PRIMARY KEY",
+      "region": "TEXT",
+      "order_date": "TEXT",
+      "amount": "REAL"
+    }
+  }
+}
