@@ -580,6 +580,48 @@ class TestEditorReadBack(unittest.TestCase):
             self.assertIn("[TYPE BLOCK] read-back mismatch, retry 1/2", log)
             self.assertIn("[TYPE BLOCK] read-back OK", log)
 
+    def test_full_block_adjacency_verified(self) -> None:
+        """A comment block followed immediately by a query passes layout verification."""
+        agent = self._agent_with_mocks()
+        block = "/*\nCreated By: WSDA Student\nDescription: Test\n*/\n\nSELECT 1;"
+        with (
+            mock.patch.object(agent, "_read_editor_content", return_value=block),
+            mock.patch("pyautogui.typewrite"),
+            mock.patch("pyautogui.press"),
+            mock.patch("time.sleep"),
+            mock.patch.object(sys, "stderr", io.StringIO()) as stderr,
+        ):
+            self.assertTrue(agent.type_block(block))
+            log = stderr.getvalue()
+            self.assertIn("[TYPE BLOCK] line-adjacency OK", log)
+
+
+class TestDatumLevelEchoDetection(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_repeated_row_count_and_columns_are_removed(self) -> None:
+        """
+        A validation beat that restates the previous beat's row count and column
+        list must be rewritten to drop the repeated data.
+        """
+        beats = [
+            ScriptBeat(
+                beat_id="beat_007",
+                kind="explain",
+                text="The result pane shows 60 rows with FirstName, LastName, and Email.",
+            ),
+            ScriptBeat(
+                beat_id="beat_008",
+                kind="validation",
+                text="We see 60 rows returned in the result pane, confirming the contact list is complete.",
+            ),
+        ]
+        self.builder._enforce_datum_uniqueness(beats)
+        self.assertNotIn("60", beats[1].text)
+        for name in ("FirstName", "LastName", "Email"):
+            self.assertNotIn(name, beats[1].text)
+
 
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
@@ -593,6 +635,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestValidationEchoSemantic))
     suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityGate))
     suite.addTests(loader.loadTestsFromTestCase(TestEditorReadBack))
+    suite.addTests(loader.loadTestsFromTestCase(TestDatumLevelEchoDetection))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1

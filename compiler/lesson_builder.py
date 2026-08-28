@@ -20,7 +20,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import anthropic
 
@@ -310,7 +310,7 @@ class LessonBuilder:
     @staticmethod
     def _total_word_limit(format_tier: str) -> int:
         """Soft upper word limit used for warnings, not hard failures."""
-        return {"micro": 50, "short": 80, "mid": 120, "long": 200, "full": 300}.get(format_tier, 80)
+        return {"micro": 50, "short": 80, "mid": 120, "long": 300, "full": 600}.get(format_tier, 80)
 
     @staticmethod
     def _db_facts(db_path: Optional[str], table_name: str) -> Dict[str, Any]:
@@ -1226,21 +1226,39 @@ class LessonBuilder:
 
         return beats
 
+    @staticmethod
+    def _make_comment_block(description: str) -> str:
+        """Return a SQL Standard comment block for typing into the editor."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        return (
+            f"/*\n"
+            f"Created By: WSDA Student\n"
+            f"Create Date: {today}\n"
+            f"Description: {description}\n"
+            f"*/"
+        )
+
     def _build_sql_script_beats(
         self,
         video: Any,
         env_map: Optional[Dict[str, Any]] = None,
     ) -> List[ScriptBeat]:
         """
-        Deterministic SQL-arc script for the C4 Phase 1 pilot video.
+        Deterministic SQL-arc script for the C4 Phase 2 chapter-4 videos.
 
-        Returns beats 001-009 with a validation beat that cites the actual,
-        scout-verified row count for the planned query.
+        Each video is a self-contained SQL demo against the WSDA Music Customer
+        table. The comment block and query are typed as ONE contiguous type_block
+        action so the vision agent can verify their position and adjacency.
         """
         exercise = video.exercise_artifact or {}
         db_path = exercise.get("db_path")
+        video_id = getattr(video, "video_id", "video_1_1")
 
-        planned = video.planned_queries[0] if video.planned_queries else "SELECT FirstName, LastName, Email FROM Customer;"
+        planned = (
+            video.planned_queries[0]
+            if video.planned_queries
+            else "SELECT FirstName, LastName, Email FROM Customer;"
+        )
         query_results = (env_map or {}).get("query_results", {}) or {}
         ground = query_results.get(planned) or {}
 
@@ -1264,16 +1282,10 @@ class LessonBuilder:
         columns = ground.get("columns", [])
         columns_text = ", ".join(columns) if columns else "FirstName, LastName, Email"
         rows_word = "rows" if row_count != 1 else "row"
-
-        today = datetime.now().strftime("%Y-%m-%d")
-        comment_block = (
-            f"-- Created By: WSDA Student\n"
-            f"-- Date: {today}\n"
-            f"-- Description: Customer contact list for management"
-        )
-        query_text = "SELECT FirstName, LastName, Email FROM Customer;"
+        first_rows = ground.get("first_rows", [])
 
         def _validation(text: str) -> str:
+            """Ensure validation beats are 10-15 words and end with a period."""
             text = text.strip().rstrip(".")
             wc = len(text.split())
             pads = [
@@ -1288,86 +1300,522 @@ class LessonBuilder:
                 text = " ".join(text.split()[:15]).rstrip(",;:")
             return text + "."
 
-        # Build the explain beat text using only verified facts.
-        if row_count is not None:
-            explain_text = (
-                f"The result pane shows {row_count} {rows_word} with {columns_text}, "
-                f"giving us the complete customer contact list."
-            )
-        else:
-            explain_text = (
-                f"The result pane shows the customer contact list with {columns_text}."
-            )
-        explain_text = self._truncate(explain_text, 70)
+        def _full_block(comment: str, query: str) -> str:
+            return f"{comment}\n\n{query}"
 
-        beats = [
-            ScriptBeat(
-                beat_id="beat_001",
-                kind="opening",
-                text=(
-                    "In this video, we will write our first SELECT query to pull a customer "
-                    "contact list for WSDA Music management."
+        beats: List[ScriptBeat] = []
+
+        if video_id == "video_1_1":
+            query = (
+                "SELECT\n"
+                "    FirstName,\n"
+                "    LastName,\n"
+                "    Email\n"
+                "FROM Customer;"
+            )
+            full_block = _full_block(
+                self._make_comment_block("Customer contact list for management"),
+                query,
+            )
+            beats = [
+                ScriptBeat(
+                    beat_id="beat_001",
+                    kind="opening",
+                    text=(
+                        "In this video, we will write our first SELECT query to pull a "
+                        "customer contact list for WSDA Music management. The goal is a clean "
+                        "result with the right columns from the Customer table."
+                    ),
+                    action=self._wait_action(),
                 ),
-                action=self._wait_action(),
-            ),
-            ScriptBeat(
-                beat_id="beat_002",
-                kind="concept",
-                text=(
-                    "SELECT tells the database which columns we want, and FROM tells it "
-                    "which table holds them."
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="state",
+                    text=(
+                        "DB Browser shows two tabs above the data view: Browse Data for "
+                        "browsing tables, and Execute SQL for writing queries. Clicking "
+                        "Execute SQL opens the editor on top and the empty result pane below."
+                    ),
+                    action=self._wait_action(),
                 ),
-                action=self._wait_action(),
-            ),
-            ScriptBeat(
-                beat_id="beat_003",
-                kind="demo",
-                text="We open the Execute SQL tab.",
-                action=self._click_action("Execute SQL tab"),
-            ),
-            ScriptBeat(
-                beat_id="beat_004",
-                kind="demo",
-                text="We type a comment block so we remember what this query is for.",
-                action={"type": "type_block", "text": comment_block},
-            ),
-            ScriptBeat(
-                beat_id="beat_005",
-                kind="demo",
-                text="We type the query that asks for first name, last name, and email from the Customer table.",
-                action={"type": "type_block", "text": query_text},
-            ),
-            ScriptBeat(
-                beat_id="beat_006",
-                kind="demo",
-                text="We run the query and the result pane fills with the contact list.",
-                action={"type": "run_query"},
-            ),
-            ScriptBeat(
-                beat_id="beat_007",
-                kind="explain",
-                text=explain_text,
-                action=self._wait_action(),
-            ),
-            ScriptBeat(
-                beat_id="beat_008",
-                kind="validation",
-                text=_validation(
-                    f"We see {row_count} {rows_word} returned in the result pane, confirming the contact list is complete"
-                    if row_count is not None
-                    else "We see the contact list returned in the result pane, confirming the query succeeded"
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="explain",
+                    text=(
+                        "SELECT tells the database which columns to return, while FROM tells "
+                        "it which table holds those columns. Together they form the simplest "
+                        "useful query pattern: ask for specific data from one table, which "
+                        "keeps the result focused and fast."
+                    ),
+                    action=self._wait_action(),
                 ),
-                action=self._verify_action(
-                    "the Execute SQL tab shows a populated results grid with the contact list"
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="demo",
+                    text=(
+                        "We type a comment header and the formatted query as one contiguous "
+                        "block in the SQL editor."
+                    ),
+                    action={"type": "type_block", "text": full_block},
                 ),
-            ),
-            ScriptBeat(
-                beat_id="beat_009",
-                kind="close",
-                text="We have written our first SELECT query and pulled the customer contact list. Next, we will look at aliases.",
-                action=self._wait_action(),
-            ),
-        ]
+                ScriptBeat(
+                    beat_id="beat_005",
+                    kind="demo",
+                    text="We press F5 and the result pane fills with the contact list.",
+                    action={"type": "run_query"},
+                ),
+                ScriptBeat(
+                    beat_id="beat_006",
+                    kind="validation",
+                    text=_validation(
+                        f"We see {row_count} {rows_word} returned, confirming the contact list is complete"
+                        if row_count is not None else "We see the contact list returned, confirming the query succeeded"
+                    ),
+                    action=self._verify_action(
+                        "the Execute SQL tab shows a populated results grid below the query"
+                    ),
+                ),
+                ScriptBeat(
+                    beat_id="beat_007",
+                    kind="explain",
+                    text=(
+                        f"The result pane shows {columns_text} for each customer across "
+                        f"{row_count} {rows_word}, giving us the complete contact list. "
+                        f"Every customer record appears once, so management has the full list "
+                        f"without extra columns."
+                    ) if row_count is not None else (
+                        f"The result pane shows the customer contact list with {columns_text}."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_008",
+                    kind="close",
+                    text=(
+                        "We have written our first SELECT query and pulled the customer "
+                        "contact list. Next, we will make the headers readable with aliases."
+                    ),
+                    action=self._wait_action(),
+                ),
+            ]
+
+        elif video_id == "video_1_2":
+            query = (
+                "SELECT\n"
+                "    FirstName AS \"First Name\",\n"
+                "    LastName AS \"Last Name\",\n"
+                "    Email AS \"Email Address\"\n"
+                "FROM Customer;"
+            )
+            full_block = _full_block(
+                self._make_comment_block("Readable customer contact headers"),
+                query,
+            )
+            beats = [
+                ScriptBeat(
+                    beat_id="beat_001",
+                    kind="opening",
+                    text=(
+                        "In this video, we will use the AS keyword to make the customer "
+                        "contact headers readable. Last lesson we pulled the raw list; now "
+                        "management wants friendly column names."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="state",
+                    text=(
+                        "The Execute SQL tab is still open from the last query. We can clear "
+                        "the editor and type a new query that replaces the raw column names "
+                        "with aliases."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="explain",
+                    text=(
+                        "The AS keyword gives a column an alias. An alias appears in the "
+                        "result header instead of the raw column name, making reports easier "
+                        "to read without changing the underlying data."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="demo",
+                    text=(
+                        "We type a comment header and the query that aliases each column "
+                        "to a readable header."
+                    ),
+                    action={"type": "type_block", "text": full_block},
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
+                    kind="demo",
+                    text="We run the query and the result pane fills with the aliased list.",
+                    action={"type": "run_query"},
+                ),
+                ScriptBeat(
+                    beat_id="beat_006",
+                    kind="validation",
+                    text=_validation(
+                        f"We see {row_count} {rows_word} returned, confirming the alias query works"
+                        if row_count is not None else "We see the aliased list returned, confirming the query worked"
+                    ),
+                    action=self._verify_action(
+                        "the Execute SQL tab shows a populated results grid with aliased headers"
+                    ),
+                ),
+                ScriptBeat(
+                    beat_id="beat_007",
+                    kind="explain",
+                    text=(
+                        f"The headers now read {columns_text}, giving management the "
+                        f"readable view they requested. The row count did not change; only "
+                        f"the labels did."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_008",
+                    kind="close",
+                    text=(
+                        "We have used AS to create readable headers for the customer contact "
+                        "list. Next, we will sort that list alphabetically by last name."
+                    ),
+                    action=self._wait_action(),
+                ),
+            ]
+
+        elif video_id == "video_1_3":
+            query = (
+                "SELECT\n"
+                "    FirstName,\n"
+                "    LastName,\n"
+                "    Email\n"
+                "FROM Customer\n"
+                "ORDER BY LastName;"
+            )
+            full_block = _full_block(
+                self._make_comment_block("Customer contact list sorted by last name"),
+                query,
+            )
+            top_last = ""
+            if db_path and Path(db_path).exists():
+                top_last = self._top_value(db_path, "Customer", "LastName", "asc") or ""
+            beats = [
+                ScriptBeat(
+                    beat_id="beat_001",
+                    kind="opening",
+                    text=(
+                        "In this video, we will sort the contact list alphabetically by "
+                        "last name using ORDER BY. Last lesson we made the headers readable; "
+                        "now we control the row order."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="state",
+                    text=(
+                        "The Execute SQL tab is open, and the editor still holds our previous "
+                        "query. We can change the query to tell the database how to order the "
+                        "returned rows."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="explain",
+                    text=(
+                        "ORDER BY tells the database how to sort the returned rows. It does "
+                        "not change which rows are selected; it only rearranges the order in "
+                        "which they appear."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="demo",
+                    text=(
+                        "We type a comment header and the query that orders the results by "
+                        "LastName."
+                    ),
+                    action={"type": "type_block", "text": full_block},
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
+                    kind="demo",
+                    text="We run the query and the rows reorder alphabetically.",
+                    action={"type": "run_query"},
+                ),
+                ScriptBeat(
+                    beat_id="beat_006",
+                    kind="validation",
+                    text=_validation(
+                        f"We see {row_count} {rows_word} returned, with {top_last} at the top"
+                        if row_count and top_last else "The rows appear in ascending alphabetical order"
+                    ),
+                    action=self._verify_action(
+                        "the result pane rows are sorted by LastName in ascending order"
+                    ),
+                ),
+                ScriptBeat(
+                    beat_id="beat_007",
+                    kind="explain",
+                    text=(
+                        "The rows are now arranged alphabetically by LastName, with the "
+                        "earliest last name at the top of the list. This makes it easy to "
+                        "scan contacts from A to Z."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_008",
+                    kind="close",
+                    text=(
+                        "We have sorted the contact list alphabetically by last name with "
+                        "ORDER BY. Next, we will limit the result to a small preview."
+                    ),
+                    action=self._wait_action(),
+                ),
+            ]
+
+        elif video_id == "video_1_4":
+            query = (
+                "SELECT\n"
+                "    FirstName,\n"
+                "    LastName,\n"
+                "    Email\n"
+                "FROM Customer\n"
+                "ORDER BY LastName\n"
+                "LIMIT 5;"
+            )
+            full_block = _full_block(
+                self._make_comment_block("Preview of customer contacts"),
+                query,
+            )
+            beats = [
+                ScriptBeat(
+                    beat_id="beat_001",
+                    kind="opening",
+                    text=(
+                        "In this video, we will limit the sorted contact list to a small "
+                        "preview using LIMIT. Last lesson we sorted the full list; now "
+                        "management only needs the first few rows."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="state",
+                    text=(
+                        "The Execute SQL tab is open, so we can add one more clause to the "
+                        "sorted query. LIMIT goes at the end and controls how many rows the "
+                        "database returns."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="explain",
+                    text=(
+                        "LIMIT returns only the requested number of rows. It is useful when "
+                        "a full result set is larger than we need, such as when a manager "
+                        "asks for a quick preview."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="demo",
+                    text=(
+                        "We type a comment header and the sorted query with a LIMIT clause."
+                    ),
+                    action={"type": "type_block", "text": full_block},
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
+                    kind="demo",
+                    text="We run the query and the result pane shows only the preview rows.",
+                    action={"type": "run_query"},
+                ),
+                ScriptBeat(
+                    beat_id="beat_006",
+                    kind="validation",
+                    text=_validation(
+                        f"We see exactly {row_count} {rows_word} returned, confirming the limit is active"
+                        if row_count is not None else "We see only the preview rows returned"
+                    ),
+                    action=self._verify_action(
+                        "the result pane shows exactly five rows from the sorted contact list"
+                    ),
+                ),
+                ScriptBeat(
+                    beat_id="beat_007",
+                    kind="explain",
+                    text=(
+                        "LIMIT trimmed the sorted result to a small preview, and the rows "
+                        "still appear in alphabetical order by last name. The database stopped "
+                        "after the requested number of rows."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_008",
+                    kind="close",
+                    text=(
+                        "We have limited the result set with LIMIT, and next we will recap "
+                        "the chapter with one clean, well-documented query."
+                    ),
+                    action=self._wait_action(),
+                ),
+            ]
+
+        elif video_id == "video_1_5":
+            query = (
+                "SELECT\n"
+                "    FirstName AS \"First Name\",\n"
+                "    LastName AS \"Last Name\",\n"
+                "    Email AS \"Email Address\"\n"
+                "FROM Customer\n"
+                "ORDER BY LastName\n"
+                "LIMIT 5;"
+            )
+            full_block = _full_block(
+                self._make_comment_block("Clean, documented customer contact preview"),
+                query,
+            )
+            beats = [
+                ScriptBeat(
+                    beat_id="beat_001",
+                    kind="opening",
+                    text=(
+                        "In this video, we will combine comment headers, aliases, ORDER BY, "
+                        "and LIMIT into one clean query. The previous lessons built each "
+                        "skill; now we use them together professionally."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="state",
+                    text=(
+                        "The Execute SQL tab is open, so we can build the final chapter query "
+                        "step by step. The comment block comes first, followed by the SELECT "
+                        "statement."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="explain",
+                    text=(
+                        "A comment header documents the query's purpose for anyone who opens "
+                        "it later. Aliases, ORDER BY, and LIMIT make the result readable, "
+                        "sorted, and appropriately sized."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="demo",
+                    text=(
+                        "We type the commented query that uses aliases, orders by last name, "
+                        "and limits the result."
+                    ),
+                    action={"type": "type_block", "text": full_block},
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
+                    kind="demo",
+                    text="We run the query and the result pane shows the documented preview.",
+                    action={"type": "run_query"},
+                ),
+                ScriptBeat(
+                    beat_id="beat_006",
+                    kind="validation",
+                    text=_validation(
+                        f"We see {row_count} {rows_word} returned, confirming the combined query works"
+                        if row_count is not None else "We see the documented preview returned, confirming the query worked"
+                    ),
+                    action=self._verify_action(
+                        "the SQL editor contains a comment block followed by a SELECT with aliases, ORDER BY, and LIMIT"
+                    ),
+                ),
+                ScriptBeat(
+                    beat_id="beat_007",
+                    kind="explain",
+                    text=(
+                        "The result pane shows readable rows sorted by last name, "
+                        "demonstrating all three techniques in one statement. The comment "
+                        "header makes the query's intent clear at a glance."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_008",
+                    kind="close",
+                    text=(
+                        "We have recapped the chapter with a clean, documented query that "
+                        "combines every technique. Next, we will filter results with WHERE "
+                        "clauses."
+                    ),
+                    action=self._wait_action(),
+                ),
+            ]
+
+        else:
+            # Unknown SQL demo: fall back to a minimal deterministic script.
+            query = (
+                "SELECT\n"
+                "    FirstName,\n"
+                "    LastName,\n"
+                "    Email\n"
+                "FROM Customer;"
+            )
+            full_block = _full_block(
+                self._make_comment_block("Customer contact list"),
+                query,
+            )
+            beats = [
+                ScriptBeat(
+                    beat_id="beat_001",
+                    kind="opening",
+                    text="In this video, we will run a SELECT query in the Execute SQL tab.",
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="demo",
+                    text="We type the comment block and query into the SQL editor.",
+                    action={"type": "type_block", "text": full_block},
+                ),
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="demo",
+                    text="We run the query and the result pane fills.",
+                    action={"type": "run_query"},
+                ),
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="validation",
+                    text=_validation(
+                        "The result pane is populated, confirming the query executed"
+                    ),
+                    action=self._verify_action(
+                        "the Execute SQL tab shows a populated results grid"
+                    ),
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
+                    kind="close",
+                    text="We have run the query and reviewed the results.",
+                    action=self._wait_action(),
+                ),
+            ]
 
         return beats
 
@@ -1376,8 +1824,24 @@ class LessonBuilder:
     ) -> List[ScriptBeat]:
         """Trim beats to per-kind word limits and total script limit without
         breaking action+result demo sentences."""
-        limits = {"opening": 15, "demo": 12, "validation": 15, "close": 15}
-        minima = {"opening": 10, "demo": 5, "validation": 10, "close": 10}
+        limits = {
+            "opening": 45,
+            "concept": 60,
+            "state": 40,
+            "explain": 70,
+            "demo": 20,
+            "validation": 15,
+            "close": 25,
+        }
+        minima = {
+            "opening": 10,
+            "concept": 5,
+            "state": 5,
+            "explain": 10,
+            "demo": 5,
+            "validation": 10,
+            "close": 10,
+        }
         total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
 
         # First pass: hard cap per kind.
@@ -1477,6 +1941,165 @@ class LessonBuilder:
             merged.append(beat)
         return merged
 
+    def _extract_data_from_text(self, text: str) -> Set[str]:
+        """
+        Extract concrete, re-checkable data assertions from a beat.
+
+        Captures:
+          - number + noun phrases like "60 rows" or "3 columns"
+          - raw numeric counts
+          - comma/and/or separated column-like capitalized identifiers
+          - table/view descriptors like "Customer table"
+        """
+        data: Set[str] = set()
+
+        # Number + following noun phrase (keep the head noun only).
+        for match in re.finditer(
+            r"\b(\d+(?:\.\d+)?)\s+([a-z]{2,}(?:\s+[a-z]{2,}){0,2})\b",
+            text,
+            re.IGNORECASE,
+        ):
+            number = match.group(1)
+            phrase = match.group(2).lower()
+            data.add(f"{number} {phrase.split()[0]}")
+
+        # Raw numeric counts.
+        for number in re.findall(r"\b\d+\b", text):
+            data.add(f"count:{number}")
+
+        # Column lists: two or more capitalized identifiers separated by commas
+        # or coordinating conjunctions, e.g. "FirstName, LastName, and Email".
+        # Require at least one lowercase letter so all-caps SQL keywords are ignored.
+        column_list_pattern = re.compile(
+            r"\b([A-Z][a-z]*[a-z][a-zA-Z]*(?:\s+[A-Z][a-z]*[a-z][a-zA-Z]*)?"
+            r"(?:,\s*(?:and\s+|&\s*)?[A-Z][a-z]*[a-z][a-zA-Z]*(?:\s+[A-Z][a-z]*[a-z][a-zA-Z]*)?)+)\b"
+        )
+        for match in column_list_pattern.finditer(text):
+            parts = re.split(r"\s*,\s*|\s+\band\b\s+|\s+\bor\b\s+", match.group(1))
+            columns = [re.sub(r"\s+", "", part.strip()) for part in parts if part.strip()]
+            if columns:
+                data.add("columns:" + ",".join(sorted(set(columns))))
+
+        # Table/view descriptors.
+        for match in re.finditer(
+            r"\b([A-Z][a-zA-Z]+)\s+(table|view)\b", text, re.IGNORECASE
+        ):
+            data.add(f"{match.group(1).lower()} {match.group(2).lower()}")
+
+        return data
+
+    @staticmethod
+    def _sanitize_repeated_data(text: str, repeated: Set[str]) -> str:
+        """Remove repeated data tokens/phrases from a beat text."""
+        phrase_datums = [
+            d for d in repeated
+            if re.match(r"^(\d+(?:\.\d+)?)\s+([a-z]+)$", d, re.IGNORECASE)
+        ]
+        count_datums = [d for d in repeated if d.startswith("count:")]
+        other_datums = repeated - set(phrase_datums) - set(count_datums)
+
+        # Number + noun phrase, e.g. "60 rows" -> "the rows".
+        for datum in phrase_datums:
+            phrase_match = re.match(r"^(\d+(?:\.\d+)?)\s+([a-z]+)$", datum, re.IGNORECASE)
+            assert phrase_match is not None
+            number = phrase_match.group(1)
+            noun = phrase_match.group(2)
+            text = re.sub(
+                r"\b" + re.escape(number) + r"\s+" + re.escape(noun) + r"\b",
+                f"the {noun}",
+                text,
+                flags=re.IGNORECASE,
+                count=1,
+            )
+
+        # Raw numeric counts.
+        for datum in count_datums:
+            number = datum.split(":", 1)[1]
+            text = re.sub(r"\b" + re.escape(number) + r"\b", "", text)
+
+        # Column lists and table descriptors.
+        for datum in other_datums:
+            if datum.startswith("columns:"):
+                columns = datum.split(":", 1)[1].split(",")
+                alternatives = "|".join(
+                    re.escape(c) for c in sorted(columns, key=len, reverse=True)
+                )
+                # replace the whole list with a generic placeholder
+                text = re.sub(
+                    r"\b(?:" + alternatives + r")"
+                    r"(?:\s*,\s*(?:and\s+|&\s*)?(?:" + alternatives + r"))+\b",
+                    "the columns",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                # strip any remaining individual column mentions
+                for column in columns:
+                    text = re.sub(r"\b" + re.escape(column) + r"\b", "", text, flags=re.IGNORECASE)
+            elif datum.endswith(" table"):
+                table = datum.replace(" table", "")
+                text = re.sub(
+                    r"\b" + re.escape(table) + r"\s+table\b",
+                    "the table",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+
+        # Tidy whitespace and punctuation.
+        text = re.sub(r"\s+", " ", text).strip(" ,;:.:")
+        if text:
+            # Ensure the sentence starts with a capital letter.
+            text = text[0].upper() + text[1:]
+        if text and not re.search(r"[.!?]$", text):
+            text += "."
+        return text
+
+    def _enforce_datum_uniqueness(self, beats: List[ScriptBeat]) -> None:
+        """
+        Ensure each concrete datum is asserted only once per script.
+
+        After each beat is finalized, its data-like assertions are extracted. If a
+        datum was already asserted in an earlier beat, the later beat is rewritten
+        to remove the restatement. Validation beats must cite a new observation or
+        reframe without restating numbers already given.
+        """
+        seen: Set[str] = set()
+        for beat in beats:
+            datums = self._extract_data_from_text(beat.text)
+            repeated = datums & seen
+            if not repeated:
+                seen.update(datums)
+                continue
+
+            original_text = beat.text
+            sanitized = self._sanitize_repeated_data(original_text, repeated)
+
+            # If sanitization failed or still repeats data, fall back to a generic,
+            # kind-appropriate sentence that contains no repeated numbers.
+            if not sanitized or (self._extract_data_from_text(sanitized) & seen):
+                if beat.kind == "validation":
+                    sanitized = "The result pane confirms the query ran successfully."
+                elif beat.kind == "close":
+                    sanitized = "We have completed the query and reviewed the results."
+                elif beat.kind in ("explain", "concept"):
+                    sanitized = "We see the expected result on screen."
+                else:
+                    sanitized = "We continue with the next step."
+                if not sanitized.endswith("."):
+                    sanitized += "."
+
+            beat.text = sanitized
+            for datum in sorted(repeated):
+                print(
+                    f"  [DATUM DEDUP] {beat.beat_id}: dropped repeated datum '{datum}'",
+                    file=sys.stderr,
+                )
+            if beat.text != original_text:
+                print(
+                    f"  [DATUM DEDUP] {beat.beat_id}: rewritten as '{beat.text}'",
+                    file=sys.stderr,
+                )
+            seen.update(self._extract_data_from_text(beat.text))
+
     # ------------------------------------------------------------------
     # Script generation
     # ------------------------------------------------------------------
@@ -1552,6 +2175,7 @@ class LessonBuilder:
         beats = self._enforce_word_limits(beats, video)
         beats = self._merge_validation_echoes(beats)
         self._enforce_sentence_integrity(beats)
+        self._enforce_datum_uniqueness(beats)
         ok, errors, warnings = self.validate_script(beats, video)
         for warning in warnings:
             print(f"Warning: {warning}", file=sys.stderr)
@@ -1840,7 +2464,15 @@ Return ONLY a JSON array of beats like:
             warnings.append(f"Script is {total_words} words, exceeds soft limit of {total_limit}.")
 
         # Per-kind soft word limits.
-        limits = {"opening": (8, 25), "demo": (3, 20), "validation": (8, 25), "close": (8, 20)}
+        limits = {
+            "opening": (15, 45),
+            "concept": (10, 60),
+            "state": (5, 40),
+            "explain": (15, 70),
+            "demo": (5, 20),
+            "validation": (8, 20),
+            "close": (10, 25),
+        }
         for beat in beats:
             wc = self._word_count(beat.text)
             lo, hi = limits.get(beat.kind, (3, 25))

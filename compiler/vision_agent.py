@@ -317,34 +317,115 @@ class VisionAgent:
             return fenced.group(1)
         return text
 
+    def _verify_editor_layout(self, intended: str, actual: str) -> bool:
+        """
+        Verify that the editor contains the intended text and that the query
+        immediately follows the comment block.
+
+        Checks:
+          - Whitespace-normalized intended full text equals read-back full text.
+          - The query's first SELECT line appears right after the comment block's
+            last line, with at most one blank line between them.
+        """
+        if self._normalize_editor_text(intended) != self._normalize_editor_text(actual):
+            print(
+                "  [TYPE BLOCK] content mismatch",
+                file=sys.stderr,
+            )
+            print(
+                f"  [TYPE BLOCK] read-back normalized: {self._normalize_editor_text(actual)!r}",
+                file=sys.stderr,
+            )
+            print(
+                f"  [TYPE BLOCK] intended normalized:  {self._normalize_editor_text(intended)!r}",
+                file=sys.stderr,
+            )
+            return False
+
+        intended_lines = [
+            line.strip() for line in intended.splitlines() if line.strip() != ""
+        ]
+        actual_lines = [
+            line.strip() for line in actual.splitlines() if line.strip() != ""
+        ]
+
+        # Locate the first query line in the intended text.
+        query_line = next(
+            (line for line in intended_lines if re.search(r"\bSELECT\b", line, re.I)),
+            None,
+        )
+        if not query_line:
+            # No separate query; content equality is sufficient.
+            return True
+
+        try:
+            query_idx_intended = intended_lines.index(query_line)
+        except ValueError:
+            return False
+
+        if query_idx_intended == 0:
+            return True
+
+        comment_end_intended = intended_lines[query_idx_intended - 1]
+
+        # Find the same two lines in the actual editor content.
+        try:
+            comment_end_idx = next(
+                i
+                for i, line in enumerate(actual_lines)
+                if self._normalize_editor_text(line)
+                == self._normalize_editor_text(comment_end_intended)
+            )
+        except StopIteration:
+            print(
+                "  [TYPE BLOCK] could not locate comment end in read-back",
+                file=sys.stderr,
+            )
+            return False
+
+        try:
+            query_idx_actual = next(
+                i
+                for i, line in enumerate(actual_lines)
+                if self._normalize_editor_text(line)
+                == self._normalize_editor_text(query_line)
+            )
+        except StopIteration:
+            print(
+                "  [TYPE BLOCK] could not locate query start in read-back",
+                file=sys.stderr,
+            )
+            return False
+
+        # With blank lines collapsed, "at most one blank line" means the query
+        # line must be the next non-empty line after the comment end.
+        if query_idx_actual == comment_end_idx + 1:
+            return True
+
+        print(
+            f"  [TYPE BLOCK] query not adjacent to comment "
+            f"(comment_end_idx={comment_end_idx}, query_idx={query_idx_actual})",
+            file=sys.stderr,
+        )
+        return False
+
     def type_block(self, text: str) -> bool:
         """
-        Type a multi-line SQL block visibly into the active editor with read-back verification.
+        Type a multi-line SQL block visibly into the active editor with read-back
+        and layout verification.
 
-        Before typing the editor is cleared. After typing the VLM reads the editor
-        content and it is compared to the intended text. Up to two retries are
+        ``text`` is the FULL block: comment header and query together. The editor
+        is cleared, the block is typed, and the VLM reads back the entire editor
+        content. The read-back must match the intended text AND keep the query
+        adjacent to the comment block (one blank line max). Up to two retries are
         attempted; if they all fail the method falls back to clipboard paste with
-        the same read-back check.
+        the same layout check.
         """
         if not text:
             return True
 
-        intended_norm = self._normalize_editor_text(text)
-
         def _matches(read_text: str) -> bool:
-            read_norm = self._normalize_editor_text(read_text)
-            if read_norm == intended_norm:
-                return True
-            # Debug: log why the normalized strings differ.
-            print(
-                f"  [TYPE BLOCK] read-back normalized: {read_norm!r}",
-                file=sys.stderr,
-            )
-            print(
-                f"  [TYPE BLOCK] intended normalized:  {intended_norm!r}",
-                file=sys.stderr,
-            )
-            return False
+            return self._verify_editor_layout(text, read_text)
 
         self._clear_editor()
         self._type_visible(text)
@@ -353,11 +434,16 @@ class VisionAgent:
             read_back = self._read_editor_content()
             if _matches(read_back):
                 print("  [TYPE BLOCK] read-back OK", file=sys.stderr)
+                print("  [TYPE BLOCK] line-adjacency OK", file=sys.stderr)
                 self.press_key("esc")
                 print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
                 return True
             print(
                 f"  [TYPE BLOCK] read-back mismatch, retry {attempt}/2",
+                file=sys.stderr,
+            )
+            print(
+                f"  [TYPE BLOCK] line-adjacency mismatch, retry {attempt}/2",
                 file=sys.stderr,
             )
             self._clear_editor()
@@ -368,6 +454,7 @@ class VisionAgent:
         read_back = self._read_editor_content()
         if _matches(read_back):
             print("  [TYPE BLOCK] paste fallback OK", file=sys.stderr)
+            print("  [TYPE BLOCK] line-adjacency OK", file=sys.stderr)
             self.press_key("esc")
             print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
             return True

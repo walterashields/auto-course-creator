@@ -211,8 +211,8 @@ def create_sql_sorting_fundamentals() -> CourseManifest:
 
 def create_sql_essential_training_ch4() -> CourseManifest:
     """
-    Phase 1 pilot: one video teaching a first SELECT query against the
-    WSDA Music database.
+    Phase 2 chapter 4: five videos teaching a first SELECT query, aliases,
+    ORDER BY, LIMIT, and a recap query against the WSDA Music database.
     """
     db_path = str((Path(__file__).resolve().parent / "data" / "wsda_music.db").resolve())
     exercise = {
@@ -227,14 +227,80 @@ def create_sql_essential_training_ch4() -> CourseManifest:
             title="Your First Query",
             learning_objective="Write and run your first SELECT query to return a customer contact list",
             discovery_objective=(
-                "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer;, "
-                "run it with F5, and show the result pane with the contact list"
+                "Open the Execute SQL tab, type the commented query SELECT FirstName, LastName, "
+                "Email FROM Customer, run it with F5, and show the result pane with the contact list"
             ),
             application="db_browser_sqlite",
             prerequisite_videos=[],
             exercise_artifact=exercise,
-            format_tier="mid",
-            planned_queries=["SELECT FirstName, LastName, Email FROM Customer;"],
+            format_tier="long",
+            planned_queries=[
+                "SELECT FirstName, LastName, Email FROM Customer;",
+            ],
+        ),
+        VideoManifest(
+            video_id="video_1_2",
+            title="Aliases — Speaking Management's Language",
+            learning_objective="Use the AS keyword to give query results readable column headers",
+            discovery_objective=(
+                "Open the Execute SQL tab, type SELECT FirstName AS First Name, LastName AS Last Name, "
+                "Email AS Email Address FROM Customer, run it with F5, and show the aliased headers"
+            ),
+            application="db_browser_sqlite",
+            prerequisite_videos=["video_1_1"],
+            exercise_artifact=exercise,
+            format_tier="long",
+            planned_queries=[
+                'SELECT FirstName AS "First Name", LastName AS "Last Name", Email AS "Email Address" FROM Customer;',
+            ],
+        ),
+        VideoManifest(
+            video_id="video_1_3",
+            title="Sorting Results with ORDER BY",
+            learning_objective="Sort query results by a specific column using ORDER BY",
+            discovery_objective=(
+                "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer "
+                "ORDER BY LastName, run it with F5, and show the result pane sorted by LastName"
+            ),
+            application="db_browser_sqlite",
+            prerequisite_videos=["video_1_2"],
+            exercise_artifact=exercise,
+            format_tier="long",
+            planned_queries=[
+                "SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName;",
+            ],
+        ),
+        VideoManifest(
+            video_id="video_1_4",
+            title="Limiting Results with LIMIT",
+            learning_objective="Limit the number of returned rows using the LIMIT clause",
+            discovery_objective=(
+                "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer "
+                "ORDER BY LastName LIMIT 5, run it with F5, and show exactly five rows in the result pane"
+            ),
+            application="db_browser_sqlite",
+            prerequisite_videos=["video_1_3"],
+            exercise_artifact=exercise,
+            format_tier="long",
+            planned_queries=[
+                "SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName LIMIT 5;",
+            ],
+        ),
+        VideoManifest(
+            video_id="video_1_5",
+            title="Query Etiquette Recap",
+            learning_objective="Combine comment headers, aliases, ORDER BY, and LIMIT in one clean query",
+            discovery_objective=(
+                "Open the Execute SQL tab, type a commented query that aliases columns, orders by "
+                "LastName, and limits to 5 rows, run it with F5, and show the documented preview"
+            ),
+            application="db_browser_sqlite",
+            prerequisite_videos=["video_1_4"],
+            exercise_artifact=exercise,
+            format_tier="long",
+            planned_queries=[
+                'SELECT FirstName AS "First Name", LastName AS "Last Name", Email AS "Email Address" FROM Customer ORDER BY LastName LIMIT 5;',
+            ],
         ),
     ]
 
@@ -242,7 +308,7 @@ def create_sql_essential_training_ch4() -> CourseManifest:
         course_id="sql_essential_training_ch4",
         title="SQL Essential Training Chapter 4",
         description=(
-            "Write and run your first SELECT query to return a customer contact list from WSDA Music."
+            "Write and run SELECT queries with aliases, ORDER BY, and LIMIT against the WSDA Music database."
         ),
         target_audience="Beginner data analysts",
         videos=videos,
