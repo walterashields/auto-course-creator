@@ -168,8 +168,8 @@ class LessonBuilder:
     @staticmethod
     def _word_cap(kind: str) -> int:
         """Per-kind hard word cap used by the sentence-integrity gate."""
-        return {"opening": 15, "demo": 12, "validation": 15, "close": 15}.get(
-            kind, 15
+        return {"opening": 60, "demo": 25, "validation": 45, "close": 70}.get(
+            kind, 25
         )
 
     @staticmethod
@@ -310,7 +310,7 @@ class LessonBuilder:
     @staticmethod
     def _total_word_limit(format_tier: str) -> int:
         """Soft upper word limit used for warnings, not hard failures."""
-        return {"micro": 50, "short": 80, "mid": 120, "long": 300, "full": 600}.get(format_tier, 80)
+        return {"micro": 50, "short": 80, "mid": 120, "long": 600, "full": 600}.get(format_tier, 80)
 
     @staticmethod
     def _db_facts(db_path: Optional[str], table_name: str) -> Dict[str, Any]:
@@ -1285,7 +1285,7 @@ class LessonBuilder:
         first_rows = ground.get("first_rows", [])
 
         def _validation(text: str) -> str:
-            """Ensure validation beats are 10-15 words and end with a period."""
+            """Ensure validation beats are 25-45 words and end with a period."""
             text = text.strip().rstrip(".")
             wc = len(text.split())
             pads = [
@@ -1293,11 +1293,11 @@ class LessonBuilder:
                 ", which confirms the operation succeeded",
                 ", verifying the outcome matches our goal",
             ]
-            while wc < 10:
+            while wc < 25:
                 text = text + pads[(wc // 3) % len(pads)]
                 wc = len(text.split())
-            if wc > 15:
-                text = " ".join(text.split()[:15]).rstrip(",;:")
+            if wc > 45:
+                text = " ".join(text.split()[:45]).rstrip(",;:")
             return text + "."
 
         def _full_block(comment: str, query: str) -> str:
@@ -1322,9 +1322,10 @@ class LessonBuilder:
                     beat_id="beat_001",
                     kind="opening",
                     text=(
-                        "In this video, we will write our first SELECT query to pull a "
-                        "customer contact list for WSDA Music management. The goal is a clean "
-                        "result with the right columns from the Customer table."
+                        "In this video, we will write our first SELECT query to pull a clean "
+                        "customer contact list for WSDA Music management. The goal is to return "
+                        "only the columns we need from the Customer table, so the result is "
+                        "focused and immediately useful."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1332,9 +1333,11 @@ class LessonBuilder:
                     beat_id="beat_002",
                     kind="state",
                     text=(
-                        "DB Browser shows two tabs above the data view: Browse Data for "
-                        "browsing tables, and Execute SQL for writing queries. Clicking "
-                        "Execute SQL opens the editor on top and the empty result pane below."
+                        "DB Browser for SQLite opens with two tabs above the data view. "
+                        "Browse Data is on the left and shows raw table rows, while Execute SQL "
+                        "on the right opens the SQL editor on top and an empty result pane below. "
+                        "The toolbar sits above the tabs, and the editor is the large white area "
+                        "where we type."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1342,15 +1345,27 @@ class LessonBuilder:
                     beat_id="beat_003",
                     kind="explain",
                     text=(
-                        "SELECT tells the database which columns to return, while FROM tells "
-                        "it which table holds those columns. Together they form the simplest "
-                        "useful query pattern: ask for specific data from one table, which "
-                        "keeps the result focused and fast."
+                        "SELECT is the SQL command that chooses which columns to return, and "
+                        "FROM chooses which table holds those columns. Together they form the "
+                        "simplest useful query pattern: ask for specific data from one table. "
+                        "This keeps the result small and fast because the database does not waste "
+                        "time returning columns we do not need."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
                     beat_id="beat_004",
+                    kind="state",
+                    text=(
+                        "Right now the editor is empty and the result pane below it is blank. "
+                        "When we finish, the editor will hold a comment block followed by a "
+                        "formatted SELECT statement, and the result pane will show the customer "
+                        "contact list."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
                     kind="demo",
                     text=(
                         "We type a comment header and the formatted query as one contiguous "
@@ -1359,41 +1374,57 @@ class LessonBuilder:
                     action={"type": "type_block", "text": full_block},
                 ),
                 ScriptBeat(
-                    beat_id="beat_005",
+                    beat_id="beat_006",
                     kind="demo",
                     text="We press F5 and the result pane fills with the contact list.",
                     action={"type": "run_query"},
                 ),
                 ScriptBeat(
-                    beat_id="beat_006",
+                    beat_id="beat_007",
                     kind="validation",
                     text=_validation(
-                        f"We see {row_count} {rows_word} returned, confirming the contact list is complete"
-                        if row_count is not None else "We see the contact list returned, confirming the query succeeded"
+                        f"We see {row_count} {rows_word} returned with FirstName, LastName, "
+                        f"and Email for each customer, confirming the contact list is complete "
+                        f"and the query ran exactly as intended"
+                        if row_count is not None else "We see the contact list returned with the requested columns, confirming the query succeeded and the result is complete"
                     ),
                     action=self._verify_action(
                         "the Execute SQL tab shows a populated results grid below the query"
                     ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_007",
+                    beat_id="beat_008",
                     kind="explain",
                     text=(
-                        f"The result pane shows {columns_text} for each customer across "
-                        f"{row_count} {rows_word}, giving us the complete contact list. "
-                        f"Every customer record appears once, so management has the full list "
-                        f"without extra columns."
-                    ) if row_count is not None else (
-                        f"The result pane shows the customer contact list with {columns_text}."
+                        "The result pane shows the complete customer contact list, with each "
+                        "customer record appearing exactly once in the order it is stored. "
+                        "Management now has a reliable set of first names, last names, and email "
+                        "addresses without extra columns cluttering the view. Because the database "
+                        "returned only the columns we requested, the output is compact and fast to "
+                        "scan."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_008",
+                    beat_id="beat_009",
+                    kind="explain",
+                    text=(
+                        "Adding a comment header at the top of the query is a professional habit. "
+                        "It records who created the query, when it was written, and what problem it "
+                        "solves, which helps anyone who opens the file later. Good comments turn a "
+                        "quick one-off query into documentation that the whole team can trust and "
+                        "maintain."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_010",
                     kind="close",
                     text=(
-                        "We have written our first SELECT query and pulled the customer "
-                        "contact list. Next, we will make the headers readable with aliases."
+                        "We have written our first SELECT query and pulled a complete customer "
+                        "contact list. The query returned only the columns we needed and included "
+                        "a clear comment header. Next, we will make those column headers friendlier "
+                        "for management reports by using aliases."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1416,9 +1447,10 @@ class LessonBuilder:
                     beat_id="beat_001",
                     kind="opening",
                     text=(
-                        "In this video, we will use the AS keyword to make the customer "
-                        "contact headers readable. Last lesson we pulled the raw list; now "
-                        "management wants friendly column names."
+                        "In this video, we will use the AS keyword to give our query results "
+                        "readable column headers that match management language. Last lesson we "
+                        "pulled the raw contact list; now we want friendly labels like First Name "
+                        "instead of FirstName in the report."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1426,9 +1458,10 @@ class LessonBuilder:
                     beat_id="beat_002",
                     kind="state",
                     text=(
-                        "The Execute SQL tab is still open from the last query. We can clear "
-                        "the editor and type a new query that replaces the raw column names "
-                        "with aliases."
+                        "The Execute SQL tab is still open from the last query. The editor shows "
+                        "our previous SELECT statement, and the result pane below still displays "
+                        "the raw headers. We can clear the editor and type a new query that "
+                        "replaces each raw column name with a friendly alias using the AS keyword."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1436,14 +1469,27 @@ class LessonBuilder:
                     beat_id="beat_003",
                     kind="explain",
                     text=(
-                        "The AS keyword gives a column an alias. An alias appears in the "
-                        "result header instead of the raw column name, making reports easier "
-                        "to read without changing the underlying data."
+                        "The AS keyword gives a column an alias, which is the name that appears "
+                        "in the result header instead of the raw column name. Aliases make reports "
+                        "easier to read without changing the underlying data or the table structure. "
+                        "They are especially useful when managers want headers in plain English "
+                        "while the database keeps its original column names."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
                     beat_id="beat_004",
+                    kind="state",
+                    text=(
+                        "Right now the result headers show the raw column names. After we run "
+                        "the aliased query, those same three headers will display with spaces, "
+                        "while the rows underneath stay exactly the same. This is a before-and-after "
+                        "change we can verify at a glance."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
                     kind="demo",
                     text=(
                         "We type a comment header and the query that aliases each column "
@@ -1452,38 +1498,56 @@ class LessonBuilder:
                     action={"type": "type_block", "text": full_block},
                 ),
                 ScriptBeat(
-                    beat_id="beat_005",
+                    beat_id="beat_006",
                     kind="demo",
                     text="We run the query and the result pane fills with the aliased list.",
                     action={"type": "run_query"},
                 ),
                 ScriptBeat(
-                    beat_id="beat_006",
+                    beat_id="beat_007",
                     kind="validation",
                     text=_validation(
-                        f"We see {row_count} {rows_word} returned, confirming the alias query works"
-                        if row_count is not None else "We see the aliased list returned, confirming the query worked"
+                        f"We see {row_count} {rows_word} returned with headers reading First Name, "
+                        f"Last Name, and Email Address, confirming the AS aliases took effect "
+                        f"and the report is readable for management"
+                        if row_count is not None else "We see the aliased headers reading First Name, Last Name, and Email Address, confirming the query worked and the labels are readable"
                     ),
                     action=self._verify_action(
                         "the Execute SQL tab shows a populated results grid with aliased headers"
                     ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_007",
+                    beat_id="beat_008",
                     kind="explain",
                     text=(
-                        f"The headers now read {columns_text}, giving management the "
-                        f"readable view they requested. The row count did not change; only "
-                        f"the labels did."
+                        "The headers now show the friendly aliases, giving management the "
+                        "readable view they requested. The underlying values did not change; only "
+                        "the labels at the top of each column did. This means the same query can "
+                        "serve both technical users who know the original schema and managers who "
+                        "need a polished report for presentations."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_008",
+                    beat_id="beat_009",
+                    kind="explain",
+                    text=(
+                        "Aliases also help when a column name is long or unclear. A short, "
+                        "descriptive alias keeps the header visible in a narrow spreadsheet column "
+                        "and makes formulas easier to write. Using spaces in quoted aliases is "
+                        "common in reports, but the quotes are required so the database recognizes "
+                        "the whole multi-word header."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_010",
                     kind="close",
                     text=(
-                        "We have used AS to create readable headers for the customer contact "
-                        "list. Next, we will sort that list alphabetically by last name."
+                        "We have used the AS keyword to create readable headers for the customer "
+                        "contact list. The result now speaks management's language without changing "
+                        "any data. Next, we will sort that list alphabetically by last name using "
+                        "ORDER BY."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1510,9 +1574,10 @@ class LessonBuilder:
                     beat_id="beat_001",
                     kind="opening",
                     text=(
-                        "In this video, we will sort the contact list alphabetically by "
-                        "last name using ORDER BY. Last lesson we made the headers readable; "
-                        "now we control the row order."
+                        "In this video, we will sort the customer contact list alphabetically "
+                        "by last name using the ORDER BY clause. Last lesson we made the headers "
+                        "readable with aliases; now we control the order in which the rows appear "
+                        "in the result pane."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1520,9 +1585,10 @@ class LessonBuilder:
                     beat_id="beat_002",
                     kind="state",
                     text=(
-                        "The Execute SQL tab is open, and the editor still holds our previous "
-                        "query. We can change the query to tell the database how to order the "
-                        "returned rows."
+                        "The Execute SQL tab is open, and the editor still holds our aliased "
+                        "query. The result pane below shows the readable headers with rows in their "
+                        "stored order. We can change the query to tell the database exactly how to "
+                        "arrange the returned rows before they reach the screen."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1531,13 +1597,26 @@ class LessonBuilder:
                     kind="explain",
                     text=(
                         "ORDER BY tells the database how to sort the returned rows. It does "
-                        "not change which rows are selected; it only rearranges the order in "
-                        "which they appear."
+                        "not change which rows are selected or the columns that come back; it only "
+                        "rearranges the order in which they appear. By default, text columns sort "
+                        "alphabetically from A to Z, which is what we want for a contact list that "
+                        "managers can scan quickly."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
                     beat_id="beat_004",
+                    kind="state",
+                    text=(
+                        "Right now the rows appear in the order they are stored in the table. "
+                        "After we add ORDER BY LastName, the same rows will reorder so the earliest "
+                        "last name appears at the top and the rest follow alphabetically down the "
+                        "result pane."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
                     kind="demo",
                     text=(
                         "We type a comment header and the query that orders the results by "
@@ -1546,38 +1625,55 @@ class LessonBuilder:
                     action={"type": "type_block", "text": full_block},
                 ),
                 ScriptBeat(
-                    beat_id="beat_005",
+                    beat_id="beat_006",
                     kind="demo",
-                    text="We run the query and the rows reorder alphabetically.",
+                    text="We run the query and the rows reorder alphabetically in the result pane.",
                     action={"type": "run_query"},
                 ),
                 ScriptBeat(
-                    beat_id="beat_006",
+                    beat_id="beat_007",
                     kind="validation",
                     text=_validation(
-                        f"We see {row_count} {rows_word} returned, with {top_last} at the top"
-                        if row_count and top_last else "The rows appear in ascending alphabetical order"
+                        f"We see {row_count} {rows_word} returned, with {top_last} at the top "
+                        f"of the LastName column, confirming the ascending alphabetical sort is "
+                        f"active and the rows follow A-to-Z order"
+                        if row_count and top_last else "We see the rows arranged alphabetically by last name, confirming the ascending sort is active and the result is ready to scan"
                     ),
                     action=self._verify_action(
                         "the result pane rows are sorted by LastName in ascending order"
                     ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_007",
+                    beat_id="beat_008",
                     kind="explain",
                     text=(
-                        "The rows are now arranged alphabetically by LastName, with the "
-                        "earliest last name at the top of the list. This makes it easy to "
-                        "scan contacts from A to Z."
+                        "The rows are now arranged alphabetically by last name, with the "
+                        "earliest last name at the top of the list. This makes it easy to scan "
+                        "contacts from A to Z when looking for a specific person. The selected "
+                        "columns and aliases did not change; only the sequence of rows changed to "
+                        "match the ORDER BY clause."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_008",
+                    beat_id="beat_009",
+                    kind="explain",
+                    text=(
+                        "ORDER BY belongs at the end of the SELECT statement, after the column "
+                        "list and FROM clause. Putting it last is a readability convention that "
+                        "helps the team see the sort rule at a glance. It also makes the query "
+                        "easier to edit when we later add filtering or limiting clauses before the "
+                        "final sort."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_010",
                     kind="close",
                     text=(
-                        "We have sorted the contact list alphabetically by last name with "
-                        "ORDER BY. Next, we will limit the result to a small preview."
+                        "We have sorted the customer contact list alphabetically by last name "
+                        "with ORDER BY. The rows now appear in A-to-Z order, ready for scanning. "
+                        "Next, we will limit the result to a small preview using LIMIT."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1602,9 +1698,10 @@ class LessonBuilder:
                     beat_id="beat_001",
                     kind="opening",
                     text=(
-                        "In this video, we will limit the sorted contact list to a small "
-                        "preview using LIMIT. Last lesson we sorted the full list; now "
-                        "management only needs the first few rows."
+                        "In this video, we will limit the sorted customer contact list to a "
+                        "small preview using the LIMIT clause. Last lesson we sorted the full "
+                        "list alphabetically; now management only needs the first few rows for "
+                        "a quick look."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1612,9 +1709,10 @@ class LessonBuilder:
                     beat_id="beat_002",
                     kind="state",
                     text=(
-                        "The Execute SQL tab is open, so we can add one more clause to the "
-                        "sorted query. LIMIT goes at the end and controls how many rows the "
-                        "database returns."
+                        "The Execute SQL tab is open, and the editor holds our sorted query. "
+                        "The result pane below shows the full alphabetical list by last name. "
+                        "We can add one more clause at the end of the statement to control "
+                        "exactly how many rows the database returns."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1622,14 +1720,27 @@ class LessonBuilder:
                     beat_id="beat_003",
                     kind="explain",
                     text=(
-                        "LIMIT returns only the requested number of rows. It is useful when "
-                        "a full result set is larger than we need, such as when a manager "
-                        "asks for a quick preview."
+                        "LIMIT returns only the requested number of rows from the result set. "
+                        "It is useful when a full result is larger than we need, such as when a "
+                        "manager asks for a quick preview before running the full report. The "
+                        "database still sorts the rows first, because LIMIT comes after ORDER BY "
+                        "in the statement."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
                     beat_id="beat_004",
+                    kind="state",
+                    text=(
+                        "Right now the result pane shows the full alphabetical list. After we "
+                        "add a LIMIT clause, only the first few rows will remain visible, while "
+                        "the sort order stays the same. This turns a long report into a manageable "
+                        "preview."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
                     kind="demo",
                     text=(
                         "We type a comment header and the sorted query with a LIMIT clause."
@@ -1637,38 +1748,56 @@ class LessonBuilder:
                     action={"type": "type_block", "text": full_block},
                 ),
                 ScriptBeat(
-                    beat_id="beat_005",
+                    beat_id="beat_006",
                     kind="demo",
                     text="We run the query and the result pane shows only the preview rows.",
                     action={"type": "run_query"},
                 ),
                 ScriptBeat(
-                    beat_id="beat_006",
+                    beat_id="beat_007",
                     kind="validation",
                     text=_validation(
-                        f"We see exactly {row_count} {rows_word} returned, confirming the limit is active"
-                        if row_count is not None else "We see only the preview rows returned"
+                        f"We see exactly {row_count} {rows_word} returned, confirming the LIMIT "
+                        f"clause trimmed the sorted result to the requested preview size. The "
+                        f"rows still appear in alphabetical order, so the preview is representative"
+                        if row_count is not None else "We see only the preview rows returned, confirming the LIMIT clause trimmed the sorted result and the order is preserved"
                     ),
                     action=self._verify_action(
                         "the result pane shows exactly five rows from the sorted contact list"
                     ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_007",
+                    beat_id="beat_008",
                     kind="explain",
                     text=(
                         "LIMIT trimmed the sorted result to a small preview, and the rows "
                         "still appear in alphabetical order by last name. The database stopped "
-                        "after the requested number of rows."
+                        "after the requested number of rows, so the result loads faster and fits "
+                        "neatly on one screen. This is ideal for summaries and quick checks "
+                        "before a manager requests the full data set."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_008",
+                    beat_id="beat_009",
+                    kind="explain",
+                    text=(
+                        "LIMIT always comes after ORDER BY in a SELECT statement. If it came "
+                        "before the sort, the database would trim the rows first and then sort, "
+                        "which could return the wrong rows for the preview. Keeping the order "
+                        "SELECT, FROM, ORDER BY, LIMIT makes the query predictable and easy for "
+                        "the team to maintain."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_010",
                     kind="close",
                     text=(
-                        "We have limited the result set with LIMIT, and next we will recap "
-                        "the chapter with one clean, well-documented query."
+                        "We have limited the result set with LIMIT, and the preview remains "
+                        "sorted alphabetically by last name. Next, we will recap the chapter with "
+                        "one clean, well-documented query that combines comments, aliases, ORDER "
+                        "BY, and LIMIT."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1694,8 +1823,9 @@ class LessonBuilder:
                     kind="opening",
                     text=(
                         "In this video, we will combine comment headers, aliases, ORDER BY, "
-                        "and LIMIT into one clean query. The previous lessons built each "
-                        "skill; now we use them together professionally."
+                        "and LIMIT into one clean query. The previous lessons built each skill "
+                        "step by step; now we use them together in a single professional "
+                        "statement that is ready to share."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1704,8 +1834,9 @@ class LessonBuilder:
                     kind="state",
                     text=(
                         "The Execute SQL tab is open, so we can build the final chapter query "
-                        "step by step. The comment block comes first, followed by the SELECT "
-                        "statement."
+                        "step by step. The comment block will come first, followed by SELECT with "
+                        "aliases, then FROM, ORDER BY, and finally LIMIT. Each clause has a "
+                        "specific job that we have already practiced in the earlier videos."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1713,14 +1844,27 @@ class LessonBuilder:
                     beat_id="beat_003",
                     kind="explain",
                     text=(
-                        "A comment header documents the query's purpose for anyone who opens "
-                        "it later. Aliases, ORDER BY, and LIMIT make the result readable, "
-                        "sorted, and appropriately sized."
+                        "A comment header documents the query's purpose for anyone who opens it "
+                        "later. Aliases make the headers readable, ORDER BY sorts the rows "
+                        "alphabetically, and LIMIT keeps the output concise. Together these four "
+                        "techniques turn a raw database query into a polished, shareable report "
+                        "for management, showing both technical precision and professional presentation."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
                     beat_id="beat_004",
+                    kind="state",
+                    text=(
+                        "Right now the editor is empty. After we finish, it will hold one "
+                        "contiguous comment block followed by a SELECT statement that uses "
+                        "aliases, ORDER BY LastName, and a LIMIT clause. The result pane will "
+                        "then show the documented preview in a single clean view."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_005",
                     kind="demo",
                     text=(
                         "We type the commented query that uses aliases, orders by last name, "
@@ -1729,39 +1873,59 @@ class LessonBuilder:
                     action={"type": "type_block", "text": full_block},
                 ),
                 ScriptBeat(
-                    beat_id="beat_005",
+                    beat_id="beat_006",
                     kind="demo",
                     text="We run the query and the result pane shows the documented preview.",
                     action={"type": "run_query"},
                 ),
                 ScriptBeat(
-                    beat_id="beat_006",
+                    beat_id="beat_007",
                     kind="validation",
                     text=_validation(
-                        f"We see {row_count} {rows_word} returned, confirming the combined query works"
-                        if row_count is not None else "We see the documented preview returned, confirming the query worked"
+                        f"We see {row_count} {rows_word} returned with readable headers sorted "
+                        f"alphabetically by last name, confirming the combined query works as one "
+                        f"clean statement. The comment block at the top documents the purpose for "
+                        f"anyone who opens the file later"
+                        if row_count is not None else "We see the documented preview returned with readable headers sorted alphabetically, confirming the combined query works as one clean statement"
                     ),
                     action=self._verify_action(
                         "the SQL editor contains a comment block followed by a SELECT with aliases, ORDER BY, and LIMIT"
                     ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_007",
+                    beat_id="beat_008",
                     kind="explain",
                     text=(
-                        "The result pane shows readable rows sorted by last name, "
-                        "demonstrating all three techniques in one statement. The comment "
-                        "header makes the query's intent clear at a glance."
+                        "The result pane shows a professional preview with readable rows sorted "
+                        "by last name, demonstrating all three presentation techniques in one "
+                        "statement. The comment header makes the query's intent clear at a glance, "
+                        "while aliases, ORDER BY, and LIMIT handle the headers, order, and size. "
+                        "This is the kind of query a data analyst can confidently share with a "
+                        "manager."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_008",
+                    beat_id="beat_009",
+                    kind="explain",
+                    text=(
+                        "Clean query etiquette matters when other people will read or maintain "
+                        "the code. A comment header explains intent, aliases remove jargon, ORDER "
+                        "BY removes ambiguity about row order, and LIMIT prevents accidental "
+                        "overload of a report. These habits separate a quick scratch query from "
+                        "production-ready SQL that a team can trust."
+                    ),
+                    action=self._wait_action(),
+                ),
+                ScriptBeat(
+                    beat_id="beat_010",
                     kind="close",
                     text=(
                         "We have recapped the chapter with a clean, documented query that "
-                        "combines every technique. Next, we will filter results with WHERE "
-                        "clauses."
+                        "combines comment headers, aliases, ORDER BY, and LIMIT. The result is a "
+                        "readable, sorted, and appropriately sized preview. Next, we will filter "
+                        "results with WHERE clauses so we can return only the rows that match "
+                        "specific conditions."
                     ),
                     action=self._wait_action(),
                 ),
@@ -1825,22 +1989,22 @@ class LessonBuilder:
         """Trim beats to per-kind word limits and total script limit without
         breaking action+result demo sentences."""
         limits = {
-            "opening": 45,
-            "concept": 60,
-            "state": 40,
-            "explain": 70,
-            "demo": 20,
-            "validation": 15,
-            "close": 25,
+            "opening": 60,
+            "concept": 80,
+            "state": 70,
+            "explain": 90,
+            "demo": 25,
+            "validation": 45,
+            "close": 70,
         }
         minima = {
-            "opening": 10,
-            "concept": 5,
-            "state": 5,
-            "explain": 10,
-            "demo": 5,
-            "validation": 10,
-            "close": 10,
+            "opening": 30,
+            "concept": 30,
+            "state": 30,
+            "explain": 40,
+            "demo": 8,
+            "validation": 20,
+            "close": 30,
         }
         total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
 
@@ -2465,13 +2629,13 @@ Return ONLY a JSON array of beats like:
 
         # Per-kind soft word limits.
         limits = {
-            "opening": (15, 45),
-            "concept": (10, 60),
-            "state": (5, 40),
-            "explain": (15, 70),
-            "demo": (5, 20),
-            "validation": (8, 20),
-            "close": (10, 25),
+            "opening": (30, 60),
+            "concept": (30, 80),
+            "state": (30, 70),
+            "explain": (40, 90),
+            "demo": (8, 25),
+            "validation": (20, 45),
+            "close": (30, 70),
         }
         for beat in beats:
             wc = self._word_count(beat.text)

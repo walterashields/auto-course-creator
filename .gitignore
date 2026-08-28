@@ -5,7 +5,7 @@
 __pycache__/
 output/
 compiler/discovery_output/
-compiler/courses/
+compiler/courses/.cache/
 compiler/.DS_Store
 .vscode/
 .idea/
