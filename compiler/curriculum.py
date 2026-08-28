@@ -21,11 +21,12 @@ from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from .discovery import APP_NAME, EndStateDiscovery
+from .discovery import EndStateDiscovery
 from .graph_store import GraphStore
 from .lesson_builder import LessonBuilder
 from .narrator import ScriptBeat
 from .renderer import GraphRenderer
+from .schemas import EnvironmentProfile
 from .scout import scout_environment
 from .tts import TTSGenerator
 from .vision_agent import VisionAgent
@@ -332,12 +333,12 @@ def create_sql_essential_training_ch4() -> CourseManifest:
 # ---------------------------------------------------------------------------
 
 
-def _close_application() -> None:
+def _close_application(app_name: str) -> None:
     """Best-effort attempt to quit the target application between videos."""
     # Try a polite AppleScript quit first, then force-kill if it is still running.
     try:
         subprocess.run(
-            ["osascript", "-e", f'tell application "{APP_NAME}" to quit'],
+            ["osascript", "-e", f'tell application "{app_name}" to quit'],
             capture_output=True,
             timeout=5,
         )
@@ -345,7 +346,7 @@ def _close_application() -> None:
         pass
     try:
         subprocess.run(
-            ["pkill", "-x", APP_NAME],
+            ["pkill", "-x", app_name],
             capture_output=True,
             timeout=5,
         )
@@ -359,10 +360,10 @@ def _derive_opening_state_query(
     manifest: CourseManifest, video: VideoManifest
 ) -> Optional[str]:
     """
-    Return the last type_block query from the prerequisite video, if any.
+    Return the final typed query from the immediate prerequisite video, if any.
 
     This lets the discovery harness establish the UI state that the opening
-    state-beat describes (Execute SQL tab open with the previous query).
+    state-beat describes (execution tab open with the previous query).
     """
     if not video.prerequisite_videos:
         return None
@@ -372,8 +373,17 @@ def _derive_opening_state_query(
         return None
     for beat_dict in reversed(prereq_video.script_beats):
         action = beat_dict.get("action") or {}
-        if action.get("type") == "type_block":
+        action_type = action.get("type")
+        if action_type == "type_block":
             return action.get("text")
+        if action_type == "type_segments":
+            segments = action.get("segments") or []
+            return "".join(
+                (seg.get("text", "") if isinstance(seg, dict) else str(seg))
+                for seg in segments
+            )
+        if action_type == "execute_query":
+            return action.get("query")
     return None
 
 
@@ -412,8 +422,15 @@ def _derive_sql_history(
             return None
         for beat_dict in reversed(v.script_beats):
             action = beat_dict.get("action") or {}
-            if action.get("type") in ("type_block", "execute_query"):
+            action_type = action.get("type")
+            if action_type in ("type_block", "execute_query"):
                 return action.get("text") or action.get("query")
+            if action_type == "type_segments":
+                segments = action.get("segments") or []
+                return "".join(
+                    (seg.get("text", "") if isinstance(seg, dict) else str(seg))
+                    for seg in segments
+                )
         if v.planned_queries:
             return v.planned_queries[0]
         return None
@@ -449,7 +466,7 @@ def _derive_sql_history(
     return history, new_query
 
 
-def _assert_recording_hygiene() -> None:
+def _assert_recording_hygiene(profile: "EnvironmentProfile") -> None:
     """
     Pre-flight assertion that the recording environment is clean.
 
@@ -475,13 +492,14 @@ def _assert_recording_hygiene() -> None:
     # Overlay window check via VLM.
     overlay_detected = False
     try:
-        agent = VisionAgent()
+        agent = VisionAgent(profile=profile)
         b64 = agent.screenshot()
+        app_name = profile.app_name
         prompt = (
-            "The target application is DB Browser for SQLite, which is allowed to be on "
+            f"The target application is {app_name}, which is allowed to be on "
             "screen. Look at this screenshot and answer: is there any notification banner, "
             "Messages conversation window, FaceTime overlay, Character Viewer, or window "
-            "from any OTHER application covering DB Browser for SQLite? "
+            f"from any OTHER application covering {app_name}? "
             "Reply exactly YES or NO, nothing else."
         )
         result = agent._call_vlm(prompt, expect_json=False, max_tokens=32)
@@ -503,12 +521,13 @@ def _assert_recording_hygiene() -> None:
 
 def _verify_video_frames_show_app(
     video_path: str,
+    profile: EnvironmentProfile,
     interval: float = 5.0,
     bad_frame_dir: Optional[Path] = None,
 ) -> List[float]:
     """
     Sample the rendered video every ``interval`` seconds and ask the VLM whether
-    each frame shows DB Browser for SQLite. Return a list of offending timestamps.
+    each frame shows the target application. Return a list of offending timestamps.
 
     Raises RuntimeError if any sampled frame does not show the target application.
     """
@@ -542,7 +561,7 @@ def _verify_video_frames_show_app(
         if not frame_paths:
             return []
 
-        agent = VisionAgent()
+        agent = VisionAgent(profile=profile)
         visible = agent.verify_app_visible_in_frames([str(p) for p in frame_paths])
 
         bad_timestamps: List[float] = []
@@ -888,11 +907,19 @@ def run_course(
     # Set up run.log after cleanup so it survives the fresh-start wipe.
     _setup_run_log(course_output_dir)
 
-    # Recording-hygiene assertion: DND/Focus state and overlay-window check.
-    _assert_recording_hygiene()
-
-    # Resolve video order early so we can ensure each video's seed DB exists.
+    # Resolve video order early for hygiene assertion and seed-DB checks.
     ordered_videos = _video_order(manifest)
+
+    # Recording-hygiene assertion: DND/Focus state and overlay-window check.
+    # We use a default profile here because the first video's profile is not
+    # scouted until the loop begins; the app name is enough for the overlay gate.
+    _assert_recording_hygiene(
+        EnvironmentProfile(
+            application=ordered_videos[0].application if ordered_videos else "unknown",
+            app_name=ordered_videos[0].application if ordered_videos else "unknown",
+            focus_target=ordered_videos[0].application if ordered_videos else "unknown",
+        )
+    )
     for video in ordered_videos:
         db_path_str = video.exercise_artifact.get("db_path")
         if db_path_str and not Path(db_path_str).exists():
@@ -950,10 +977,10 @@ def run_course(
         db_path = video.exercise_artifact.get("db_path")
 
         # Phase 1b: scout the environment so the script only asserts observed facts.
-        env_map = None
+        profile: Optional[EnvironmentProfile] = None
         if db_path and video.application:
             try:
-                env_map = scout_environment(
+                profile = scout_environment(
                     db_path=str(db_path),
                     application=video.application,
                     video_id=video.video_id,
@@ -962,6 +989,12 @@ def run_course(
                 )
             except Exception as exc:
                 print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
+        if profile is None:
+            profile = EnvironmentProfile(
+                application=video.application,
+                app_name=video.application,
+                focus_target=video.application,
+            )
 
         # Phase 2: generate or load the narration script.
         if video.script_beats:
@@ -969,7 +1002,9 @@ def run_course(
             # Normalize legacy recipe/coordinate actions to the vision-agent format.
             script_beats = lesson_builder._validate_script_beats(script_beats, video)
         else:
-            script_beats = lesson_builder.generate_script(video, env_map=env_map)
+            script_beats = lesson_builder.generate_script(
+                video, env_map=profile.model_dump()
+            )
 
         # C4.1: enforce sentence integrity on every script, whether generated or loaded.
         lesson_builder._enforce_sentence_integrity(script_beats)
@@ -1003,6 +1038,7 @@ def run_course(
             application=video.application,
             db_path=db_path,
             opening_state_query=opening_state_query,
+            profile=profile,
         )
         discovery_result = lesson_builder.execute_script(
             beats=script_beats,
@@ -1105,9 +1141,9 @@ def run_course(
         _verify_final_frame_matches_locked_state(video_path, discovery_result)
 
         # Whole-video off-application frame gate: sample the silent/raw MP4 and
-        # fail if any frame does not show DB Browser for SQLite.
+        # fail if any frame does not show the target application.
         try:
-            _verify_video_frames_show_app(video_path, interval=5.0)
+            _verify_video_frames_show_app(video_path, profile=profile, interval=5.0)
         except RuntimeError as exc:
             print(f"FAILED (whole-video off-app frame gate): {exc}", file=sys.stderr)
             raise
@@ -1138,7 +1174,7 @@ def run_course(
         print(f"done ({duration:.1f}s)")
 
         # Close the application so the next video starts from a fresh state.
-        _close_application()
+        _close_application(profile.app_name)
 
     # Save the updated manifest with actual durations.
     save_manifest(manifest)

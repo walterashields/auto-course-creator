@@ -8,7 +8,7 @@ reads and writes these shapes.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -114,3 +114,32 @@ class DiscoveryResult(BaseModel):
     std_cost_usd: float
     # The full log of every attempt (for debugging)
     attempt_logs: List[dict] = Field(default_factory=list)
+
+
+class EnvironmentProfile(BaseModel):
+    """
+    Runtime description of the target application environment.
+
+    All app-specific literals live in the profile so that discovery, vision, and
+    rendering code can remain application-agnostic. The scout produces a profile
+    for each (course, video) pair.
+    """
+
+    application: str                       # e.g. "db_browser_sqlite"
+    app_name: str                          # Human-facing app name
+    focus_target: str                      # AppleScript / activation target
+    window_title_hint: str = ""
+    # Generic UI landmark -> VLM prompt or human description
+    landmarks: Dict[str, str] = Field(default_factory=dict)
+    # How to obtain verified ground-truth facts for this app
+    grounding_channel: Dict[str, Any] = Field(default_factory=dict)
+    # Allowed action types for this environment
+    action_vocabulary: List[str] = Field(
+        default_factory=lambda: ["click", "type", "key", "scroll", "wait"]
+    )
+    # Observed facts populated by the scout
+    tables: List[str] = Field(default_factory=list)
+    columns: Dict[str, List[str]] = Field(default_factory=dict)
+    row_counts: Dict[str, int] = Field(default_factory=dict)
+    query_results: Dict[str, Any] = Field(default_factory=dict)
+    ui: Dict[str, Any] = Field(default_factory=dict)

@@ -27,8 +27,33 @@ import anthropic
 import pyautogui
 from PIL import Image
 
+from .schemas import EnvironmentProfile
+
 TARGET_LONG_EDGE = 1568
 DEFAULT_MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
+
+
+def _default_profile() -> EnvironmentProfile:
+    """Default DB Browser for SQLite profile for callers that do not inject one."""
+    return EnvironmentProfile(
+        application="db_browser_sqlite",
+        app_name="DB Browser for SQLite",
+        focus_target="DB Browser for SQLite",
+        window_title_hint="DB Browser for SQLite",
+        landmarks={
+            "editor": "the editable SQL text area in the Execute SQL tab",
+            "run_button": "the Execute SQL toolbar button (blue play triangle / right-pointing arrow icon) above the SQL editor",
+            "result_pane": "the lower result pane showing query output",
+            "result_tab": "the Result tab in the lower results pane",
+            "execute_tab": "Execute SQL tab",
+            "browse_tab": "Browse Data tab",
+        },
+        grounding_channel={"type": "sqlite3"},
+        action_vocabulary=[
+            "click", "type", "type_block", "append_block", "type_segments",
+            "key", "run_query", "wait", "verify", "scroll",
+        ],
+    )
 
 
 @dataclass
@@ -56,12 +81,16 @@ class VisionAgent:
     - The agent scales those points back to macOS logical points for pyautogui.
     """
 
-    APP_NAME = "DB Browser for SQLite"
-
-    def __init__(self, model: str = DEFAULT_MODEL, output_dir: Optional[str] = None):
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        output_dir: Optional[str] = None,
+        profile: Optional[EnvironmentProfile] = None,
+    ):
         self.client = anthropic.Anthropic()
         self.model = model
         self.output_dir = output_dir
+        self.profile = profile or _default_profile()
         self.scale_to_logical = 1.0
         self.last_api_size: Tuple[int, int] = (0, 0)
         self.last_raw_image: Optional[Image.Image] = None
@@ -139,30 +168,31 @@ class VisionAgent:
 
     def _ensure_frontmost(self, max_attempts: int = 3) -> None:
         """
-        Assert DB Browser for SQLite is frontmost before any input action.
+        Assert the target application is frontmost before any input action.
 
         If it is not, re-activate by application name only. After ``max_attempts``
         failed recovery attempts, raise ``FocusLostError`` so the caller can abort
         the beat. Recovery never clicks elsewhere on screen.
         """
+        target = self.profile.focus_target
         for attempt in range(1, max_attempts + 1):
             frontmost = self._frontmost_app_name()
-            if frontmost == self.APP_NAME:
+            if frontmost == target:
                 return
             print(
-                f"  [FOCUS] frontmost is {frontmost!r}, activating {self.APP_NAME} "
+                f"  [FOCUS] frontmost is {frontmost!r}, activating {target} "
                 f"(attempt {attempt}/{max_attempts})",
                 file=sys.stderr,
             )
-            self._activate_db_browser()
+            self._activate_target_app()
             time.sleep(0.3)
-        raise FocusLostError(f"{self.APP_NAME} could not be kept frontmost")
+        raise FocusLostError(f"{target} could not be kept frontmost")
 
-    def _activate_db_browser(self) -> None:
-        """Bring DB Browser for SQLite to the foreground via AppleScript."""
+    def _activate_target_app(self) -> None:
+        """Bring the target application to the foreground via AppleScript."""
         try:
             subprocess.run(
-                ["osascript", "-e", f'tell application "{self.APP_NAME}" to activate'],
+                ["osascript", "-e", f'tell application "{self.profile.focus_target}" to activate'],
                 capture_output=True,
                 timeout=3,
             )
@@ -266,7 +296,7 @@ class VisionAgent:
         self._ensure_frontmost()
 
         prompt = (
-            f"You are a UI automation assistant controlling DB Browser for SQLite.\n"
+            f"You are a UI automation assistant controlling {self.profile.app_name}.\n"
             f"Task: {instruction}\n"
             f"Find and click the center of this element: {element_description}\n\n"
             "Return ONLY a JSON object with this exact shape:\n"
@@ -347,16 +377,17 @@ class VisionAgent:
             )
         except Exception:
             pass
-        # Re-activate DB Browser in case dismissal shifted focus.
-        self._activate_db_browser()
+        # Re-activate the target app in case dismissal shifted focus.
+        self._activate_target_app()
 
     def _focus_editor(self) -> None:
-        """Click the SQL editor, falling back to a normalized center click."""
-        print("  [TYPE BLOCK] focusing SQL editor", file=sys.stderr)
+        """Click the editor, falling back to a normalized center click."""
+        print("  [TYPE BLOCK] focusing editor", file=sys.stderr)
         self._ensure_frontmost()
-        # The SQL editor only exists on the Execute SQL tab; ensure it is active
+        # The editor only exists on the execution tab; ensure it is active
         # before trying to focus the editor area.
-        self.find_and_click("Click the Execute SQL tab", "Execute SQL tab")
+        execute_tab = self.profile.landmarks.get("execute_tab", "Execute SQL tab")
+        self.find_and_click(f"Click the {execute_tab} tab", execute_tab)
         if not self.find_and_click("Focus the SQL editor", "SQL editor text area"):
             logical_w, logical_h = pyautogui.size()
             fx, fy = int(logical_w * 0.5), int(logical_h * 0.45)
@@ -470,9 +501,10 @@ class VisionAgent:
         return re.sub(r"\s+", " ", text).strip().lower()
 
     def _read_editor_content(self) -> str:
-        """Ask the VLM for the exact text currently in the SQL editor."""
+        """Ask the VLM for the exact text currently in the editor."""
+        editor = self.profile.landmarks.get("editor", "the editable text area")
         prompt = (
-            "Read only the editable SQL text in the DB Browser for SQLite SQL editor. "
+            f"Read only the editable text in {editor} of {self.profile.app_name}. "
             "Ignore line numbers, UI chrome, prompts, and anything outside the editable text area. "
             "Return ONLY the exact editable text as a single code block."
         )
@@ -574,6 +606,107 @@ class VisionAgent:
             file=sys.stderr,
         )
         return False
+
+    @staticmethod
+    def _is_shifted_char(char: str) -> bool:
+        """Return True for characters that require holding Shift on a US keyboard."""
+        if char.isupper():
+            return True
+        return char in {
+            "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+",
+            "{", "}", "|", ":", "\"", "<", ">", "?",
+        }
+
+    def _type_segment_cadence(self, text: str) -> None:
+        """
+        Type ``text`` at a human cadence: ~0.04 s/char, slower on shifted chars.
+
+        Newlines are entered as explicit Return presses to keep the editor layout
+        intact. This is the primary explain-as-you-type path; paste is the fallback.
+        """
+        self._ensure_frontmost()
+        print(f"  [SEGMENT] typing {len(text)} characters", file=sys.stderr)
+        lines = text.split("\n")
+        for line_idx, line in enumerate(lines):
+            if line_idx > 0:
+                pyautogui.press("return")
+                time.sleep(0.1)
+            for char in line:
+                interval = 0.06 if self._is_shifted_char(char) else 0.04
+                pyautogui.typewrite(char, interval=0.0)
+                time.sleep(interval)
+        time.sleep(0.3)
+        self._dismiss_character_viewer()
+
+    def _undo_segment(self, segment_text: str) -> None:
+        """Best-effort undo of the just-typed segment using Cmd+Z."""
+        print("  [SEGMENT] undoing segment for retry", file=sys.stderr)
+        self._ensure_frontmost()
+        # One undo usually removes the last continuous text entry in DB Browser.
+        self.press_key("cmd+z")
+        time.sleep(0.2)
+
+    def type_segments(self, segments: List[Dict[str, Any]]) -> bool:
+        """
+        Type a list of segments into the editor, verifying after each one.
+
+        Each segment dict has:
+          - text: the text to type
+          - narration (optional): the narration line for the segment
+
+        On a segment mismatch the segment is undone and retyped (up to 2 tries).
+        After 2 segment failures the remaining intended text is pasted as a fallback.
+        """
+        if not segments:
+            return True
+
+        expected_sofar = ""
+        for seg_idx, segment in enumerate(segments):
+            text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
+            if not text:
+                continue
+            print(
+                f"  [SEGMENTS] segment {seg_idx + 1}/{len(segments)} ({len(text)} chars)",
+                file=sys.stderr,
+            )
+            segment_ok = False
+            for attempt in range(1, 3):
+                self._ensure_frontmost()
+                self._type_segment_cadence(text)
+                expected_sofar += text
+                read_back = self._read_editor_content()
+                if self._normalize_editor_text(expected_sofar) == self._normalize_editor_text(read_back):
+                    print(f"  [SEGMENTS] segment {seg_idx + 1} read-back OK", file=sys.stderr)
+                    segment_ok = True
+                    break
+                print(
+                    f"  [SEGMENTS] segment {seg_idx + 1} mismatch, retry {attempt}/2",
+                    file=sys.stderr,
+                )
+                # Undo the bad segment and retype it.
+                self._undo_segment(text)
+                expected_sofar = expected_sofar[: -len(text)]
+
+            if not segment_ok:
+                print(
+                    f"  [SEGMENTS] segment {seg_idx + 1} failed twice; falling back to paste",
+                    file=sys.stderr,
+                )
+                remaining = "".join(
+                    (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments[seg_idx:]
+                )
+                # Replace the current partial content with the full remaining text.
+                self._clear_editor()
+                self._paste_text(remaining)
+                read_back = self._read_editor_content()
+                if self._normalize_editor_text(remaining) == self._normalize_editor_text(read_back):
+                    print("  [SEGMENTS] paste fallback OK", file=sys.stderr)
+                    return True
+                print("  [SEGMENTS] paste fallback FAILED", file=sys.stderr)
+                return False
+
+        print("  [SEGMENTS] all segments typed and verified", file=sys.stderr)
+        return True
 
     def type_block(self, text: str) -> bool:
         """
@@ -686,10 +819,11 @@ class VisionAgent:
         return True
 
     def scroll_result_pane_top(self) -> bool:
-        """Scroll the Execute SQL result pane to the top row."""
+        """Scroll the result pane to the top row."""
         print("  [STAGE PREP] result pane scrolled to top", file=sys.stderr)
         try:
-            self.find_and_click("Focus the result pane", "results grid in the lower pane")
+            result_pane = self.profile.landmarks.get("result_pane", "the lower result pane")
+            self.find_and_click("Focus the result pane", result_pane)
         except Exception:
             logical_w, logical_h = pyautogui.size()
             fx, fy = int(logical_w * 0.5), int(logical_h * 0.75)
@@ -715,9 +849,10 @@ class VisionAgent:
         return dismissed
 
     def _results_visible(self) -> bool:
-        """Ask the VLM whether the lower result pane shows query output."""
+        """Ask the VLM whether the result pane shows query output."""
+        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
         check = self._call_vlm(
-            "Look at the DB Browser for SQLite window. Does the lower result pane "
+            f"Look at {result_pane} in {self.profile.app_name}. Does it "
             "show a populated results grid, or text saying a query finished with "
             "a row count (e.g., 'Result: N rows returned'), or text saying "
             "'Execution finished without errors'? "
@@ -738,23 +873,27 @@ class VisionAgent:
         self._ensure_frontmost()
         print("  [RUN QUERY] locating Execute/Run toolbar button", file=sys.stderr)
 
+        run_button = self.profile.landmarks.get(
+            "run_button",
+            "the Execute SQL toolbar button (blue play triangle / right-pointing arrow icon)",
+        )
         clicked = self.find_and_click(
             "Execute the SQL query in the editor",
-            "the Execute SQL toolbar button (blue play triangle / right-pointing arrow "
-            "icon) in the toolbar above the SQL editor",
+            run_button,
         )
 
         if clicked:
-            # Give DB Browser time to execute and render the result pane.
+            # Give the app time to execute and render the result pane.
             time.sleep(2.5)
             if self._results_visible():
                 print("  [RUN QUERY] results visible", file=sys.stderr)
                 return True
 
         print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
+        result_tab = self.profile.landmarks.get("result_tab", "the Result tab")
         if self.find_and_click(
             "Show the query results",
-            "the 'Result' tab in the lower results pane of DB Browser for SQLite",
+            f"{result_tab} in {self.profile.app_name}",
         ):
             time.sleep(1.0)
             if self._results_visible():
@@ -766,13 +905,14 @@ class VisionAgent:
 
     def summarize_result_pane(self) -> Dict[str, Any]:
         """
-        Ask the VLM to summarize the Execute SQL result pane.
+        Ask the VLM to summarize the result pane.
 
         Returns a dict with columns, row_count, first_rows, and a one-sentence
         summary. row_count may be an int, a string like 'N of M', or null.
         """
+        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
         prompt = (
-            "Look at the DB Browser for SQLite Execute SQL result pane and return "
+            f"Look at {result_pane} in {self.profile.app_name} and return "
             "ONLY a JSON object with this exact shape:\n\n"
             "{\n"
             '  "columns": ["col1", "col2", ...],\n'
@@ -882,7 +1022,7 @@ class VisionAgent:
     def summarize_observed_state(self) -> Dict[str, Any]:
         """Ask the VLM for a structured one-line summary of the current UI state."""
         prompt = (
-            "Look at this DB Browser for SQLite screenshot and return ONLY a JSON object "
+            f"Look at this {self.profile.app_name} screenshot and return ONLY a JSON object "
             "with this exact shape:\n\n"
             "{\n"
             '  "active_tab": "current tab name",\n'
@@ -968,7 +1108,7 @@ class VisionAgent:
     def is_modal_or_dropdown_open(self) -> bool:
         """Ask the VLM whether a transient dropdown/modal is open and should be dismissed."""
         prompt = (
-            "Look at this DB Browser for SQLite screenshot. "
+            f"Look at this {self.profile.app_name} screenshot. "
             "Is a transient dropdown menu, modal dialog, or popup currently open on top of the main window? "
             "Ignore the main application window, side panels, and table grids. "
             "Reply exactly YES or NO, nothing else."
@@ -1028,6 +1168,10 @@ class VisionAgent:
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
             return self.type_block(text)
 
+        if action_type == "type_segments":
+            segments = beat_dict.get("segments") or []
+            return self.type_segments(segments)
+
         if action_type == "append_block":
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
             return self.append_block(text)
@@ -1060,7 +1204,7 @@ class VisionAgent:
     def verify_app_visible_in_frames(
         self,
         frame_paths: List[str],
-        app_name: str = "DB Browser for SQLite",
+        app_name: Optional[str] = None,
     ) -> List[bool]:
         """
         Return a list of booleans indicating whether ``app_name`` is the visible
@@ -1070,10 +1214,11 @@ class VisionAgent:
         if not frame_paths:
             return []
 
+        app = app_name or self.profile.app_name
         results: List[bool] = []
         batch_size = 5
         prompt = (
-            f"For each screenshot in order, answer YES if the {app_name} window "
+            f"For each screenshot in order, answer YES if the {app} window "
             "is the visible application occupying the main area of the screen. "
             "Answer NO if another application, notification banner, overlay, or "
             "desktop is visible instead. "

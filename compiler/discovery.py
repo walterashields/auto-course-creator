@@ -39,7 +39,7 @@ import pyautogui
 from PIL import Image
 
 from .narrator import ScriptBeat
-from .schemas import DiscoveryResult, ScreenState
+from .schemas import DiscoveryResult, EnvironmentProfile, ScreenState
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
 from .vision_agent import VisionAgent
 
@@ -48,7 +48,6 @@ from .vision_agent import VisionAgent
 # ---------------------------------------------------------------------------
 
 SUPPORTED_APPLICATIONS = {"db_browser_sqlite"}
-APP_NAME = "DB Browser for SQLite"
 MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
 TARGET_LONG_EDGE = 1568
 MOTION_DIFF_THRESHOLD = 2.0  # Mean absolute grayscale frame diff used to detect action.
@@ -100,9 +99,9 @@ def _log_frontmost(frontmost_log_path: Path) -> None:
 
 
 def _clip_has_off_app_interval(
-    frontmost_log_path: Path, t0: float, t1: float
+    frontmost_log_path: Path, t0: float, t1: float, target_app_name: str
 ) -> bool:
-    """Return True if the sidecar records any interval in [t0, t1] not on DB Browser."""
+    """Return True if the sidecar records any interval in [t0, t1] not on the target app."""
     if not frontmost_log_path.exists():
         return False
     try:
@@ -118,7 +117,7 @@ def _clip_has_off_app_interval(
                     ts = float(parts[0])
                 except ValueError:
                     continue
-                if t0 <= ts <= t1 and parts[1] != APP_NAME:
+                if t0 <= ts <= t1 and parts[1] != target_app_name:
                     return True
     except Exception as exc:
         print(f"Warning: could not read frontmost log: {exc}", file=sys.stderr)
@@ -696,15 +695,15 @@ def _logical_screen_size() -> Tuple[int, int, float]:
         raise RuntimeError(f"Could not determine screen size: {exc}")
 
 
-def _find_db_browser() -> Optional[Path]:
-    """Return the path to DB Browser for SQLite if it appears to be installed."""
+def _find_db_browser(app_name: str = "DB Browser for SQLite") -> Optional[Path]:
+    """Return the path to the target database browser app if it appears installed."""
     # Try AppleScript's canonical path lookup first.
     try:
         out = subprocess.run(
             [
                 "osascript",
                 "-e",
-                f'POSIX path of (path to application "{APP_NAME}")',
+                f'POSIX path of (path to application "{app_name}")',
             ],
             capture_output=True,
             text=True,
@@ -719,8 +718,8 @@ def _find_db_browser() -> Optional[Path]:
 
     # Fall back to common install locations.
     candidates = [
-        Path("/Applications") / f"{APP_NAME}.app",
-        Path.home() / "Applications" / f"{APP_NAME}.app",
+        Path("/Applications") / f"{app_name}.app",
+        Path.home() / "Applications" / f"{app_name}.app",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -788,19 +787,6 @@ def _capture_screenshot(output_dir: Path) -> Tuple[str, int, int, float, Image.I
       - raw full-resolution PIL Image
       - raw full-resolution PNG bytes (for hashing and saving)
     """
-    # Keep DB Browser for SQLite front-most so every screenshot shows the UI
-    # under test, even if another application stole focus during the run.
-    try:
-        subprocess.run(
-            ["osascript", "-e", f'tell application "{APP_NAME}" to activate'],
-            check=False,
-            capture_output=True,
-            timeout=5,
-        )
-        time.sleep(0.2)
-    except Exception:
-        pass
-
     logical_w, logical_h, _ = _logical_screen_size()
     tmp_path = output_dir / f"_tmp_screenshot_{uuid.uuid4().hex}.png"
     try:
@@ -1129,6 +1115,14 @@ def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
     action = beat.action or {}
     if action.get("type") == "type_block":
         candidates.append(action.get("text") or action.get("detail") or "")
+    elif action.get("type") == "type_segments":
+        segments = action.get("segments") or []
+        candidates.append(
+            "".join(
+                (seg.get("text", "") if isinstance(seg, dict) else str(seg))
+                for seg in segments
+            )
+        )
     candidates.append(beat.text)
 
     for candidate in candidates:
@@ -1373,16 +1367,49 @@ class EndStateDiscovery:
         application: str,
         db_path: Optional[str] = None,
         opening_state_query: Optional[str] = None,
+        profile: Optional[EnvironmentProfile] = None,
     ):
         self.objective = objective
         self.application = application
         self.db_path = Path(db_path) if db_path else None
         self.opening_state_query = opening_state_query
+        self.profile = profile or self._default_profile_for_app(application)
         self.client = anthropic.Anthropic()
         self.output_dir = Path(__file__).resolve().parent / "discovery_output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.telemetry_path = self.output_dir / "telemetry.jsonl"
         self.attempt_logs: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _default_profile_for_app(application: str) -> EnvironmentProfile:
+        """Fallback profile for callers that do not inject one."""
+        if application == "db_browser_sqlite":
+            return EnvironmentProfile(
+                application=application,
+                app_name="DB Browser for SQLite",
+                focus_target="DB Browser for SQLite",
+                window_title_hint="DB Browser for SQLite",
+                landmarks={
+                    "editor": "the editable SQL text area in the Execute SQL tab",
+                    "run_button": "the Execute SQL toolbar button (blue play triangle / right-pointing arrow icon) above the SQL editor",
+                    "result_pane": "the lower result pane showing query output",
+                    "result_tab": "the Result tab in the lower results pane",
+                    "execute_tab": "Execute SQL tab",
+                    "browse_tab": "Browse Data tab",
+                },
+                grounding_channel={"type": "sqlite3"},
+                action_vocabulary=[
+                    "click", "type", "type_block", "append_block", "type_segments",
+                    "key", "run_query", "wait", "verify", "scroll",
+                ],
+            )
+        return EnvironmentProfile(
+            application=application,
+            app_name=application,
+            focus_target=application,
+            landmarks={},
+            grounding_channel={},
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -1681,7 +1708,7 @@ class EndStateDiscovery:
             state_id=state_id,
             screenshot_path=str(screenshot_path.resolve()),
             timestamp=0.0,
-            application="db_browser_sqlite",
+            application=self.application,
             platform_snapshot={
                 "api_width_px": api_w,
                 "api_height_px": api_h,
@@ -1903,7 +1930,7 @@ class EndStateDiscovery:
                     state_id=state_id,
                     screenshot_path=str(screenshot_path.resolve()),
                     timestamp=0.0,
-                    application="db_browser_sqlite",
+                    application=self.application,
                     platform_snapshot={
                         "api_width_px": api_w,
                         "api_height_px": api_h,
@@ -2062,9 +2089,9 @@ class EndStateDiscovery:
                 f"Supported: {', '.join(sorted(SUPPORTED_APPLICATIONS))}"
             )
 
-        db_browser_path = _find_db_browser()
+        db_browser_path = _find_db_browser(self.profile.app_name)
         if self.application == "db_browser_sqlite" and db_browser_path is None:
-            errors.append(f"{APP_NAME} does not appear to be installed.")
+            errors.append(f"{self.profile.app_name} does not appear to be installed.")
 
         if errors:
             for msg in errors:
@@ -2080,7 +2107,7 @@ class EndStateDiscovery:
                 db_path = _ensure_sample_db(self.output_dir)
             self._launch_app(db_path)
         except Exception as exc:
-            msg = f"Failed to launch {APP_NAME}: {exc}"
+            msg = f"Failed to launch {self.profile.app_name}: {exc}"
             print(f"Error: {msg}", file=sys.stderr)
             return self._make_result(success=False, reason=msg)
 
@@ -2181,7 +2208,7 @@ class EndStateDiscovery:
             state_id=state_id,
             screenshot_path=str(screenshot_path.resolve()),
             timestamp=0.0,
-            application="db_browser_sqlite",
+            application=self.application,
             platform_snapshot={
                 "api_width_px": api_w,
                 "api_height_px": api_h,
@@ -2195,6 +2222,16 @@ class EndStateDiscovery:
         print(f"End state discovered via script in {final_attempt} attempts: {self.objective}")
         return self._make_result(success=True, locked_state=screen_state, recipe=True)
 
+    @staticmethod
+    def _wrap_query_as_history(query_text: str) -> str:
+        """Wrap a prior query in a block comment for continuity display."""
+        text = query_text.strip()
+        if text.startswith("/*"):
+            end = text.find("*/")
+            if end != -1:
+                text = text[end + 2 :].strip()
+        return f"/*\n{text}\n*/"
+
     def _prepare_opening_state(
         self,
         beats: List[ScriptBeat],
@@ -2206,12 +2243,12 @@ class EndStateDiscovery:
         """
         Establish or adapt the UI state described by the first state beat.
 
-        Continuity-aware rendering: if the manifest provides an accumulated SQL
-        history, paste it commented out in the editor. Otherwise, if the opening
-        state beat assumes the Execute SQL tab is open with a prior query, type
-        that query and run it so the screen matches the narration. If all else
-        fails, summarize the actual screen so the post-discovery adapter can
-        rewrite the orientation.
+        Stage-matches-story: the opening screen must fully instantiate what the
+        state beat narrates. For continuity videos we paste the commented history,
+        run the immediate prerequisite query so the result pane is populated, then
+        re-paste the history with that query commented out. Finally we VLM-verify
+        the screen against the beat; on mismatch we try once to fix, then rewrite
+        the beat to match reality.
         """
         first_state = next((b for b in beats if b.kind == "state"), None)
         if first_state is None:
@@ -2222,9 +2259,10 @@ class EndStateDiscovery:
         self.new_query = new_query
 
         history_to_paste = opening_state_history
-        query_to_type = new_query or opening_state_query or self.opening_state_query
+        query_to_type = opening_state_query or self.opening_state_query
         text_lower = first_state.text.lower()
         observed: Dict[str, Any] = {}
+        execute_tab = self.profile.landmarks.get("execute_tab", "Execute SQL tab")
 
         def _log_and_store(strategy: str, reason: str) -> None:
             log_line = f"[OPENING STATE] {strategy}: {reason}"
@@ -2235,17 +2273,59 @@ class EndStateDiscovery:
             first_state.observed_state["opening_state_strategy"] = strategy
             first_state.observed_state["opening_state_log"] = log_line
 
-        # Case A: continuity-by-design. Paste the commented history into the editor.
+        def _verify_or_rewrite() -> None:
+            """VLM-verify the screen against the state beat and rewrite on mismatch."""
+            verified = agent.verify_state(first_state.text)
+            observed["opening_state_verified"] = verified
+            if verified:
+                return
+            print(
+                f"[OPENING STATE] verification mismatch for {first_state.beat_id}, "
+                "attempting one fix",
+                file=sys.stderr,
+            )
+            if query_to_type:
+                agent.append_block(query_to_type)
+                agent.execute_beat({"type": "run_query"})
+                verified = agent.verify_state(first_state.text)
+                observed["opening_state_verified"] = verified
+            if not verified:
+                summary = observed.get("summary", "")
+                if summary:
+                    first_state.text = (
+                        f"Our previous queries sit above, commented out. {summary}"
+                    )
+                else:
+                    first_state.text = (
+                        "Our previous queries sit above, commented out, and the "
+                        "result pane shows the prior query output."
+                    )
+                observed["opening_state_rewritten"] = True
+
+        # Case A: continuity-by-design. Paste the commented history, run the prior
+        # query to populate the result pane, then re-paste the history with the
+        # prior query commented out so the editor shows the full progression.
         if history_to_paste:
             agent.dismiss_transient_ui()
             agent.prepare_sql_editor()
             if agent.paste_history_block(history_to_paste):
+                if query_to_type:
+                    agent.append_block(query_to_type)
+                    agent.execute_beat({"type": "run_query"})
+                    full_history = (
+                        history_to_paste
+                        + "\n\n"
+                        + self._wrap_query_as_history(query_to_type)
+                    )
+                    agent.prepare_sql_editor()
+                    agent.paste_history_block(full_history)
                 agent.dismiss_transient_ui()
                 observed = agent.summarize_observed_state()
                 observed["history_pasted"] = True
+                _verify_or_rewrite()
                 _log_and_store(
-                    "established",
-                    "commented SQL history pasted into editor",
+                    "established" if observed.get("opening_state_verified") else "adapted",
+                    "continuity history + prior query results staged",
                 )
                 return
             else:
@@ -2253,7 +2333,7 @@ class EndStateDiscovery:
                 observed = agent.summarize_observed_state()
                 _log_and_store(
                     "adapted",
-                    "failed to paste SQL history; SQL editor cleared",
+                    "failed to paste SQL history; editor cleared",
                 )
                 return
 
@@ -2263,16 +2343,17 @@ class EndStateDiscovery:
             agent.prepare_sql_editor()
             agent.dismiss_transient_ui()
             observed = agent.summarize_observed_state()
+            _verify_or_rewrite()
             _log_and_store(
-                "adapted",
-                "opening state describes an empty editor; SQL editor cleared",
+                "established" if observed.get("opening_state_verified") else "adapted",
+                "opening state describes an empty editor; editor cleared",
             )
             return
 
-        # Case C: the script assumes the Execute SQL tab is open with a prior query.
+        # Case C: the script assumes the execution tab is open with a prior query.
         establish_phrases = (
-            "execute sql tab is still open",
-            "execute sql tab is open",
+            f"{execute_tab.lower()} is still open",
+            f"{execute_tab.lower()} is open",
             "editor still holds",
             "editor holds our",
             "editor shows our previous",
@@ -2281,15 +2362,16 @@ class EndStateDiscovery:
 
         if should_establish and query_to_type:
             agent.dismiss_transient_ui()
-            agent.find_and_click("Click the Execute SQL tab", "Execute SQL tab")
+            agent.find_and_click(f"Click the {execute_tab} tab", execute_tab)
             agent.prepare_sql_editor()
             if agent.type_block(query_to_type):
                 agent.execute_beat({"type": "run_query"})
                 agent.dismiss_transient_ui()
                 observed = agent.summarize_observed_state()
+                _verify_or_rewrite()
                 _log_and_store(
-                    "established",
-                    f"Execute SQL tab open, query={query_to_type[:80]}...",
+                    "established" if observed.get("opening_state_verified") else "adapted",
+                    f"{execute_tab} open, prior query executed",
                 )
                 return
             else:
@@ -2297,14 +2379,18 @@ class EndStateDiscovery:
                 observed = agent.summarize_observed_state()
                 _log_and_store(
                     "adapted",
-                    "failed to type prerequisite query; SQL editor cleared",
+                    "failed to type prerequisite query; editor cleared",
                 )
                 return
 
         # Case D: fresh or unknown orientation; summarize actual screen.
         agent.dismiss_transient_ui()
         observed = agent.summarize_observed_state()
-        _log_and_store("adapted", "orientation summarized from actual screen")
+        _verify_or_rewrite()
+        _log_and_store(
+            "established" if observed.get("opening_state_verified") else "adapted",
+            "orientation summarized from actual screen",
+        )
 
     def _reset_editor_for_retry(
         self,
@@ -2345,9 +2431,9 @@ class EndStateDiscovery:
                 f"Supported: {', '.join(sorted(SUPPORTED_APPLICATIONS))}"
             )
 
-        db_browser_path = _find_db_browser()
+        db_browser_path = _find_db_browser(self.profile.app_name)
         if self.application == "db_browser_sqlite" and db_browser_path is None:
-            errors.append(f"{APP_NAME} does not appear to be installed.")
+            errors.append(f"{self.profile.app_name} does not appear to be installed.")
 
         if errors:
             for msg in errors:
@@ -2363,13 +2449,13 @@ class EndStateDiscovery:
                 db_path = _ensure_sample_db(self.output_dir)
             self._launch_app(db_path)
         except Exception as exc:
-            msg = f"Failed to launch {APP_NAME}: {exc}"
+            msg = f"Failed to launch {self.profile.app_name}: {exc}"
             print(f"Error: {msg}", file=sys.stderr)
             return self._make_result(success=False, reason=msg)
 
         self._auto_fit_columns()
 
-        agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir))
+        agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir), profile=self.profile)
         frontmost_log_path = self.output_dir / f"frontmost_{run_id}.log"
         if frontmost_log_path.exists():
             frontmost_log_path.unlink()
@@ -2382,24 +2468,23 @@ class EndStateDiscovery:
             new_query=new_query,
         )
 
-        # Continuity-by-design: rewrite the first type_block demo beat so it
-        # appends the new query to the pasted history instead of replacing it.
-        if new_query:
+        # Continuity-by-design: if the first typing demo is a monolithic type_block,
+        # rewrite it to append the new query to the pasted history instead of
+        # replacing it. Segmented type_segments beats naturally append because the
+        # editor already contains the commented history after stage prep.
+        if new_query and opening_state_history:
             for beat in beats:
                 if beat.kind == "demo" and (beat.action or {}).get("type") == "type_block":
-                    if opening_state_history:
-                        beat.action = {
-                            "type": "append_block",
-                            "text": new_query,
-                            "detail": new_query,
-                        }
-                        print(
-                            f"[CONTINUITY] Rewrote {beat.beat_id} to append_block "
-                            f"for continuity-by-design",
-                            file=sys.stderr,
-                        )
-                    else:
-                        beat.action = {**beat.action, "text": new_query, "detail": new_query}
+                    beat.action = {
+                        "type": "append_block",
+                        "text": new_query,
+                        "detail": new_query,
+                    }
+                    print(
+                        f"[CONTINUITY] Rewrote {beat.beat_id} to append_block "
+                        f"for continuity-by-design",
+                        file=sys.stderr,
+                    )
                     break
 
         failed_reason = ""
@@ -2473,9 +2558,10 @@ class EndStateDiscovery:
 
                 recorder = ScreenRecorder(str(clip_path), fps=10)
                 if not skipped:
-                    # Stage prep before recording: clear editor for typing beats and
-                    # dismiss any transient UI that would clutter the captured frame.
-                    if action.get("type") == "type_block":
+                    # Stage prep before recording: clear editor for standalone typing
+                    # beats, but keep the commented history in place for continuity
+                    # videos. Dismiss any transient UI that would clutter the frame.
+                    if action.get("type") in ("type_block", "type_segments") and not self.opening_state_history:
                         agent.prepare_sql_editor()
                     else:
                         agent.dismiss_transient_ui()
@@ -2574,7 +2660,9 @@ class EndStateDiscovery:
                     break
 
                 if beat_ok:
-                    if _clip_has_off_app_interval(frontmost_log_path, clip_start, clip_end):
+                    if _clip_has_off_app_interval(
+                        frontmost_log_path, clip_start, clip_end, self.profile.app_name
+                    ):
                         print(
                             f"[OFF-APP] {beat.beat_id} attempt {retry + 1} recorded off-application frames",
                             file=sys.stderr,
@@ -2738,7 +2826,7 @@ class EndStateDiscovery:
             state_id=state_id,
             screenshot_path=str(screenshot_path.resolve()),
             timestamp=0.0,
-            application="db_browser_sqlite",
+            application=self.application,
             platform_snapshot={
                 "api_width_px": api_w,
                 "api_height_px": api_h,
@@ -2752,8 +2840,7 @@ class EndStateDiscovery:
         print(f"End state discovered via vision agent in {len(beats)} beats: {self.objective}")
         return self._make_result(success=True, locked_state=screen_state, recipe=True)
 
-    @staticmethod
-    def _intended_state_description(action: Dict[str, Any]) -> str:
+    def _intended_state_description(self, action: Dict[str, Any]) -> str:
         """Convert a demo action into a precise intended end-state description."""
         action_type = action.get("type")
         detail = action.get("action_detail") or action.get("detail") or ""
@@ -2794,7 +2881,10 @@ class EndStateDiscovery:
         if action_type == "filter_column":
             return f"the {action.get('table', '')} table is filtered by {action.get('column', '')} = {action.get('value', '')}"
         if action_type == "execute_query":
-            return "the Execute SQL tab shows query results"
+            execute_tab = self.profile.landmarks.get("execute_tab", "Execute SQL tab")
+            return f"the {execute_tab} tab shows query results"
+        if action_type == "type_segments":
+            return "the SQL editor contains the typed query"
         if action_type == "type":
             return f"'{detail}' has been typed into the active input"
         if action_type == "key":
@@ -3008,16 +3098,17 @@ class EndStateDiscovery:
         )
 
     def _launch_app(self, db_path: Path) -> None:
-        """Open DB Browser for SQLite on the provided database file."""
+        """Open the target application on the provided database file."""
+        app_name = self.profile.app_name
         subprocess.run(
-            ["open", "-a", APP_NAME, str(db_path)],
+            ["open", "-a", app_name, str(db_path)],
             check=True,
             capture_output=True,
             timeout=30,
         )
         time.sleep(6)
         subprocess.run(
-            ["osascript", "-e", f'tell application "{APP_NAME}" to activate'],
+            ["osascript", "-e", f'tell application "{app_name}" to activate'],
             check=True,
             capture_output=True,
             timeout=10,
@@ -3031,10 +3122,10 @@ class EndStateDiscovery:
                     "osascript",
                     "-e",
                     f"""
-                    tell application "{APP_NAME}" to activate
+                    tell application "{app_name}" to activate
                     delay 0.5
                     tell application "System Events"
-                        tell process "{APP_NAME}"
+                        tell process "{app_name}"
                             if exists (window 1) then
                                 set position of window 1 to {{0, 0}}
                                 set size of window 1 to {{1920, 1200}}
@@ -3068,8 +3159,8 @@ class EndStateDiscovery:
             return
 
         instruction = (
-            "Setup step for the recording: ensure all column headers in any visible "
-            "DB Browser table are wide enough to show their full names. If a table with "
+            f"Setup step for the recording: ensure all column headers in any visible "
+            f"{self.profile.app_name} table are wide enough to show their full names. If a table with "
             "columns is visible, double-click the border between each pair of column "
             "headers to auto-fit widths. If no table is visible, do nothing. When "
             "finished (or if nothing needs to be done), reply exactly: SETUP COMPLETE."
@@ -3142,7 +3233,7 @@ class EndStateDiscovery:
         a turn limit is reached. Returns True if any auto-fit was performed.
         """
         instruction = (
-            "Check this DB Browser screenshot. If a table with column headers is visible "
+            f"Check this {self.profile.app_name} screenshot. If a table with column headers is visible "
             "and any header text appears truncated (cut off with '...' or not fully readable), "
             "return ONE JSON action to double-click the border between two column headers to auto-fit: "
             '{"action": "double_click", "bbox": {"x": int, "y": int, "w": int, "h": int}}. '
@@ -3207,13 +3298,15 @@ class EndStateDiscovery:
 
     def _results_grid_visible(self, b64_image: str, max_retries: int = 2) -> bool:
         """
-        Ask the vision model whether the Execute SQL tab shows a populated
+        Ask the vision model whether the execution tab shows a populated
         results grid. Retry a few times because the model can be inconsistent.
         """
+        execute_tab = self.profile.landmarks.get("execute_tab", "Execute SQL tab")
+        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
         instruction = (
-            "Look at this DB Browser for SQLite screenshot. The Execute SQL tab is active "
-            "and a SQL query has just been executed. Look at the area below the SQL editor. "
-            "Reply exactly YES if you see any of the following: a table/grid of data rows, "
+            f"Look at this {self.profile.app_name} screenshot. The {execute_tab} tab is active "
+            "and a SQL query has just been executed. Look at the area below the editor. "
+            f"Reply exactly YES if you see any of the following in {result_pane}: a table/grid of data rows, "
             "or text saying 'Result: N rows returned', or 'Execution finished without errors'. "
             "Reply exactly NO only if the lower pane is completely empty or shows only "
             "the placeholder text 'Results of the last executed statements' with no data."

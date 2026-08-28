@@ -5,6 +5,9 @@ compiler/scout.py
 Environment scouting pass: observe the real application + database state before
 script generation so scripts can assert only observed facts and skip actions
 that are already satisfied by the default launch state.
+
+The scout is the ONLY module that is allowed to contain app-specific literals.
+It produces an EnvironmentProfile that drives the rest of the pipeline.
 """
 
 from __future__ import annotations
@@ -22,16 +25,21 @@ from typing import Any, Dict, List, Optional, Tuple
 import anthropic
 from PIL import Image
 
-from .discovery import APP_NAME, TARGET_LONG_EDGE, _capture_screenshot
+from .discovery import _capture_screenshot
+from .schemas import EnvironmentProfile
 
 MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
+
+# App-specific constants for DB Browser for SQLite live ONLY here.
+_DB_BROWSER_APP_NAME = "DB Browser for SQLite"
+_TARGET_LONG_EDGE = 1568
 
 
 def _quit_app_cleanly() -> None:
     """Best-effort polite quit of DB Browser so the real run starts fresh."""
     try:
         subprocess.run(
-            ["osascript", "-e", f'tell application "{APP_NAME}" to quit'],
+            ["osascript", "-e", f'tell application "{_DB_BROWSER_APP_NAME}" to quit'],
             capture_output=True,
             timeout=5,
         )
@@ -39,7 +47,7 @@ def _quit_app_cleanly() -> None:
         pass
     try:
         subprocess.run(
-            ["pkill", "-x", APP_NAME],
+            ["pkill", "-x", _DB_BROWSER_APP_NAME],
             capture_output=True,
             timeout=5,
         )
@@ -78,14 +86,14 @@ def _list_tables_and_counts(db_path: str) -> Tuple[List[str], Dict[str, List[str
 def _launch_app_for_scout(db_path: str) -> None:
     """Open DB Browser for SQLite on the provided database file."""
     subprocess.run(
-        ["open", "-a", APP_NAME, str(db_path)],
+        ["open", "-a", _DB_BROWSER_APP_NAME, str(db_path)],
         check=True,
         capture_output=True,
         timeout=30,
     )
     time.sleep(6)
     subprocess.run(
-        ["osascript", "-e", f'tell application "{APP_NAME}" to activate'],
+        ["osascript", "-e", f'tell application "{_DB_BROWSER_APP_NAME}" to activate'],
         check=True,
         capture_output=True,
         timeout=10,
@@ -99,10 +107,10 @@ def _launch_app_for_scout(db_path: str) -> None:
                 "osascript",
                 "-e",
                 f"""
-                tell application "{APP_NAME}" to activate
+                tell application "{_DB_BROWSER_APP_NAME}" to activate
                 delay 0.5
                 tell application "System Events"
-                    tell process "{APP_NAME}"
+                    tell process "{_DB_BROWSER_APP_NAME}"
                         if exists (window 1) then
                             set position of window 1 to {{0, 0}}
                             set size of window 1 to {{1920, 1200}}
@@ -120,15 +128,17 @@ def _launch_app_for_scout(db_path: str) -> None:
         pass
 
 
-def _vision_scout(client: anthropic.Anthropic, output_dir: Path) -> Dict[str, Any]:
-    """Ask Claude one question about the current DB Browser screenshot."""
-    b64, _, _, _, _, _ = _capture_screenshot(output_dir)
+def _vision_scout(client: anthropic.Anthropic, profile: EnvironmentProfile) -> Dict[str, Any]:
+    """Ask Claude one question about the current application screenshot."""
+    b64, _, _, _, _, _ = _capture_screenshot(Path(__file__).resolve().parent / "discovery_output")
+    app = profile.app_name
+    landmarks = profile.landmarks
     prompt = (
-        "You are observing DB Browser for SQLite immediately after launch. "
+        f"You are observing {app} immediately after launch. "
         "Look at the screenshot and answer with ONLY a JSON object in this exact shape:\n\n"
         "{\n"
         '  "active_tab": "Name of the currently selected tab",\n'
-        '  "available_tabs": ["Browse Data", "Edit Pragmas", ...],\n'
+        f'  "available_tabs": ["{landmarks.get("browse_tab", "Browse Data")}", ...],\n'
         '  "browse_data_default_table": "Name of the table shown in Browse Data, or null",\n'
         '  "notable": "Any visible UI state worth mentioning (open panels, dialogs, error messages, etc.)"\n'
         "}\n\n"
@@ -195,20 +205,54 @@ def _execute_planned_query(db_path: str, query: str) -> Dict[str, Any]:
     return result
 
 
+def _db_browser_profile(db_path: str) -> EnvironmentProfile:
+    """Build the DB Browser for SQLite environment profile."""
+    return EnvironmentProfile(
+        application="db_browser_sqlite",
+        app_name=_DB_BROWSER_APP_NAME,
+        focus_target=_DB_BROWSER_APP_NAME,
+        window_title_hint=_DB_BROWSER_APP_NAME,
+        landmarks={
+            "editor": "the editable SQL text area in the Execute SQL tab",
+            "run_button": "the Execute SQL toolbar button (blue play triangle / right-pointing arrow icon) above the SQL editor",
+            "result_pane": "the lower result pane showing query output",
+            "result_tab": "the Result tab in the lower results pane",
+            "execute_tab": "Execute SQL tab",
+            "browse_tab": "Browse Data tab",
+        },
+        grounding_channel={
+            "type": "sqlite3",
+            "db_path": str(Path(db_path).resolve()),
+        },
+        action_vocabulary=[
+            "click",
+            "type",
+            "type_block",
+            "append_block",
+            "type_segments",
+            "key",
+            "run_query",
+            "wait",
+            "verify",
+            "scroll",
+        ],
+    )
+
+
 def scout_environment(
     db_path: str,
     application: str,
     video_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
     planned_queries: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+) -> EnvironmentProfile:
     """
     Scout the environment for a single video.
 
-    Returns an EnvironmentMap dict with database facts (from sqlite3), UI
+    Returns an EnvironmentProfile with database facts (from sqlite3), UI
     facts (from one Claude vision call), and ground-truth results for any
-    planned queries. Also writes the map to
-    <output_dir>/<video_id>_env.json (or a generated id if video_id is None).
+    planned queries. Also writes the profile to
+    <output_dir>/<video_id>_profile.json (or a generated id if video_id is None).
 
     The application is launched, observed, and then quit cleanly so the real
     discovery run starts from a fresh state.
@@ -228,25 +272,24 @@ def scout_environment(
     for query in (planned_queries or []):
         query_results[query] = _execute_planned_query(db_path, query)
 
+    # Build the profile first so the vision scout can use it for prompts.
+    profile = _db_browser_profile(db_path)
+
     # Launch, observe, quit.
     _launch_app_for_scout(db_path)
     client = anthropic.Anthropic()
-    vision_facts = _vision_scout(client, discovery_output_dir)
+    vision_facts = _vision_scout(client, profile)
     _quit_app_cleanly()
 
-    env_map: Dict[str, Any] = {
-        "video_id": video_id,
-        "application": application,
-        "db_path": str(Path(db_path).resolve()),
-        "tables": tables,
-        "columns": columns,
-        "row_counts": row_counts,
-        "query_results": query_results,
-        "ui": vision_facts,
-    }
+    # Attach observed facts.
+    profile.tables = tables
+    profile.columns = columns
+    profile.row_counts = row_counts
+    profile.query_results = query_results
+    profile.ui = vision_facts
 
     env_id = video_id or f"scout_{uuid.uuid4().hex[:12]}"
-    env_path = output_dir / f"{env_id}_env.json"
-    env_path.write_text(json.dumps(env_map, indent=2), encoding="utf-8")
+    env_path = output_dir / f"{env_id}_profile.json"
+    env_path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
 
-    return env_map
+    return profile
