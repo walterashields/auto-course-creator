@@ -2793,6 +2793,7 @@ Return ONLY a JSON array of beats like:
         beats: List[ScriptBeat],
         discovery: EndStateDiscovery,
         db_path: Optional[str] = None,
+        opening_state_query: Optional[str] = None,
     ) -> DiscoveryResult:
         """
         Run the vision-agent script beats through the discovery harness.
@@ -2815,6 +2816,7 @@ Return ONLY a JSON array of beats like:
             beats=beats,
             visual_summary=discovery.objective,
             save_all_screenshots=True,
+            opening_state_query=opening_state_query,
         )
 
         # ADAPT narration for validation/concept beats that conflict with observed facts.
@@ -2834,6 +2836,15 @@ Return ONLY a JSON array of beats like:
         self._enforce_clip_truthfulness(beats)
         for beat in beats:
             if beat.kind == "concept" and beat.observed_state:
+                if self._beat_conflicts_with_observed_state(beat):
+                    self._rewrite_beat_from_observed(beat, "state")
+            # Continuity-aware rendering: opening state beats that could not be
+            # established must be rewritten to describe the actual screen.
+            if (
+                beat.kind == "state"
+                and beat.observed_state
+                and beat.observed_state.get("opening_state_strategy") == "adapted"
+            ):
                 if self._beat_conflicts_with_observed_state(beat):
                     self._rewrite_beat_from_observed(beat, "state")
 
@@ -2994,6 +3005,37 @@ Return ONLY a JSON array of beats like:
         # If beat states a count that isn't in the observed range text, flag it.
         for num in text_numbers:
             if num >= 10 and num not in observed_numbers:
+                return True
+
+        # UI element count assertions (e.g. "two tabs", "three buttons").
+        ui_counts = observed.get("ui_element_counts") or {}
+        written_numbers = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        }
+        count_pattern = re.compile(
+            r"\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+([a-z]{2,})"
+        )
+        for match in count_pattern.finditer(text):
+            count_str, noun = match.groups()
+            count = int(count_str) if count_str.isdigit() else written_numbers.get(count_str)
+            if count is None:
+                continue
+            noun_lower = noun.lower()
+            # Allow singular/plural mismatch between text and map keys.
+            keys_to_check = {noun_lower}
+            if noun_lower.endswith("s"):
+                keys_to_check.add(noun_lower[:-1])
+            else:
+                keys_to_check.add(noun_lower + "s")
+            matched_key = next((k for k in keys_to_check if k in ui_counts), None)
+            if matched_key is None:
+                # A state beat asserting a UI element count that is not grounded
+                # in the observed environment is treated as a conflict.
+                if beat.kind == "state":
+                    return True
+                continue
+            if ui_counts[matched_key] != count:
                 return True
 
         return False

@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -228,6 +229,18 @@ class VisionAgent:
             return False
 
         lx, ly = self._api_to_logical(point["x"], point["y"])
+        # Reject coordinates at the extreme corners; they usually mean the VLM
+        # could not find the element or DB Browser is not in focus.
+        sw, sh = pyautogui.size()
+        margin = 10
+        if lx <= margin and ly <= margin:
+            print(
+                f"Warning: VLM returned corner coordinates for '{element_description}'; "
+                "target application may not be in focus.",
+                file=sys.stderr,
+            )
+            return False
+
         print(f"  VLM click '{element_description}' at logical ({lx}, {ly})", file=sys.stderr)
 
         # Animate cursor for visibility in recordings.
@@ -248,13 +261,51 @@ class VisionAgent:
 
     def _dismiss_character_viewer(self) -> None:
         """Dismiss the macOS Character Viewer / Dictation dialog if it opened."""
-        for _ in range(3):
+        for _ in range(5):
             pyautogui.press("esc")
+            time.sleep(0.1)
+        # Press Return to dismiss Dictation, then Escape again.
+        pyautogui.press("return")
+        time.sleep(0.1)
+        pyautogui.press("esc")
+        time.sleep(0.1)
+        # Try to close any open Character Viewer window via AppleScript.
+        try:
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to if exists window "Character Viewer" of process "CharacterPalette" then click button 1 of window "Character Viewer" of process "CharacterPalette"',
+                ],
+                capture_output=True,
+                timeout=3,
+            )
+        except Exception:
+            pass
+        # Re-activate DB Browser in case dismissal shifted focus.
+        self._activate_db_browser()
+
+    def _activate_db_browser(self) -> None:
+        """Bring DB Browser for SQLite to the foreground via AppleScript."""
+        try:
+            subprocess.run(
+                ["osascript", "-e", 'tell application "DB Browser for SQLite" to activate'],
+                capture_output=True,
+                timeout=3,
+            )
             time.sleep(0.2)
+        except Exception:
+            pass
 
     def _focus_editor(self) -> None:
         """Click the SQL editor, falling back to a normalized center click."""
         print("  [TYPE BLOCK] focusing SQL editor", file=sys.stderr)
+        # Ensure DB Browser for SQLite is the active application so subsequent
+        # clicks and keystrokes go to the right window.
+        self._activate_db_browser()
+        # The SQL editor only exists on the Execute SQL tab; ensure it is active
+        # before trying to focus the editor area.
+        self.find_and_click("Click the Execute SQL tab", "Execute SQL tab")
         if not self.find_and_click("Focus the SQL editor", "SQL editor text area"):
             logical_w, logical_h = pyautogui.size()
             fx, fy = int(logical_w * 0.5), int(logical_h * 0.45)
@@ -273,19 +324,31 @@ class VisionAgent:
         time.sleep(0.2)
 
     def _type_visible(self, text: str) -> None:
-        """Type text at ~0.015 s/character so a learner can follow along."""
+        """Type text at ~0.03 s/character so a learner can follow along."""
         print(f"  [TYPE BLOCK] typing {len(text)} characters", file=sys.stderr)
-        pyautogui.typewrite(text, interval=0.015)
-        time.sleep(0.2)
+        self._activate_db_browser()
+        # Some SQLite editors drop newlines when they arrive too quickly via
+        # typewrite, so type each line and press Return explicitly between them.
+        lines = text.split("\n")
+        for idx, line in enumerate(lines):
+            if idx > 0:
+                pyautogui.press("return")
+                time.sleep(0.1)
+            if line:
+                pyautogui.typewrite(line, interval=0.03)
+        time.sleep(0.5)
         self._dismiss_character_viewer()
 
     def _paste_text(self, text: str) -> None:
         """Select all editor text and paste from the clipboard."""
         print("  [PASTE FALLBACK] selecting editor text and pasting from clipboard", file=sys.stderr)
         self._dismiss_character_viewer()
-        logical_w, logical_h = pyautogui.size()
-        pyautogui.tripleClick(int(logical_w * 0.12), int(logical_h * 0.22))
-        time.sleep(0.2)
+        self._activate_db_browser()
+        # Ensure the editor is focused and fully selected so the paste replaces
+        # rather than appends to existing text.
+        self._focus_editor()
+        self.press_key("cmd+a")
+        time.sleep(0.1)
         original_clipboard = pyperclip.paste()
         try:
             pyperclip.copy(text)
@@ -482,16 +545,18 @@ class VisionAgent:
         return True
 
     def dismiss_transient_ui(self) -> bool:
-        """Dismiss any open transient dropdown or modal before capturing state."""
+        """Dismiss any open transient dropdown, modal, or character viewer before capturing state."""
+        dismissed = False
         try:
             if self.is_modal_or_dropdown_open():
                 print("  [STAGE PREP] dismissed transient UI", file=sys.stderr)
                 self.press_key("esc")
                 time.sleep(0.3)
-                return True
+                dismissed = True
         except Exception as exc:
             print(f"Warning: transient UI dismiss check failed: {exc}", file=sys.stderr)
-        return False
+        self._dismiss_character_viewer()
+        return dismissed
 
     def run_query(self) -> bool:
         """
@@ -670,6 +735,7 @@ class VisionAgent:
             '  "row_range_text": "e.g. 1 - 20 of 20, or null",\n'
             '  "column_headers": ["col1", "col2", ...],\n'
             '  "modal_or_dropdown_open": true|false,\n'
+            '  "ui_element_counts": {"tabs": 2, "buttons": 5} or null,\n'
             '  "summary": "one concise sentence describing the visible state"\n'
             "}\n\n"
             "Use null for unknown values. Do not add any other text."
@@ -682,6 +748,7 @@ class VisionAgent:
             "row_range_text": None,
             "column_headers": [],
             "modal_or_dropdown_open": False,
+            "ui_element_counts": None,
             "summary": "",
         }
         import re as _re

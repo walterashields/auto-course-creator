@@ -353,6 +353,28 @@ def _close_application() -> None:
     time.sleep(2)
 
 
+def _derive_opening_state_query(
+    manifest: CourseManifest, video: VideoManifest
+) -> Optional[str]:
+    """
+    Return the last type_block query from the prerequisite video, if any.
+
+    This lets the discovery harness establish the UI state that the opening
+    state-beat describes (Execute SQL tab open with the previous query).
+    """
+    if not video.prerequisite_videos:
+        return None
+    prereq_id = video.prerequisite_videos[0]
+    prereq_video = next((v for v in manifest.videos if v.video_id == prereq_id), None)
+    if prereq_video is None or not prereq_video.script_beats:
+        return None
+    for beat_dict in reversed(prereq_video.script_beats):
+        action = beat_dict.get("action") or {}
+        if action.get("type") == "type_block":
+            return action.get("text")
+    return None
+
+
 def _cleanup_dir_contents(directory: Path) -> None:
     """
     Remove screenshots, videos, and temp files inside ``directory`` while
@@ -770,15 +792,18 @@ def run_course(
             raise RuntimeError(f"Script quality gate failed for {video.video_id}")
 
         # Phase 3: execute the script beats via the vision agent and record clips.
+        opening_state_query = _derive_opening_state_query(manifest, video)
         discovery = EndStateDiscovery(
             objective=video.discovery_objective,
             application=video.application,
             db_path=db_path,
+            opening_state_query=opening_state_query,
         )
         discovery_result = lesson_builder.execute_script(
             beats=script_beats,
             discovery=discovery,
             db_path=db_path,
+            opening_state_query=opening_state_query,
         )
 
         if not discovery_result.success:
@@ -795,6 +820,27 @@ def run_course(
                 f"Discovery reliability too low for {video.video_id}: "
                 f"{discovery_result.reliability_score:.2f}"
             )
+
+        # Phase 4b: per-video adaptation log (continuity-aware rendering).
+        adapt_log_path = course_output_dir / f"{graph_id}_adaptation.jsonl"
+        with open(adapt_log_path, "w", encoding="utf-8") as adapt_f:
+            for beat in script_beats:
+                observed = beat.observed_state or {}
+                adapt_f.write(
+                    json.dumps(
+                        {
+                            "video_id": video.video_id,
+                            "beat_id": beat.beat_id,
+                            "kind": beat.kind,
+                            "text": beat.text,
+                            "opening_state_strategy": observed.get("opening_state_strategy"),
+                            "opening_state_log": observed.get("opening_state_log"),
+                            "observed_state_summary": observed.get("summary"),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
 
         # Phase 5: build the ExecutionGraph from script beats and recorded clips.
         graph = lesson_builder.build_graph(

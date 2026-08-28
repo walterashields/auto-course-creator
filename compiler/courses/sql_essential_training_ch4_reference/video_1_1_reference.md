@@ -3,13 +3,13 @@
 **Title:** Your First Query
 **Learning objective:** Write and run your first SELECT query to return a customer contact list
 
-**Total words:** 405  
+**Total words:** 399  
 **Total beats:** 10
 
 | Beat | Kind | Words | Text | Action |
 |------|------|-------|------|--------|
 | beat_001 | opening | 43 | In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. The goal is to return only the columns we need from the Customer table, so the result is focused and immediately useful. | {"type": "wait", "duration": 1.5} |
-| beat_002 | state | 58 | DB Browser for SQLite opens with two tabs above the data view. Browse Data is on the left and shows raw table rows, while Execute SQL on the right opens the SQL editor on top and an empty result pane below. The toolbar sits above the tabs, and the editor is the large white area where we type. | {"type": "wait", "duration": 1.5} |
+| beat_002 | state | 52 | DB Browser for SQLite shows the Browse Data view and the Execute SQL view. Browse Data displays raw table rows, while Execute SQL opens the SQL editor on top and an empty result pane below. The toolbar sits above the view area, and the editor is the large white area where we type. | {"type": "wait", "duration": 1.5} |
 | beat_003 | explain | 54 | SELECT is the SQL command that chooses which columns to return, and FROM chooses which table holds those columns. Together they form the simplest useful query pattern: ask for specific data from one table. This keeps the result small and fast because the database does not waste time returning columns we do not need. | {"type": "wait", "duration": 1.5} |
 | beat_004 | state | 40 | Right now the editor is empty and the result pane below it is blank. When we finish, the editor will hold a comment block followed by a formatted SELECT statement, and the result pane will show the customer contact list. | {"type": "wait", "duration": 1.5} |
 | beat_005 | demo | 17 | We type a comment header and the formatted query as one contiguous block in the SQL editor. | {"type": "type_block", "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-27\nDescription: Customer contact list for management\n*/\n\nSELECT\n    FirstName,\n    LastName,\n    Email\nFROM Customer;"} |

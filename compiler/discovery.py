@@ -1311,10 +1311,12 @@ class EndStateDiscovery:
         objective: str,
         application: str,
         db_path: Optional[str] = None,
+        opening_state_query: Optional[str] = None,
     ):
         self.objective = objective
         self.application = application
         self.db_path = Path(db_path) if db_path else None
+        self.opening_state_query = opening_state_query
         self.client = anthropic.Anthropic()
         self.output_dir = Path(__file__).resolve().parent / "discovery_output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1956,6 +1958,7 @@ class EndStateDiscovery:
         script_beats: Optional[List[ScriptBeat]] = None,
         beat_for_action: Optional[List[Optional[ScriptBeat]]] = None,
         beats: Optional[List[ScriptBeat]] = None,
+        opening_state_query: Optional[str] = None,
     ) -> DiscoveryResult:
         """
         Execute a script and lock the resulting end state.
@@ -1976,6 +1979,7 @@ class EndStateDiscovery:
                 beats=beats,
                 visual_summary=visual_summary,
                 save_all_screenshots=save_all_screenshots,
+                opening_state_query=opening_state_query,
             )
 
         if actions is None:
@@ -2126,11 +2130,92 @@ class EndStateDiscovery:
         print(f"End state discovered via script in {final_attempt} attempts: {self.objective}")
         return self._make_result(success=True, locked_state=screen_state, recipe=True)
 
+    def _prepare_opening_state(
+        self,
+        beats: List[ScriptBeat],
+        agent: VisionAgent,
+        opening_state_query: Optional[str] = None,
+    ) -> None:
+        """
+        Establish or adapt the UI state described by the first state beat.
+
+        Continuity-aware rendering: if the opening state beat assumes the
+        Execute SQL tab is open with a previous query, type that query and run
+        it so the screen matches the narration. Otherwise summarize the actual
+        screen so the post-discovery adapter can rewrite the orientation.
+        """
+        first_state = next((b for b in beats if b.kind == "state"), None)
+        if first_state is None:
+            return
+
+        query_to_type = opening_state_query or self.opening_state_query
+        text_lower = first_state.text.lower()
+        observed: Dict[str, Any] = {}
+
+        def _log_and_store(strategy: str, reason: str) -> None:
+            log_line = f"[OPENING STATE] {strategy}: {reason}"
+            print(log_line, file=sys.stderr)
+            if first_state.observed_state is None:
+                first_state.observed_state = {}
+            first_state.observed_state.update(observed)
+            first_state.observed_state["opening_state_strategy"] = strategy
+            first_state.observed_state["opening_state_log"] = log_line
+
+        # Case A: the script claims the editor is empty/blank.
+        if "editor is empty" in text_lower or "editor is blank" in text_lower:
+            agent.dismiss_transient_ui()
+            agent.prepare_sql_editor()
+            agent.dismiss_transient_ui()
+            observed = agent.summarize_observed_state()
+            _log_and_store(
+                "adapted",
+                "opening state describes an empty editor; SQL editor cleared",
+            )
+            return
+
+        # Case B: the script assumes the Execute SQL tab is open with a prior query.
+        establish_phrases = (
+            "execute sql tab is still open",
+            "execute sql tab is open",
+            "editor still holds",
+            "editor holds our",
+            "editor shows our previous",
+        )
+        should_establish = any(phrase in text_lower for phrase in establish_phrases)
+
+        if should_establish and query_to_type:
+            agent.dismiss_transient_ui()
+            agent.find_and_click("Click the Execute SQL tab", "Execute SQL tab")
+            agent.prepare_sql_editor()
+            if agent.type_block(query_to_type):
+                agent.execute_beat({"type": "run_query"})
+                agent.dismiss_transient_ui()
+                observed = agent.summarize_observed_state()
+                _log_and_store(
+                    "established",
+                    f"Execute SQL tab open, query={query_to_type[:80]}...",
+                )
+                return
+            else:
+                agent.prepare_sql_editor()
+                observed = agent.summarize_observed_state()
+                _log_and_store(
+                    "adapted",
+                    "failed to type prerequisite query; SQL editor cleared",
+                )
+                return
+
+        # Case C: fresh or unknown orientation; summarize actual screen.
+        agent.dismiss_transient_ui()
+        observed = agent.summarize_observed_state()
+        _log_and_store("adapted", "orientation summarized from actual screen")
+
     def _execute_beats_with_agent(
         self,
         beats: List[ScriptBeat],
         visual_summary: Optional[str],
         save_all_screenshots: bool,
+        opening_state_query: Optional[str] = None,
     ) -> DiscoveryResult:
         """
         Execute a lesson-first script using the VisionAgent.
@@ -2174,6 +2259,10 @@ class EndStateDiscovery:
         self._auto_fit_columns()
 
         agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir))
+        self._prepare_opening_state(
+            beats, agent, opening_state_query=opening_state_query
+        )
+
         failed_reason = ""
         previous_observed_state: Optional[Dict[str, Any]] = None
         executed_demo_count = 0
@@ -2335,9 +2424,16 @@ class EndStateDiscovery:
                     observed = agent.summarize_observed_state()
                     # Preserve any SQL grounding data already attached to the beat.
                     prior_query_result = (beat.observed_state or {}).get("query_result")
+                    # Preserve continuity-aware opening-state metadata set during stage prep.
+                    prior_opening_strategy = (beat.observed_state or {}).get("opening_state_strategy")
+                    prior_opening_log = (beat.observed_state or {}).get("opening_state_log")
                     beat.observed_state = observed
                     if prior_query_result:
                         beat.observed_state["query_result"] = prior_query_result
+                    if prior_opening_strategy:
+                        beat.observed_state["opening_state_strategy"] = prior_opening_strategy
+                    if prior_opening_log:
+                        beat.observed_state["opening_state_log"] = prior_opening_log
                     previous_observed_state = observed
                     summary = observed.get("summary", "")
                     if summary:

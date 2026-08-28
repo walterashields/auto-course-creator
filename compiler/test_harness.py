@@ -623,6 +623,72 @@ class TestDatumLevelEchoDetection(unittest.TestCase):
             self.assertNotIn(name, beats[1].text)
 
 
+class TestUIGrounding(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_state_beat_with_ungrounded_ui_count_is_flagged(self) -> None:
+        """A state beat asserting a UI element count absent from observed state conflicts."""
+        beat = ScriptBeat(
+            beat_id="beat_002",
+            kind="state",
+            text="DB Browser for SQLite opens with two tabs above the data view.",
+            observed_state={
+                "active_tab": "Browse Data",
+                "visible_table": "Customer",
+                "row_range_text": "1 - 20 of 60",
+                "column_headers": ["FirstName", "LastName", "Email"],
+                "ui_element_counts": None,
+            },
+        )
+        self.assertTrue(self.builder._beat_conflicts_with_observed_state(beat))
+
+    def test_state_beat_with_mismatched_ui_count_is_flagged(self) -> None:
+        """A state beat asserting a UI element count that contradicts observed state conflicts."""
+        beat = ScriptBeat(
+            beat_id="beat_002",
+            kind="state",
+            text="DB Browser for SQLite opens with three tabs above the data view.",
+            observed_state={
+                "active_tab": "Browse Data",
+                "visible_table": "Customer",
+                "row_range_text": "1 - 20 of 60",
+                "column_headers": ["FirstName", "LastName", "Email"],
+                "ui_element_counts": {"tabs": 2},
+            },
+        )
+        self.assertTrue(self.builder._beat_conflicts_with_observed_state(beat))
+
+    def test_state_beat_with_matching_ui_count_is_not_flagged(self) -> None:
+        """A state beat asserting a UI element count that matches observed state is fine."""
+        beat = ScriptBeat(
+            beat_id="beat_002",
+            kind="state",
+            text="DB Browser for SQLite opens with two tabs above the data view.",
+            observed_state={
+                "active_tab": "Browse Data",
+                "visible_table": "Customer",
+                "row_range_text": "1 - 20 of 60",
+                "column_headers": ["FirstName", "LastName", "Email"],
+                "ui_element_counts": {"tabs": 2},
+            },
+        )
+        self.assertFalse(self.builder._beat_conflicts_with_observed_state(beat))
+
+    def test_non_state_beat_without_grounding_is_not_flagged(self) -> None:
+        """Concept/demo beats that mention counts without UI grounding are not auto-flagged."""
+        beat = ScriptBeat(
+            beat_id="beat_003",
+            kind="concept",
+            text="The toolbar shows several useful buttons for running queries.",
+            observed_state={
+                "active_tab": "Execute SQL",
+                "ui_element_counts": None,
+            },
+        )
+        self.assertFalse(self.builder._beat_conflicts_with_observed_state(beat))
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -636,6 +702,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityGate))
     suite.addTests(loader.loadTestsFromTestCase(TestEditorReadBack))
     suite.addTests(loader.loadTestsFromTestCase(TestDatumLevelEchoDetection))
+    suite.addTests(loader.loadTestsFromTestCase(TestUIGrounding))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1
