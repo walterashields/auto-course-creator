@@ -65,6 +65,67 @@ if not logger.handlers:
 
 
 # ---------------------------------------------------------------------------
+# Focus / frontmost-app helpers
+# ---------------------------------------------------------------------------
+
+
+def _frontmost_app_name() -> Optional[str]:
+    """Return the name of the current frontmost process via System Events."""
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to get name of first process whose frontmost is true',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or None
+    except Exception as exc:
+        print(f"Warning: could not determine frontmost app: {exc}", file=sys.stderr)
+        return None
+
+
+def _log_frontmost(frontmost_log_path: Path) -> None:
+    """Append the current frontmost app and timestamp to the run sidecar."""
+    frontmost = _frontmost_app_name()
+    try:
+        frontmost_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(frontmost_log_path, "a", encoding="utf-8") as f:
+            f.write(f"{time.time():.3f}\t{frontmost}\n")
+    except Exception as exc:
+        print(f"Warning: could not write frontmost log: {exc}", file=sys.stderr)
+
+
+def _clip_has_off_app_interval(
+    frontmost_log_path: Path, t0: float, t1: float
+) -> bool:
+    """Return True if the sidecar records any interval in [t0, t1] not on DB Browser."""
+    if not frontmost_log_path.exists():
+        return False
+    try:
+        with open(frontmost_log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t", 1)
+                if len(parts) != 2:
+                    continue
+                try:
+                    ts = float(parts[0])
+                except ValueError:
+                    continue
+                if t0 <= ts <= t1 and parts[1] != APP_NAME:
+                    return True
+    except Exception as exc:
+        print(f"Warning: could not read frontmost log: {exc}", file=sys.stderr)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Screen recording and cursor animation
 # ---------------------------------------------------------------------------
 
@@ -1959,6 +2020,8 @@ class EndStateDiscovery:
         beat_for_action: Optional[List[Optional[ScriptBeat]]] = None,
         beats: Optional[List[ScriptBeat]] = None,
         opening_state_query: Optional[str] = None,
+        opening_state_history: Optional[str] = None,
+        new_query: Optional[str] = None,
     ) -> DiscoveryResult:
         """
         Execute a script and lock the resulting end state.
@@ -1980,6 +2043,8 @@ class EndStateDiscovery:
                 visual_summary=visual_summary,
                 save_all_screenshots=save_all_screenshots,
                 opening_state_query=opening_state_query,
+                opening_state_history=opening_state_history,
+                new_query=new_query,
             )
 
         if actions is None:
@@ -2135,20 +2200,29 @@ class EndStateDiscovery:
         beats: List[ScriptBeat],
         agent: VisionAgent,
         opening_state_query: Optional[str] = None,
+        opening_state_history: Optional[str] = None,
+        new_query: Optional[str] = None,
     ) -> None:
         """
         Establish or adapt the UI state described by the first state beat.
 
-        Continuity-aware rendering: if the opening state beat assumes the
-        Execute SQL tab is open with a previous query, type that query and run
-        it so the screen matches the narration. Otherwise summarize the actual
-        screen so the post-discovery adapter can rewrite the orientation.
+        Continuity-aware rendering: if the manifest provides an accumulated SQL
+        history, paste it commented out in the editor. Otherwise, if the opening
+        state beat assumes the Execute SQL tab is open with a prior query, type
+        that query and run it so the screen matches the narration. If all else
+        fails, summarize the actual screen so the post-discovery adapter can
+        rewrite the orientation.
         """
         first_state = next((b for b in beats if b.kind == "state"), None)
         if first_state is None:
             return
 
-        query_to_type = opening_state_query or self.opening_state_query
+        # Persist for beat retries.
+        self.opening_state_history = opening_state_history
+        self.new_query = new_query
+
+        history_to_paste = opening_state_history
+        query_to_type = new_query or opening_state_query or self.opening_state_query
         text_lower = first_state.text.lower()
         observed: Dict[str, Any] = {}
 
@@ -2161,7 +2235,29 @@ class EndStateDiscovery:
             first_state.observed_state["opening_state_strategy"] = strategy
             first_state.observed_state["opening_state_log"] = log_line
 
-        # Case A: the script claims the editor is empty/blank.
+        # Case A: continuity-by-design. Paste the commented history into the editor.
+        if history_to_paste:
+            agent.dismiss_transient_ui()
+            agent.prepare_sql_editor()
+            if agent.paste_history_block(history_to_paste):
+                agent.dismiss_transient_ui()
+                observed = agent.summarize_observed_state()
+                observed["history_pasted"] = True
+                _log_and_store(
+                    "established",
+                    "commented SQL history pasted into editor",
+                )
+                return
+            else:
+                agent.prepare_sql_editor()
+                observed = agent.summarize_observed_state()
+                _log_and_store(
+                    "adapted",
+                    "failed to paste SQL history; SQL editor cleared",
+                )
+                return
+
+        # Case B: the script claims the editor is empty/blank.
         if "editor is empty" in text_lower or "editor is blank" in text_lower:
             agent.dismiss_transient_ui()
             agent.prepare_sql_editor()
@@ -2173,7 +2269,7 @@ class EndStateDiscovery:
             )
             return
 
-        # Case B: the script assumes the Execute SQL tab is open with a prior query.
+        # Case C: the script assumes the Execute SQL tab is open with a prior query.
         establish_phrases = (
             "execute sql tab is still open",
             "execute sql tab is open",
@@ -2205,10 +2301,20 @@ class EndStateDiscovery:
                 )
                 return
 
-        # Case C: fresh or unknown orientation; summarize actual screen.
+        # Case D: fresh or unknown orientation; summarize actual screen.
         agent.dismiss_transient_ui()
         observed = agent.summarize_observed_state()
         _log_and_store("adapted", "orientation summarized from actual screen")
+
+    def _reset_editor_for_retry(
+        self,
+        agent: VisionAgent,
+        opening_state_history: Optional[str],
+    ) -> None:
+        """Clear the SQL editor and, if a continuity history exists, re-paste it."""
+        agent.prepare_sql_editor()
+        if opening_state_history:
+            agent.type_block(opening_state_history)
 
     def _execute_beats_with_agent(
         self,
@@ -2216,6 +2322,8 @@ class EndStateDiscovery:
         visual_summary: Optional[str],
         save_all_screenshots: bool,
         opening_state_query: Optional[str] = None,
+        opening_state_history: Optional[str] = None,
+        new_query: Optional[str] = None,
     ) -> DiscoveryResult:
         """
         Execute a lesson-first script using the VisionAgent.
@@ -2223,6 +2331,9 @@ class EndStateDiscovery:
         Every beat gets its own recorded video clip. Demo beats drive dynamic UI
         actions; validation beats ask the VLM to confirm the screen state; opening
         and close beats record a short pause.
+
+        A frontmost-app sidecar log is kept so any clip that captures off-
+        application frames can be discarded and re-recorded.
         """
         run_id = uuid.uuid4().hex[:12]
         run_start = time.time()
@@ -2259,9 +2370,37 @@ class EndStateDiscovery:
         self._auto_fit_columns()
 
         agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir))
+        frontmost_log_path = self.output_dir / f"frontmost_{run_id}.log"
+        if frontmost_log_path.exists():
+            frontmost_log_path.unlink()
+
         self._prepare_opening_state(
-            beats, agent, opening_state_query=opening_state_query
+            beats,
+            agent,
+            opening_state_query=opening_state_query,
+            opening_state_history=opening_state_history,
+            new_query=new_query,
         )
+
+        # Continuity-by-design: rewrite the first type_block demo beat so it
+        # appends the new query to the pasted history instead of replacing it.
+        if new_query:
+            for beat in beats:
+                if beat.kind == "demo" and (beat.action or {}).get("type") == "type_block":
+                    if opening_state_history:
+                        beat.action = {
+                            "type": "append_block",
+                            "text": new_query,
+                            "detail": new_query,
+                        }
+                        print(
+                            f"[CONTINUITY] Rewrote {beat.beat_id} to append_block "
+                            f"for continuity-by-design",
+                            file=sys.stderr,
+                        )
+                    else:
+                        beat.action = {**beat.action, "text": new_query, "detail": new_query}
+                    break
 
         failed_reason = ""
         previous_observed_state: Optional[Dict[str, Any]] = None
@@ -2313,6 +2452,7 @@ class EndStateDiscovery:
                             beat.kind = "state"
                             beat.text = suggested
                             beat.action = {"type": "wait", "duration": 1.5}
+                            action = beat.action
                             beat.video_clip_path = None
                     except Exception as exc:
                         print(
@@ -2324,97 +2464,138 @@ class EndStateDiscovery:
                     print(f"  [skip-check] {beat.beat_id}: not checked because {why}", file=sys.stderr)
 
             clip_path = self.output_dir / f"{run_id}_{beat.beat_id}.mp4"
-            recorder = ScreenRecorder(str(clip_path), fps=10)
-            if not skipped:
-                # Stage prep before recording: clear editor for typing beats and
-                # dismiss any transient UI that would clutter the captured frame.
-                if action.get("type") == "type_block":
-                    agent.prepare_sql_editor()
-                agent.dismiss_transient_ui()
-                recorder.start()
-            beat_ok = skipped  # skipped beats are treated as already succeeded
-            try:
-                print(
-                    f"  Executing beat {beat.beat_id} ({beat.kind}): {beat.text[:60]}",
-                    file=sys.stderr,
-                )
+            beat_failed = False
+
+            for retry in range(2):
+                beat_ok = False
+                if retry > 0 and not skipped:
+                    self._reset_editor_for_retry(agent, self.opening_state_history)
+
+                recorder = ScreenRecorder(str(clip_path), fps=10)
                 if not skipped:
-                    for attempt in range(3):
-                        if agent.execute_beat(action):
-                            beat_ok = True
-                            break
+                    # Stage prep before recording: clear editor for typing beats and
+                    # dismiss any transient UI that would clutter the captured frame.
+                    if action.get("type") == "type_block":
+                        agent.prepare_sql_editor()
+                    else:
+                        agent.dismiss_transient_ui()
+                    recorder.start()
+                clip_start = time.time()
+
+                try:
+                    print(
+                        f"  Executing beat {beat.beat_id} ({beat.kind}): {beat.text[:60]}",
+                        file=sys.stderr,
+                    )
+                    if not skipped:
+                        for attempt in range(3):
+                            if agent.execute_beat(action):
+                                beat_ok = True
+                                break
+                            print(
+                                f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
+                                file=sys.stderr,
+                            )
+                            time.sleep(0.5)
+
+                        if not beat_ok:
+                            recovery = agent.ask_recovery(
+                                f"Beat {beat.beat_id} ({beat.kind}): {beat.text}"
+                            )
+                            if recovery:
+                                print(f"  Attempting recovery for {beat.beat_id}", file=sys.stderr)
+                                if not agent.execute_beat(recovery):
+                                    failed_reason = (
+                                        f"Beat {beat.beat_id} failed and recovery did not succeed"
+                                    )
+                                    beat_failed = True
+                                    break
+                            else:
+                                failed_reason = (
+                                    f"Beat {beat.beat_id} failed and no recovery action was returned"
+                                )
+                                beat_failed = True
+                                break
+
+                        if beat_ok and beat.kind == "demo":
+                            executed_demo_count += 1
+
+                            # Stage prep after a successful action.
+                            if action.get("type") == "run_query":
+                                agent.scroll_result_pane_top()
+                            agent.dismiss_transient_ui()
+
+                            # Persist the verified editor content for type_block beats.
+                            if action.get("type") == "type_block":
+                                intended = (
+                                    action.get("text") or action.get("detail") or ""
+                                ).strip()
+                                if intended:
+                                    if beat.observed_state is None:
+                                        beat.observed_state = {}
+                                    beat.observed_state["editor_content"] = intended
+
+                            # Keep recorder running while the UI settles so the clip
+                            # captures the settled end state rather than cutting off
+                            # while animations or loading are still in progress.
+                            self._wait_for_visual_stability(
+                                interval_seconds=0.4,
+                                timeout_seconds=4.0,
+                                frontmost_log_path=frontmost_log_path,
+                            )
+
+                            # --- SQL result grounding --------------------------------
+                            # Only auto-run and ground when the beat actually contains a
+                            # runnable SELECT statement. Comment blocks and prose beats
+                            # should not trigger an execution.
+                            sql_for_grounding = _extract_sql_query(beat)
+                            if sql_for_grounding:
+                                try:
+                                    agent.run_query()
+                                    pane_summary = agent.summarize_result_pane()
+                                    if beat.observed_state is None:
+                                        beat.observed_state = {}
+                                    beat.observed_state["query_result"] = pane_summary
+                                    db_path_str = str(self.db_path) if self.db_path else None
+                                    _ground_query_result(beat, db_path_str)
+                                except Exception as exc:
+                                    print(
+                                        f"Warning: SQL grounding failed for {beat.beat_id}: {exc}",
+                                        file=sys.stderr,
+                                    )
+                    else:
+                        beat_ok = True
+                finally:
+                    if not skipped:
+                        recorder.stop()
+                clip_end = time.time()
+
+                if skipped:
+                    break
+
+                if beat_ok:
+                    if _clip_has_off_app_interval(frontmost_log_path, clip_start, clip_end):
                         print(
-                            f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
+                            f"[OFF-APP] {beat.beat_id} attempt {retry + 1} recorded off-application frames",
                             file=sys.stderr,
                         )
-                        time.sleep(0.5)
-
-                    if not beat_ok:
-                        recovery = agent.ask_recovery(
-                            f"Beat {beat.beat_id} ({beat.kind}): {beat.text}"
-                        )
-                        if recovery:
-                            print(f"  Attempting recovery for {beat.beat_id}", file=sys.stderr)
-                            if not agent.execute_beat(recovery):
-                                failed_reason = (
-                                    f"Beat {beat.beat_id} failed and recovery did not succeed"
-                                )
-                                break
+                        if retry < 1:
+                            beat_ok = False
+                            continue
                         else:
                             failed_reason = (
-                                f"Beat {beat.beat_id} failed and no recovery action was returned"
+                                f"[OFF-APP] {beat.beat_id} recorded off-application frames after retries"
                             )
+                            beat_failed = True
                             break
+                    else:
+                        if clip_path.exists():
+                            self._trim_clip_to_motion(clip_path)
+                            beat.video_clip_path = str(clip_path.resolve())
+                        break
 
-                    if beat_ok and beat.kind == "demo":
-                        executed_demo_count += 1
-
-                        # Stage prep after a successful action.
-                        if action.get("type") == "run_query":
-                            agent.scroll_result_pane_top()
-                        agent.dismiss_transient_ui()
-
-                        # Persist the verified editor content for type_block beats.
-                        if action.get("type") == "type_block":
-                            intended = (
-                                action.get("text") or action.get("detail") or ""
-                            ).strip()
-                            if intended:
-                                if beat.observed_state is None:
-                                    beat.observed_state = {}
-                                beat.observed_state["editor_content"] = intended
-
-                        # Keep recorder running while the UI settles so the clip
-                        # captures the stable result state, not transient motion.
-                        self._wait_for_visual_stability(
-                            interval_seconds=0.4, timeout_seconds=4.0
-                        )
-
-                        # --- SQL result grounding --------------------------------
-                        # Only auto-run and ground when the beat actually contains a
-                        # runnable SELECT statement. Comment blocks and prose beats
-                        # should not trigger an execution.
-                        sql_for_grounding = _extract_sql_query(beat)
-                        if sql_for_grounding:
-                            try:
-                                agent.run_query()
-                                pane_summary = agent.summarize_result_pane()
-                                if beat.observed_state is None:
-                                    beat.observed_state = {}
-                                beat.observed_state["query_result"] = pane_summary
-                                db_path_str = str(self.db_path) if self.db_path else None
-                                _ground_query_result(beat, db_path_str)
-                            except Exception as exc:
-                                print(
-                                    f"Warning: SQL grounding failed for {beat.beat_id}: {exc}",
-                                    file=sys.stderr,
-                                )
-            finally:
-                if not skipped:
-                    recorder.stop()
-                    if beat_ok and clip_path.exists():
-                        self._trim_clip_to_motion(clip_path)
-                        beat.video_clip_path = str(clip_path.resolve())
+            if beat_failed:
+                break
 
             # --- OBSERVE after state/demo/validation beats --------------------
             if beat_ok and beat.kind in ("state", "demo", "validation"):
@@ -2427,6 +2608,7 @@ class EndStateDiscovery:
                     # Preserve continuity-aware opening-state metadata set during stage prep.
                     prior_opening_strategy = (beat.observed_state or {}).get("opening_state_strategy")
                     prior_opening_log = (beat.observed_state or {}).get("opening_state_log")
+                    prior_history_pasted = (beat.observed_state or {}).get("history_pasted")
                     beat.observed_state = observed
                     if prior_query_result:
                         beat.observed_state["query_result"] = prior_query_result
@@ -2434,6 +2616,8 @@ class EndStateDiscovery:
                         beat.observed_state["opening_state_strategy"] = prior_opening_strategy
                     if prior_opening_log:
                         beat.observed_state["opening_state_log"] = prior_opening_log
+                    if prior_history_pasted:
+                        beat.observed_state["history_pasted"] = prior_history_pasted
                     previous_observed_state = observed
                     summary = observed.get("summary", "")
                     if summary:
@@ -2446,6 +2630,9 @@ class EndStateDiscovery:
 
             if failed_reason:
                 return self._make_result(success=False, reason=failed_reason)
+
+        if failed_reason:
+            return self._make_result(success=False, reason=failed_reason)
 
         # TIDY end state: dismiss any open dropdown/modal before final capture.
         try:
@@ -2472,11 +2659,35 @@ class EndStateDiscovery:
         if _is_execute_query_objective(self.objective):
             if not self._results_grid_visible(b64):
                 print(
-                    "Warning: no results grid visible after query execution; retrying F5...",
+                    "Warning: no results grid visible after query execution; "
+                    "asking VLM to click the Result tab...",
                     file=sys.stderr,
                 )
-                _press_key("F5")
-                time.sleep(1.5)
+                result = agent._call_vlm(
+                    "Return ONLY a JSON object with the coordinates of the 'Result' tab "
+                    "in the lower results pane of DB Browser for SQLite: "
+                    '{"action": "click", "point": {"x": int, "y": int}}. '
+                    'If you do not see it, return {"action": "none"}.',
+                    expect_json=True,
+                    max_tokens=128,
+                )
+                action = result.action
+                if action and action.get("action") == "click" and "point" in action:
+                    point = action["point"]
+                    lx = point["x"] * scale_to_logical
+                    ly = point["y"] * scale_to_logical
+                    _click(lx, ly)
+                    print(
+                        f"  Clicked Result tab at ({lx:.0f}, {ly:.0f})",
+                        file=sys.stderr,
+                    )
+                    time.sleep(1.5)
+                else:
+                    print(
+                        "  VLM did not find Result tab; continuing without click",
+                        file=sys.stderr,
+                    )
+
                 try:
                     b64, api_w, api_h, scale_to_logical, raw_img, raw_bytes = _capture_screenshot(
                         self.output_dir
@@ -2661,18 +2872,22 @@ class EndStateDiscovery:
         timeout_seconds: float = 4.0,
         stability_threshold: float = 1.0,
         stable_frames_required: int = 2,
+        frontmost_log_path: Optional[Path] = None,
     ) -> None:
         """
         Poll screenshots until the UI stops changing or a timeout is reached.
 
         The recorder (if running) keeps capturing during this window so the
         resulting clip includes the settled end state rather than cutting off
-        while animations or loading are still in progress.
+        while animations or loading are still in progress. The frontmost app is
+        logged at every poll so off-application intervals can be detected and cut.
         """
         start = time.time()
         prev_gray: Optional[np.ndarray] = None
         stable_frames = 0
         while time.time() - start < timeout_seconds:
+            if frontmost_log_path is not None:
+                _log_frontmost(frontmost_log_path)
             try:
                 _, _, _, _, raw_img, _ = _capture_screenshot(self.output_dir)
                 gray = np.array(raw_img.convert("L"))

@@ -22,13 +22,13 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from compiler.curriculum import _dict_to_script_beat, load_manifest
-from compiler.discovery import EndStateDiscovery
+from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, load_manifest
+from compiler.discovery import EndStateDiscovery, _clip_has_off_app_interval
 from compiler.lesson_builder import LessonBuilder
 from compiler.narrator import ScriptBeat
 from compiler.renderer import GraphRenderer
 from compiler.tts import TTSGenerator
-from compiler.vision_agent import VisionAgent
+from compiler.vision_agent import VisionAgent, VisionAgentResult
 
 
 # ---------------------------------------------------------------------------
@@ -689,6 +689,88 @@ class TestUIGrounding(unittest.TestCase):
         self.assertFalse(self.builder._beat_conflicts_with_observed_state(beat))
 
 
+class TestFrontmostGate(unittest.TestCase):
+    def test_clean_interval_returns_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "frontmost.log"
+            log.write_text(
+                "1000.000\tDB Browser for SQLite\n"
+                "1001.000\tDB Browser for SQLite\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(_clip_has_off_app_interval(log, 1000.0, 1002.0))
+
+    def test_off_app_interval_returns_true(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "frontmost.log"
+            log.write_text(
+                "1000.000\tDB Browser for SQLite\n"
+                "1001.000\tLaunchpad\n"
+                "1002.000\tDB Browser for SQLite\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(_clip_has_off_app_interval(log, 999.0, 1003.0))
+
+
+class TestPasteAirlock(unittest.TestCase):
+    def test_type_block_uses_paste_not_typewrite(self) -> None:
+        """SQL type_block must paste from the clipboard, never type characters."""
+        agent = VisionAgent()
+        with (
+            mock.patch.object(agent, "_clear_editor") as mock_clear,
+            mock.patch.object(agent, "_paste_text") as mock_paste,
+            mock.patch.object(agent, "_type_visible") as mock_type_visible,
+            mock.patch.object(
+                agent, "_read_editor_content", return_value="SELECT * FROM Orders;"
+            ),
+            mock.patch.object(agent, "press_key") as mock_press,
+            mock.patch("compiler.vision_agent.pyautogui.typewrite") as mock_typewrite,
+        ):
+            result = agent.type_block("SELECT * FROM Orders;")
+            self.assertTrue(result)
+            mock_paste.assert_called_once_with("SELECT * FROM Orders;")
+            mock_type_visible.assert_not_called()
+            mock_typewrite.assert_not_called()
+            mock_press.assert_called_with("esc")
+
+
+class TestRunQuery(unittest.TestCase):
+    def test_run_query_does_not_press_f5(self) -> None:
+        """run_query must click the Execute/Run toolbar button, never F5."""
+        agent = VisionAgent()
+        click_action = {"action": "click", "point": {"x": 100, "y": 100}}
+
+        def vlm_side_effect(prompt: str, **kwargs: Any) -> VisionAgentResult:
+            if "Execute SQL toolbar button" in prompt:
+                return VisionAgentResult(action=click_action, text="")
+            return VisionAgentResult(text="YES")
+
+        with (
+            mock.patch.object(agent, "_call_vlm", side_effect=vlm_side_effect),
+            mock.patch.object(agent, "_ensure_frontmost"),
+            mock.patch("compiler.vision_agent.pyautogui.moveTo"),
+            mock.patch("compiler.vision_agent.pyautogui.click"),
+            mock.patch.object(agent, "press_key") as mock_press,
+        ):
+            self.assertTrue(agent.run_query())
+            for call in mock_press.call_args_list:
+                self.assertNotEqual(str(call.args[0]).upper(), "F5")
+
+
+class TestWholeVideoFrameGate(unittest.TestCase):
+    def test_bad_frame_raises_runtime_error(self) -> None:
+        """If the VLM reports a frame without DB Browser, the gate must raise."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video = _make_video(Path(tmpdir) / "clip.mp4", duration=6.0)
+            with mock.patch.object(
+                VisionAgent,
+                "verify_app_visible_in_frames",
+                return_value=[True, True, False],
+            ):
+                with self.assertRaises(RuntimeError):
+                    _verify_video_frames_show_app(str(video), interval=2.0)
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -703,6 +785,10 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestEditorReadBack))
     suite.addTests(loader.loadTestsFromTestCase(TestDatumLevelEchoDetection))
     suite.addTests(loader.loadTestsFromTestCase(TestUIGrounding))
+    suite.addTests(loader.loadTestsFromTestCase(TestFrontmostGate))
+    suite.addTests(loader.loadTestsFromTestCase(TestPasteAirlock))
+    suite.addTests(loader.loadTestsFromTestCase(TestRunQuery))
+    suite.addTests(loader.loadTestsFromTestCase(TestWholeVideoFrameGate))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1

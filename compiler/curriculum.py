@@ -14,9 +14,10 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,7 @@ from .narrator import ScriptBeat
 from .renderer import GraphRenderer
 from .scout import scout_environment
 from .tts import TTSGenerator
+from .vision_agent import VisionAgent
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +377,199 @@ def _derive_opening_state_query(
     return None
 
 
+def _strip_outer_comment_block(text: str) -> str:
+    """Remove a leading /* ... */ wrapper so the text can be re-wrapped safely."""
+    text = text.strip()
+    if text.startswith("/*"):
+        end = text.find("*/")
+        if end != -1:
+            text = text[end + 2 :].strip()
+    return text
+
+
+def _wrap_query_as_history(query_text: str) -> str:
+    """Return a prior query wrapped in a block comment for continuity display."""
+    stripped = _strip_outer_comment_block(query_text)
+    return f"/*\n{stripped}\n*/"
+
+
+def _derive_sql_history(
+    manifest: CourseManifest, video: VideoManifest
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Return (commented_history, new_query) for continuity-by-design.
+
+    ``commented_history`` is the concatenation of all prerequisite videos'
+    final SQL queries, each wrapped in /* ... */. ``new_query`` is the current
+    video's final SQL query (comment block + query) as it should appear below
+    the history.
+    """
+
+    def _final_query_of(v: VideoManifest) -> Optional[str]:
+        if not v.script_beats:
+            if v.planned_queries:
+                return v.planned_queries[0]
+            return None
+        for beat_dict in reversed(v.script_beats):
+            action = beat_dict.get("action") or {}
+            if action.get("type") in ("type_block", "execute_query"):
+                return action.get("text") or action.get("query")
+        if v.planned_queries:
+            return v.planned_queries[0]
+        return None
+
+    by_id = {v.video_id: v for v in manifest.videos}
+
+    # Collect the full prerequisite chain in dependency order.
+    prior: List[VideoManifest] = []
+    seen: set = set()
+
+    def _visit(vid: str) -> None:
+        if vid in seen:
+            return
+        seen.add(vid)
+        v = by_id.get(vid)
+        if not v:
+            return
+        for prereq in v.prerequisite_videos:
+            _visit(prereq)
+        prior.append(v)
+
+    for prereq_id in video.prerequisite_videos:
+        _visit(prereq_id)
+
+    history_parts: List[str] = []
+    for v in prior:
+        q = _final_query_of(v)
+        if q:
+            history_parts.append(_wrap_query_as_history(q))
+
+    history = "\n\n".join(history_parts) if history_parts else None
+    new_query = _final_query_of(video)
+    return history, new_query
+
+
+def _assert_recording_hygiene() -> None:
+    """
+    Pre-flight assertion that the recording environment is clean.
+
+    Raises RuntimeError if an overlay window or notification is visible, because
+    the off-app frame gate can only cut frames that are already recorded; a
+    notification at run start must be cleared before recording begins.
+    """
+    # Do Not Disturb / Focus state (best-effort on macOS).
+    dnd_state = "unknown"
+    try:
+        result = subprocess.run(
+            ["defaults", "read", "com.apple.controlcenter", "NSStatusItem Visible FocusModes"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        dnd_state = result.stdout.strip() or "unknown"
+    except Exception as exc:
+        dnd_state = f"could not determine ({exc})"
+
+    print(f"[RECORDING HYGIENE] Do Not Disturb/Focus: {dnd_state}", file=sys.stderr)
+
+    # Overlay window check via VLM.
+    overlay_detected = False
+    try:
+        agent = VisionAgent()
+        b64 = agent.screenshot()
+        prompt = (
+            "The target application is DB Browser for SQLite, which is allowed to be on "
+            "screen. Look at this screenshot and answer: is there any notification banner, "
+            "Messages conversation window, FaceTime overlay, Character Viewer, or window "
+            "from any OTHER application covering DB Browser for SQLite? "
+            "Reply exactly YES or NO, nothing else."
+        )
+        result = agent._call_vlm(prompt, expect_json=False, max_tokens=32)
+        overlay_detected = result.text.strip().upper().startswith("YES")
+    except Exception as exc:
+        # If we cannot verify, treat as a blocker to avoid shipping private UI.
+        raise RuntimeError(f"[RECORDING HYGIENE] Could not verify overlay state: {exc}")
+
+    print(
+        f"[RECORDING HYGIENE] Overlay windows detected: {overlay_detected}",
+        file=sys.stderr,
+    )
+    if overlay_detected:
+        raise RuntimeError(
+            "[RECORDING HYGIENE] Overlay window or notification detected. "
+            "Clear all notifications and non-target windows, then retry."
+        )
+
+
+def _verify_video_frames_show_app(
+    video_path: str,
+    interval: float = 5.0,
+    bad_frame_dir: Optional[Path] = None,
+) -> List[float]:
+    """
+    Sample the rendered video every ``interval`` seconds and ask the VLM whether
+    each frame shows DB Browser for SQLite. Return a list of offending timestamps.
+
+    Raises RuntimeError if any sampled frame does not show the target application.
+    """
+    if not Path(video_path).exists():
+        return []
+
+    if bad_frame_dir is None:
+        bad_frame_dir = Path(__file__).resolve().parent / "discovery_output" / "guard_bad_frames"
+    bad_frame_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="wsda_frames_") as tmpdir:
+        # Extract frames at the requested interval.
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                video_path,
+                "-vf",
+                f"fps=1/{interval}",
+                "-pix_fmt",
+                "rgb24",
+                f"{tmpdir}/frame_%04d.png",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+
+        frame_paths = sorted(Path(tmpdir).glob("frame_*.png"))
+        if not frame_paths:
+            return []
+
+        agent = VisionAgent()
+        visible = agent.verify_app_visible_in_frames([str(p) for p in frame_paths])
+
+        bad_timestamps: List[float] = []
+        for idx, is_visible in enumerate(visible):
+            if not is_visible:
+                ts = round(idx * interval, 2)
+                bad_timestamps.append(ts)
+                src = frame_paths[idx]
+                dst = bad_frame_dir / f"{Path(video_path).stem}_frame_{idx:04d}_{ts:.2f}s.png"
+                shutil.copy(str(src), str(dst))
+
+    if bad_timestamps:
+        print(
+            f"[POST-RENDER GUARD] bad frames at timestamps (s): {bad_timestamps}",
+            file=sys.stderr,
+        )
+        raise RuntimeError(
+            f"Video {video_path} contains off-application frames at {bad_timestamps}"
+        )
+
+    print(
+        f"[POST-RENDER GUARD] all {len(visible)} sampled frames show DB Browser",
+        file=sys.stderr,
+    )
+    return bad_timestamps
+
+
 def _cleanup_dir_contents(directory: Path) -> None:
     """
     Remove screenshots, videos, and temp files inside ``directory`` while
@@ -693,6 +888,9 @@ def run_course(
     # Set up run.log after cleanup so it survives the fresh-start wipe.
     _setup_run_log(course_output_dir)
 
+    # Recording-hygiene assertion: DND/Focus state and overlay-window check.
+    _assert_recording_hygiene()
+
     # Resolve video order early so we can ensure each video's seed DB exists.
     ordered_videos = _video_order(manifest)
     for video in ordered_videos:
@@ -793,6 +991,13 @@ def run_course(
 
         # Phase 3: execute the script beats via the vision agent and record clips.
         opening_state_query = _derive_opening_state_query(manifest, video)
+        opening_state_history, new_query = _derive_sql_history(manifest, video)
+        if opening_state_history:
+            print(
+                f"  [CONTINUITY] {video.video_id}: pasted history length "
+                f"{len(opening_state_history)} chars, new query length {len(new_query or '')} chars",
+                file=sys.stderr,
+            )
         discovery = EndStateDiscovery(
             objective=video.discovery_objective,
             application=video.application,
@@ -804,6 +1009,8 @@ def run_course(
             discovery=discovery,
             db_path=db_path,
             opening_state_query=opening_state_query,
+            opening_state_history=opening_state_history,
+            new_query=new_query,
         )
 
         if not discovery_result.success:
@@ -896,6 +1103,14 @@ def run_course(
         # locked end-state screenshot. A mismatch means the renderer did not end
         # on the discovered objective state.
         _verify_final_frame_matches_locked_state(video_path, discovery_result)
+
+        # Whole-video off-application frame gate: sample the silent/raw MP4 and
+        # fail if any frame does not show DB Browser for SQLite.
+        try:
+            _verify_video_frames_show_app(video_path, interval=5.0)
+        except RuntimeError as exc:
+            print(f"FAILED (whole-video off-app frame gate): {exc}", file=sys.stderr)
+            raise
 
         duration = render_result.get("duration", 0.0)
         logging.info(

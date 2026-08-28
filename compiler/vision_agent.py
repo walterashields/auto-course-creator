@@ -20,11 +20,11 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import anthropic
 import pyautogui
-import pyperclip
 from PIL import Image
 
 TARGET_LONG_EDGE = 1568
@@ -42,6 +42,10 @@ class VisionAgentResult:
     latency: float = 0.0
 
 
+class FocusLostError(Exception):
+    """Raised when DB Browser for SQLite cannot be kept frontmost."""
+
+
 class VisionAgent:
     """
     Use a vision model to see the screen and produce UI actions.
@@ -51,6 +55,8 @@ class VisionAgent:
     - The model returns points in this resized (API) coordinate space.
     - The agent scales those points back to macOS logical points for pyautogui.
     """
+
+    APP_NAME = "DB Browser for SQLite"
 
     def __init__(self, model: str = DEFAULT_MODEL, output_dir: Optional[str] = None):
         self.client = anthropic.Anthropic()
@@ -107,6 +113,62 @@ class VisionAgent:
             "w": int(round(bbox.get("w", 0) * self.scale_to_logical)),
             "h": int(round(bbox.get("h", 0) * self.scale_to_logical)),
         }
+
+    # ------------------------------------------------------------------
+    # Focus discipline
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _frontmost_app_name() -> Optional[str]:
+        """Return the name of the current frontmost process via System Events."""
+        try:
+            result = subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to get name of first process whose frontmost is true',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.stdout.strip() or None
+        except Exception as exc:
+            print(f"Warning: could not determine frontmost app: {exc}", file=sys.stderr)
+            return None
+
+    def _ensure_frontmost(self, max_attempts: int = 3) -> None:
+        """
+        Assert DB Browser for SQLite is frontmost before any input action.
+
+        If it is not, re-activate by application name only. After ``max_attempts``
+        failed recovery attempts, raise ``FocusLostError`` so the caller can abort
+        the beat. Recovery never clicks elsewhere on screen.
+        """
+        for attempt in range(1, max_attempts + 1):
+            frontmost = self._frontmost_app_name()
+            if frontmost == self.APP_NAME:
+                return
+            print(
+                f"  [FOCUS] frontmost is {frontmost!r}, activating {self.APP_NAME} "
+                f"(attempt {attempt}/{max_attempts})",
+                file=sys.stderr,
+            )
+            self._activate_db_browser()
+            time.sleep(0.3)
+        raise FocusLostError(f"{self.APP_NAME} could not be kept frontmost")
+
+    def _activate_db_browser(self) -> None:
+        """Bring DB Browser for SQLite to the foreground via AppleScript."""
+        try:
+            subprocess.run(
+                ["osascript", "-e", f'tell application "{self.APP_NAME}" to activate'],
+                capture_output=True,
+                timeout=3,
+            )
+            time.sleep(0.2)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # VLM communication
@@ -201,6 +263,8 @@ class VisionAgent:
             instruction: High-level instruction (e.g., "Open the Customers table").
             element_description: What to click (e.g., "Browse Data tab").
         """
+        self._ensure_frontmost()
+
         prompt = (
             f"You are a UI automation assistant controlling DB Browser for SQLite.\n"
             f"Task: {instruction}\n"
@@ -208,7 +272,7 @@ class VisionAgent:
             "Return ONLY a JSON object with this exact shape:\n"
             '{"action": "click", "point": {"x": int, "y": int}, '
             '"element_type": "tab|button|column_header|table_cell|filter_box|menu_item|other", '
-            '"description": "brief label"}\n\n'
+            '"description": "brief label"}\n\n"'
             "The point must be the center of the element in the screenshot coordinate space "
             "(top-left is 0,0; x increases right; y increases down). Do not add any other text."
         )
@@ -253,6 +317,7 @@ class VisionAgent:
         """Type text at the current keyboard focus."""
         if not text:
             return True
+        self._ensure_frontmost()
         print(f"  Typing: {text[:80]!r}", file=sys.stderr)
         # pyautogui handles newlines and special characters better than AppleScript.
         pyautogui.typewrite(text, interval=0.005)
@@ -285,24 +350,10 @@ class VisionAgent:
         # Re-activate DB Browser in case dismissal shifted focus.
         self._activate_db_browser()
 
-    def _activate_db_browser(self) -> None:
-        """Bring DB Browser for SQLite to the foreground via AppleScript."""
-        try:
-            subprocess.run(
-                ["osascript", "-e", 'tell application "DB Browser for SQLite" to activate'],
-                capture_output=True,
-                timeout=3,
-            )
-            time.sleep(0.2)
-        except Exception:
-            pass
-
     def _focus_editor(self) -> None:
         """Click the SQL editor, falling back to a normalized center click."""
         print("  [TYPE BLOCK] focusing SQL editor", file=sys.stderr)
-        # Ensure DB Browser for SQLite is the active application so subsequent
-        # clicks and keystrokes go to the right window.
-        self._activate_db_browser()
+        self._ensure_frontmost()
         # The SQL editor only exists on the Execute SQL tab; ensure it is active
         # before trying to focus the editor area.
         self.find_and_click("Click the Execute SQL tab", "Execute SQL tab")
@@ -317,6 +368,7 @@ class VisionAgent:
     def _clear_editor(self) -> None:
         """Focus the SQL editor, select all, and delete any existing text."""
         print("  [TYPE BLOCK] clearing editor", file=sys.stderr)
+        self._ensure_frontmost()
         self._dismiss_character_viewer()
         self._focus_editor()
         self.press_key("cmd+a")
@@ -324,9 +376,14 @@ class VisionAgent:
         time.sleep(0.2)
 
     def _type_visible(self, text: str) -> None:
-        """Type text at ~0.03 s/character so a learner can follow along."""
+        """
+        Type text at ~0.03 s/character so a learner can follow along.
+
+        Deprecated for SQL: ``type_block`` now pastes to avoid mangled characters.
+        Kept for short non-SQL keystrokes and legacy callers.
+        """
         print(f"  [TYPE BLOCK] typing {len(text)} characters", file=sys.stderr)
-        self._activate_db_browser()
+        self._ensure_frontmost()
         # Some SQLite editors drop newlines when they arrive too quickly via
         # typewrite, so type each line and press Return explicitly between them.
         lines = text.split("\n")
@@ -339,25 +396,71 @@ class VisionAgent:
         time.sleep(0.5)
         self._dismiss_character_viewer()
 
+    @staticmethod
+    def _copy_to_clipboard(text: str) -> None:
+        """Copy text to the macOS clipboard using pbcopy."""
+        subprocess.run(
+            ["pbcopy"],
+            input=text.encode("utf-8"),
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+
+    @staticmethod
+    def _read_clipboard() -> str:
+        """Return the current macOS clipboard contents using pbpaste."""
+        try:
+            result = subprocess.run(
+                ["pbpaste"],
+                capture_output=True,
+                timeout=5,
+            )
+            return result.stdout.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
     def _paste_text(self, text: str) -> None:
         """Select all editor text and paste from the clipboard."""
-        print("  [PASTE FALLBACK] selecting editor text and pasting from clipboard", file=sys.stderr)
+        print("  [PASTE] selecting editor text and pasting from clipboard", file=sys.stderr)
+        self._ensure_frontmost()
         self._dismiss_character_viewer()
-        self._activate_db_browser()
         # Ensure the editor is focused and fully selected so the paste replaces
         # rather than appends to existing text.
         self._focus_editor()
         self.press_key("cmd+a")
         time.sleep(0.1)
-        original_clipboard = pyperclip.paste()
+        original_clipboard = self._read_clipboard()
         try:
-            pyperclip.copy(text)
+            self._copy_to_clipboard(text)
             time.sleep(0.1)
             pyautogui.hotkey("command", "v")
             time.sleep(0.4)
         finally:
             try:
-                pyperclip.copy(original_clipboard)
+                self._copy_to_clipboard(original_clipboard)
+            except Exception:
+                pass
+
+    def _append_text(self, text: str) -> None:
+        """Paste text at the current cursor position without clearing the editor."""
+        print("  [APPEND] pasting new query at cursor", file=sys.stderr)
+        self._ensure_frontmost()
+        self._dismiss_character_viewer()
+        self._focus_editor()
+        # Move cursor to the end of the existing editor text so the new query is
+        # appended below the commented history.
+        self.press_key("cmd+end")
+        time.sleep(0.1)
+        original_clipboard = self._read_clipboard()
+        try:
+            self._copy_to_clipboard(text)
+            time.sleep(0.1)
+            pyautogui.hotkey("command", "v")
+            time.sleep(0.4)
+        finally:
+            try:
+                self._copy_to_clipboard(original_clipboard)
             except Exception:
                 pass
 
@@ -474,15 +577,14 @@ class VisionAgent:
 
     def type_block(self, text: str) -> bool:
         """
-        Type a multi-line SQL block visibly into the active editor with read-back
+        Paste a multi-line SQL block into the active editor with read-back
         and layout verification.
 
         ``text`` is the FULL block: comment header and query together. The editor
-        is cleared, the block is typed, and the VLM reads back the entire editor
-        content. The read-back must match the intended text AND keep the query
-        adjacent to the comment block (one blank line max). Up to two retries are
-        attempted; if they all fail the method falls back to clipboard paste with
-        the same layout check.
+        is cleared, the block is pasted from the clipboard, and the VLM reads back
+        the entire editor content. The read-back must match the intended text AND
+        keep the query adjacent to the comment block. One retry is attempted; on
+        failure the method returns False so the caller can abort the beat.
         """
         if not text:
             return True
@@ -491,7 +593,7 @@ class VisionAgent:
             return self._verify_editor_layout(text, read_text)
 
         self._clear_editor()
-        self._type_visible(text)
+        self._paste_text(text)
 
         for attempt in range(1, 3):
             read_back = self._read_editor_content()
@@ -510,17 +612,71 @@ class VisionAgent:
                 file=sys.stderr,
             )
             self._clear_editor()
-            self._type_visible(text)
+            self._paste_text(text)
 
-        print("  [TYPE BLOCK] read-back FAILED", file=sys.stderr)
-        self._paste_text(text)
-        read_back = self._read_editor_content()
-        if _matches(read_back):
-            print("  [TYPE BLOCK] paste fallback OK", file=sys.stderr)
-            print("  [TYPE BLOCK] line-adjacency OK", file=sys.stderr)
-            self.press_key("esc")
-            print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
+        print("  [TYPE BLOCK] paste verification FAILED", file=sys.stderr)
+        return False
+
+    def paste_history_block(self, text: str) -> bool:
+        """
+        Paste a long commented SQL history into the editor without full read-back.
+
+        Continuity history can be taller than the editor viewport, so the VLM read-
+        back used by ``type_block`` may only see the tail and fail. This method
+        clears the editor and pastes deterministically, then does a cheap end-of-
+        document check (cursor at end, last line visible). It does NOT verify the
+        full history content.
+        """
+        if not text:
             return True
+        self._ensure_frontmost()
+        print("  [PASTE HISTORY] clearing editor and pasting commented history", file=sys.stderr)
+        self._clear_editor()
+        self._paste_text(text)
+        # Move cursor to the end so the next append_block lands after the history.
+        self.press_key("cmd+end")
+        time.sleep(0.2)
+        print("  [PASTE HISTORY] done", file=sys.stderr)
+        return True
+
+    def append_block(self, text: str) -> bool:
+        """
+        Append a SQL block at the end of the editor without clearing existing text.
+
+        Used for continuity-by-design: the commented history is already in the
+        editor, and this method pastes only the new query below it. The read-back
+        must end with the new query text.
+        """
+        if not text:
+            return True
+
+        self._append_text(text)
+
+        for attempt in range(1, 3):
+            read_back = self._read_editor_content()
+            normalized_intended = self._normalize_editor_text(text)
+            normalized_actual = self._normalize_editor_text(read_back)
+            if normalized_actual.endswith(normalized_intended):
+                print("  [APPEND] read-back OK", file=sys.stderr)
+                self.press_key("esc")
+                return True
+            print(
+                f"  [APPEND] read-back mismatch, retry {attempt}/2",
+                file=sys.stderr,
+            )
+            print(
+                f"  [APPEND] read-back normalized: {normalized_actual!r}",
+                file=sys.stderr,
+            )
+            print(
+                f"  [APPEND] intended suffix:      {normalized_intended!r}",
+                file=sys.stderr,
+            )
+            # Re-focus and re-append; duplicates are possible but the suffix check
+            # will still pass if the final text is correct.
+            self._append_text(text)
+
+        print("  [APPEND] paste verification FAILED", file=sys.stderr)
         return False
 
     def prepare_sql_editor(self) -> bool:
@@ -558,56 +714,55 @@ class VisionAgent:
         self._dismiss_character_viewer()
         return dismissed
 
-    def run_query(self) -> bool:
-        """
-        Execute the SQL in the active editor.
-
-        First tries the F5 shortcut. If the VLM later reports no results, falls
-        back to asking the VLM for the Execute/Run button coordinates and clicking.
-        """
-        print("  [RUN QUERY] pressing F5", file=sys.stderr)
-        self.press_key("F5")
-        time.sleep(1.5)
-
-        # Quick heuristic: if results are visible we are done.
-        # Ask the VLM whether a populated result pane is present.
-        result = self._call_vlm(
+    def _results_visible(self) -> bool:
+        """Ask the VLM whether the lower result pane shows query output."""
+        check = self._call_vlm(
             "Look at the DB Browser for SQLite window. Does the lower result pane "
             "show a populated results grid, or text saying a query finished with "
-            "a row count, or text saying 'Execution finished without errors'? "
+            "a row count (e.g., 'Result: N rows returned'), or text saying "
+            "'Execution finished without errors'? "
             "Reply exactly YES or NO, nothing else.",
             expect_json=False,
             max_tokens=32,
         )
-        if result.text.strip().upper().startswith("YES"):
-            print("  [RUN QUERY] F5 path succeeded", file=sys.stderr)
-            return True
+        return check.text.strip().upper().startswith("YES")
 
-        print("  [RUN QUERY] F5 path did not show results; falling back to VLM result-tab click", file=sys.stderr)
-        # The query may have executed but the results pane could be showing the
-        # Execution Log tab. Ask the VLM for the Result tab coordinates.
-        result = self._call_vlm(
-            "Return ONLY a JSON object with the coordinates of the 'Result' tab in the "
-            "lower results pane of DB Browser for SQLite: "
-            '{"action": "click", "point": {"x": int, "y": int}}. '
-            "If you do not see a Result tab, return coordinates of the Execute/Run button "
-            "in the toolbar instead. Do not add any other text.",
-            expect_json=True,
-            max_tokens=256,
+    def run_query(self) -> bool:
+        """
+        Execute the SQL in the active editor by clicking the Execute/Run toolbar button.
+
+        No function keys are used. The button is located by the VLM using the same
+        prompting and corner-rejection logic as ``find_and_click``. If the result
+        pane does not populate, the VLM is asked to click the Result tab.
+        """
+        self._ensure_frontmost()
+        print("  [RUN QUERY] locating Execute/Run toolbar button", file=sys.stderr)
+
+        clicked = self.find_and_click(
+            "Execute the SQL query in the editor",
+            "the Execute SQL toolbar button (blue play triangle / right-pointing arrow "
+            "icon) in the toolbar above the SQL editor",
         )
-        action = result.action
-        if action:
-            point = action.get("point") or action
-            if isinstance(point, dict) and "x" in point and "y" in point:
-                lx, ly = self._api_to_logical(point["x"], point["y"])
-                print(f"  [RUN QUERY] clicking at logical ({lx}, {ly})", file=sys.stderr)
-                pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
-                pyautogui.click(lx, ly)
-                time.sleep(1.0)
+
+        if clicked:
+            # Give DB Browser time to execute and render the result pane.
+            time.sleep(2.5)
+            if self._results_visible():
+                print("  [RUN QUERY] results visible", file=sys.stderr)
                 return True
 
-        print("  Warning: VLM did not return a point for run_query; assuming F5 executed", file=sys.stderr)
-        return True
+        print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
+        if self.find_and_click(
+            "Show the query results",
+            "the 'Result' tab in the lower results pane of DB Browser for SQLite",
+        ):
+            time.sleep(1.0)
+            if self._results_visible():
+                print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
+                return True
+
+        print("  Warning: VLM did not find Execute/Run button or Result tab", file=sys.stderr)
+        return False
 
     def summarize_result_pane(self) -> Dict[str, Any]:
         """
@@ -650,7 +805,7 @@ class VisionAgent:
         return data
 
     def press_key(self, key: str) -> bool:
-        """Press a single key or key chord (e.g., 'Return', 'F5', 'cmd+a')."""
+        """Press a single key or key chord (e.g., 'Return', 'cmd+a')."""
         key = key.strip()
         print(f"  Pressing key: {key!r}", file=sys.stderr)
 
@@ -873,6 +1028,10 @@ class VisionAgent:
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
             return self.type_block(text)
 
+        if action_type == "append_block":
+            text = beat_dict.get("text") or beat_dict.get("detail") or ""
+            return self.append_block(text)
+
         if action_type == "run_query":
             return self.run_query()
 
@@ -897,6 +1056,87 @@ class VisionAgent:
 
         print(f"Warning: unknown vision-agent action_type {action_type!r}", file=sys.stderr)
         return False
+
+    def verify_app_visible_in_frames(
+        self,
+        frame_paths: List[str],
+        app_name: str = "DB Browser for SQLite",
+    ) -> List[bool]:
+        """
+        Return a list of booleans indicating whether ``app_name`` is the visible
+        application in each frame path. Frames are processed in batches to keep
+        each VLM call small.
+        """
+        if not frame_paths:
+            return []
+
+        results: List[bool] = []
+        batch_size = 5
+        prompt = (
+            f"For each screenshot in order, answer YES if the {app_name} window "
+            "is the visible application occupying the main area of the screen. "
+            "Answer NO if another application, notification banner, overlay, or "
+            "desktop is visible instead. "
+            "Return ONLY a JSON list of booleans in the same order, e.g. [true, false, true]. "
+            "Do not add any other text."
+        )
+
+        for i in range(0, len(frame_paths), batch_size):
+            batch = frame_paths[i : i + batch_size]
+            content: List[Dict[str, Any]] = []
+            for path in batch:
+                try:
+                    b64 = base64.standard_b64encode(Path(path).read_bytes()).decode("utf-8")
+                    content.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": b64,
+                            },
+                        }
+                    )
+                except Exception as exc:
+                    print(f"Warning: could not read frame {path}: {exc}", file=sys.stderr)
+                    content.append(
+                        {"type": "text", "text": "[frame unreadable; assume false]"}
+                    )
+            content.append({"type": "text", "text": prompt})
+
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=256,
+                    messages=[{"role": "user", "content": content}],
+                )
+            except Exception as exc:
+                print(f"Warning: VLM frame verification failed: {exc}", file=sys.stderr)
+                results.extend([False] * len(batch))
+                continue
+
+            text_parts = [block.text for block in response.content if block.type == "text"]
+            full_text = "\n".join(text_parts).strip()
+            parsed: List[bool] = []
+            # Try to pull a JSON list out of the reply.
+            fenced = re.search(r"```(?:json)?\s*(\[.*\])\s*```", full_text, re.DOTALL)
+            payload = fenced.group(1) if fenced else full_text
+            try:
+                parsed = json.loads(payload)
+                if not isinstance(parsed, list):
+                    parsed = []
+            except json.JSONDecodeError:
+                parsed = []
+
+            # Pad/truncate to batch size.
+            parsed = [bool(x) for x in parsed]
+            if len(parsed) < len(batch):
+                parsed.extend([False] * (len(batch) - len(parsed)))
+            elif len(parsed) > len(batch):
+                parsed = parsed[: len(batch)]
+            results.extend(parsed)
+
+        return results
 
     def total_cost_usd(self, result: VisionAgentResult) -> float:
         """Estimate the API cost of a VLM call."""

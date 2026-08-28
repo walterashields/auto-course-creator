@@ -2794,6 +2794,8 @@ Return ONLY a JSON array of beats like:
         discovery: EndStateDiscovery,
         db_path: Optional[str] = None,
         opening_state_query: Optional[str] = None,
+        opening_state_history: Optional[str] = None,
+        new_query: Optional[str] = None,
     ) -> DiscoveryResult:
         """
         Run the vision-agent script beats through the discovery harness.
@@ -2817,6 +2819,8 @@ Return ONLY a JSON array of beats like:
             visual_summary=discovery.objective,
             save_all_screenshots=True,
             opening_state_query=opening_state_query,
+            opening_state_history=opening_state_history,
+            new_query=new_query,
         )
 
         # ADAPT narration for validation/concept beats that conflict with observed facts.
@@ -2839,7 +2843,9 @@ Return ONLY a JSON array of beats like:
                 if self._beat_conflicts_with_observed_state(beat):
                     self._rewrite_beat_from_observed(beat, "state")
             # Continuity-aware rendering: opening state beats that could not be
-            # established must be rewritten to describe the actual screen.
+            # established must be rewritten to describe the actual screen. When the
+            # continuity history was successfully pasted, also rewrite the state beat
+            # so it explicitly mentions the commented-out previous queries.
             if (
                 beat.kind == "state"
                 and beat.observed_state
@@ -2847,6 +2853,24 @@ Return ONLY a JSON array of beats like:
             ):
                 if self._beat_conflicts_with_observed_state(beat):
                     self._rewrite_beat_from_observed(beat, "state")
+            elif (
+                beat.kind == "state"
+                and beat.observed_state
+                and beat.observed_state.get("opening_state_strategy") == "established"
+                and beat.observed_state.get("history_pasted")
+                and "commented out" not in beat.text.lower()
+                and "commented-out" not in beat.text.lower()
+            ):
+                self._rewrite_beat_from_observed(
+                    beat,
+                    "state",
+                    extra_instruction=(
+                        "The editor contains the course's previous queries commented out "
+                        "above the new query. Rewrite the state beat to mention that the "
+                        "previous queries sit above, commented out, and that the new query "
+                        "is being added below them."
+                    ),
+                )
 
     def _enforce_clip_truthfulness(self, beats: List[ScriptBeat]) -> List[ScriptBeat]:
         """

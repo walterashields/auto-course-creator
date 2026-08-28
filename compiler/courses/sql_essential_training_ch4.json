@@ -17,7 +17,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 246,
+      "estimated_duration_seconds": 171,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -32,91 +32,91 @@
       "script_beats": [
         {
           "kind": "opening",
-          "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. The goal is to return only the columns we need from the Customer table, so the result is focused and immediately useful.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. The goal is to return only the columns we need from the Customer table, so the result is focused and immediately useful.",
           "beat_id": "beat_001"
         },
         {
           "kind": "state",
-          "text": "DB Browser for SQLite shows the Browse Data view and the Execute SQL view. Browse Data displays raw table rows, while Execute SQL opens the SQL editor on top and an empty result pane below. The toolbar sits above the view area, and the editor is the large white area where we type.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "DB Browser for SQLite shows the Browse Data view and the Execute SQL view. Browse Data displays raw table rows, while Execute SQL opens the SQL editor on top and an empty result pane below. The toolbar sits above the view area, and the editor is the large white area where we type.",
           "beat_id": "beat_002"
         },
         {
           "kind": "explain",
-          "text": "SELECT is the SQL command that chooses which columns to return, and FROM chooses which table holds those columns. Together they form the simplest useful query pattern: ask for specific data from one table. This keeps the result small and fast because the database does not waste time returning columns we do not need.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "SELECT is the SQL command that chooses which columns to return, and FROM chooses which table holds those columns. Together they form the simplest useful query pattern: ask for specific data from one table. This keeps the result small and fast because the database does not waste time returning columns we do not need.",
           "beat_id": "beat_003"
         },
         {
           "kind": "state",
-          "text": "Right now the editor is empty and the result pane below it is blank. When we finish, the editor will hold a comment block followed by a formatted SELECT statement, and the result pane will show the customer contact list.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Right now the editor is empty and the result pane below it is blank. When we finish, the editor will hold a comment block followed by a formatted SELECT statement, and the result pane will show the customer contact list.",
           "beat_id": "beat_004"
         },
         {
           "kind": "demo",
-          "text": "We type a comment header and the formatted query as one contiguous block in the SQL editor.",
           "action": {
             "type": "type_block",
             "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-27\nDescription: Customer contact list for management\n*/\n\nSELECT\n    FirstName,\n    LastName,\n    Email\nFROM Customer;"
           },
+          "text": "We type a comment header and the formatted query as one contiguous block in the SQL editor.",
           "beat_id": "beat_005"
         },
         {
           "kind": "demo",
-          "text": "We press F5 and the result pane fills with the contact list.",
           "action": {
             "type": "run_query"
           },
+          "text": "We press F5 and the result pane fills with the contact list.",
           "beat_id": "beat_006"
         },
         {
           "kind": "validation",
-          "text": "We see 60 rows returned with FirstName, LastName, and Email for each customer, confirming the contact list is complete and the query ran exactly as intended.",
           "action": {
             "type": "verify",
             "detail": "the Execute SQL tab shows a populated results grid below the query"
           },
+          "text": "We see 60 rows returned with FirstName, LastName, and Email for each customer, confirming the contact list is complete and the query ran exactly as intended.",
           "beat_id": "beat_007"
         },
         {
           "kind": "explain",
-          "text": "The result pane shows the complete customer contact list, with each customer record appearing exactly once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view. Because the database returned only the columns we requested, the output is compact and fast to scan.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The result pane shows the complete customer contact list, with each customer record appearing exactly once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view. Because the database returned only the columns we requested, the output is compact and fast to scan.",
           "beat_id": "beat_008"
         },
         {
           "kind": "explain",
-          "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation that the whole team can trust and maintain.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation that the whole team can trust and maintain.",
           "beat_id": "beat_009"
         },
         {
           "kind": "close",
-          "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
           "beat_id": "beat_010"
         }
       ],
@@ -139,7 +139,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 251,
+      "estimated_duration_seconds": 144,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -154,91 +154,91 @@
       "script_beats": [
         {
           "kind": "opening",
-          "text": "In this video, we will use the AS keyword to give our query results readable column headers that match management language. Last lesson we pulled the raw contact list; now we want friendly labels like First Name instead of FirstName in the report.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "In this video, we will use the AS keyword to give our query results readable column headers that match management language. Last lesson we pulled the raw contact list; now we want friendly labels like First Name instead of FirstName in the report.",
           "beat_id": "beat_001"
         },
         {
           "kind": "state",
-          "text": "The Execute SQL tab is still open from the last query. The editor shows our previous SELECT statement, and the result pane below still displays the raw headers. We can clear the editor and type a new query that replaces each raw column name with a friendly alias using the AS keyword.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The Execute SQL tab is still open from the last query. The editor shows our previous SELECT statement, and the result pane below still displays the raw headers. We can clear the editor and type a new query that replaces each raw column name with a friendly alias using the AS keyword.",
           "beat_id": "beat_002"
         },
         {
           "kind": "explain",
-          "text": "The AS keyword gives a column an alias, which is the name that appears in the result header instead of the raw column name. Aliases make reports easier to read without changing the underlying data or the table structure. They are especially useful when managers want headers in plain English while the database keeps its original column names.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The AS keyword gives a column an alias, which is the name that appears in the result header instead of the raw column name. Aliases make reports easier to read without changing the underlying data or the table structure. They are especially useful when managers want headers in plain English while the database keeps its original column names.",
           "beat_id": "beat_003"
         },
         {
           "kind": "state",
-          "text": "Right now the result headers show the raw column names. After we run the aliased query, those same three headers will display with spaces, while the rows underneath stay exactly the same. This is a before-and-after change we can verify at a glance.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Right now the result headers show the raw column names. After we run the aliased query, those same three headers will display with spaces, while the rows underneath stay exactly the same. This is a before-and-after change we can verify at a glance.",
           "beat_id": "beat_004"
         },
         {
           "kind": "demo",
-          "text": "We type a comment header and the query that aliases each column to a readable header.",
           "action": {
             "type": "type_block",
             "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-27\nDescription: Readable customer contact headers\n*/\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\"\nFROM Customer;"
           },
+          "text": "We type a comment header and the query that aliases each column to a readable header.",
           "beat_id": "beat_005"
         },
         {
           "kind": "demo",
-          "text": "We run the query and the result pane fills with the aliased list.",
           "action": {
             "type": "run_query"
           },
+          "text": "We run the query and the result pane fills with the aliased list.",
           "beat_id": "beat_006"
         },
         {
           "kind": "validation",
-          "text": "We see 60 rows returned with headers reading First Name, Last Name, and Email Address, confirming the AS aliases took effect and the report is readable for management.",
           "action": {
             "type": "verify",
             "detail": "the Execute SQL tab shows a populated results grid with aliased headers"
           },
+          "text": "We see 60 rows returned with headers reading First Name, Last Name, and Email Address, confirming the AS aliases took effect and the report is readable for management.",
           "beat_id": "beat_007"
         },
         {
           "kind": "explain",
-          "text": "The headers now show the friendly aliases, giving management the readable view they requested. The underlying values did not change; only the labels at the top of each column did. This means the same query can serve both technical users who know the original schema and managers who need a polished report for presentations.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The headers now show the friendly aliases, giving management the readable view they requested. The underlying values did not change; only the labels at the top of each column did. This means the same query can serve both technical users who know the original schema and managers who need a polished report for presentations.",
           "beat_id": "beat_008"
         },
         {
           "kind": "explain",
-          "text": "Aliases also help when a column name is long or unclear. A short, descriptive alias keeps the header visible in a narrow spreadsheet column and makes formulas easier to write. Using spaces in quoted aliases is common in reports, but the quotes are required so the database recognizes the whole multi-word header.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Aliases also help when a column name is long or unclear. A short, descriptive alias keeps the header visible in a narrow spreadsheet column and makes formulas easier to write. Using spaces in quoted aliases is common in reports, but the quotes are required so the database recognizes the whole multi-word header.",
           "beat_id": "beat_009"
         },
         {
           "kind": "close",
-          "text": "We have used the AS keyword to create readable headers for the customer contact list. The result now speaks management's language without changing any data. Next, we will sort that list alphabetically by last name using ORDER BY.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "We have used the AS keyword to create readable headers for the customer contact list. The result now speaks management's language without changing any data. Next, we will sort that list alphabetically by last name using ORDER BY.",
           "beat_id": "beat_010"
         }
       ],
@@ -261,7 +261,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 223,
+      "estimated_duration_seconds": 132,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -276,91 +276,91 @@
       "script_beats": [
         {
           "kind": "opening",
-          "text": "In this video, we will sort the customer contact list alphabetically by last name using the ORDER BY clause. Last lesson we made the headers readable with aliases; now we control the order in which the rows appear in the result pane.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "In this video, we will sort the customer contact list alphabetically by last name using the ORDER BY clause. Last lesson we made the headers readable with aliases; now we control the order in which the rows appear in the result pane.",
           "beat_id": "beat_001"
         },
         {
           "kind": "state",
-          "text": "The Execute SQL tab is open, and the editor still holds our aliased query. The result pane below shows the readable headers with rows in their stored order. We can change the query to tell the database exactly how to arrange the returned rows before they reach the screen.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The Execute SQL tab is open, and the editor still holds our aliased query. The result pane below shows the readable headers with rows in their stored order. We can change the query to tell the database exactly how to arrange the returned rows before they reach the screen.",
           "beat_id": "beat_002"
         },
         {
           "kind": "explain",
-          "text": "ORDER BY tells the database how to sort the returned rows. It does not change which rows are selected or the columns that come back; it only rearranges the order in which they appear. By default, text columns sort alphabetically from A to Z, which is what we want for a contact list that managers can scan quickly.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "ORDER BY tells the database how to sort the returned rows. It does not change which rows are selected or the columns that come back; it only rearranges the order in which they appear. By default, text columns sort alphabetically from A to Z, which is what we want for a contact list that managers can scan quickly.",
           "beat_id": "beat_003"
         },
         {
           "kind": "state",
-          "text": "Right now the rows appear in the order they are stored in the table. After we add ORDER BY LastName, the same rows will reorder so the earliest last name appears at the top and the rest follow alphabetically down the result pane.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Right now the rows appear in the order they are stored in the table. After we add ORDER BY LastName, the same rows will reorder so the earliest last name appears at the top and the rest follow alphabetically down the result pane.",
           "beat_id": "beat_004"
         },
         {
           "kind": "demo",
-          "text": "We type a comment header and the query that aliases each column and orders the results by last name.",
           "action": {
             "type": "type_block",
             "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-27\nDescription: Customer contact list sorted by last name\n*/\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\"\nFROM Customer\nORDER BY LastName;"
           },
+          "text": "We type a comment header and the query that aliases each column and orders the results by last name.",
           "beat_id": "beat_005"
         },
         {
           "kind": "demo",
-          "text": "We run the query and the rows reorder alphabetically in the result pane.",
           "action": {
             "type": "run_query"
           },
+          "text": "We run the query and the rows reorder alphabetically in the result pane.",
           "beat_id": "beat_006"
         },
         {
           "kind": "validation",
-          "text": "We see 60 rows returned, with Almeida at the top of the Last Name column, confirming the ascending alphabetical sort is active and the rows follow A-to-Z order.",
           "action": {
             "type": "verify",
             "detail": "the result pane rows are sorted by Last Name in ascending order"
           },
+          "text": "We see 60 rows returned, with Almeida at the top of the Last Name column, confirming the ascending alphabetical sort is active and the rows follow A-to-Z order.",
           "beat_id": "beat_007"
         },
         {
           "kind": "explain",
-          "text": "The rows are now arranged alphabetically by last name, with the earliest last name at the top of the list. This makes it easy to scan contacts from A to Z when looking for a specific person. The selected columns and aliases did not change; only the sequence of rows changed to match the ORDER BY clause.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The rows are now arranged alphabetically by last name, with the earliest last name at the top of the list. This makes it easy to scan contacts from A to Z when looking for a specific person. The selected columns and aliases did not change; only the sequence of rows changed to match the ORDER BY clause.",
           "beat_id": "beat_008"
         },
         {
           "kind": "explain",
-          "text": "ORDER BY belongs at the end of the SELECT statement, after the column list and FROM clause. Putting it last is a readability convention that helps the team see the sort rule at a glance. It also makes the query easier to edit when we later add filtering or limiting clauses before the final sort.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "ORDER BY belongs at the end of the SELECT statement, after the column list and FROM clause. Putting it last is a readability convention that helps the team see the sort rule at a glance. It also makes the query easier to edit when we later add filtering or limiting clauses before the final sort.",
           "beat_id": "beat_009"
         },
         {
           "kind": "close",
-          "text": "We have sorted the customer contact list alphabetically by last name with ORDER BY. The rows now appear in A-to-Z order, ready for scanning. Next, we will limit the result to a small preview using LIMIT.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "We have sorted the customer contact list alphabetically by last name with ORDER BY. The rows now appear in A-to-Z order, ready for scanning. Next, we will limit the result to a small preview using LIMIT.",
           "beat_id": "beat_010"
         }
       ],
@@ -383,7 +383,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 359,
+      "estimated_duration_seconds": 159,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -398,91 +398,91 @@
       "script_beats": [
         {
           "kind": "opening",
-          "text": "In this video, we will limit the sorted customer contact list to a small preview using the LIMIT clause. Last lesson we sorted the full list alphabetically; now management only needs the first few rows for a quick look.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "In this video, we will limit the sorted customer contact list to a small preview using the LIMIT clause. Last lesson we sorted the full list alphabetically; now management only needs the first few rows for a quick look.",
           "beat_id": "beat_001"
         },
         {
           "kind": "state",
-          "text": "The Execute SQL tab is open, and the editor holds our sorted query. The result pane below shows the full alphabetical list by last name. We can add one more clause at the end of the statement to control exactly how many rows the database returns.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The Execute SQL tab is open, and the editor holds our sorted query. The result pane below shows the full alphabetical list by last name. We can add one more clause at the end of the statement to control exactly how many rows the database returns.",
           "beat_id": "beat_002"
         },
         {
           "kind": "explain",
-          "text": "LIMIT returns only the requested number of rows from the result set. It is useful when a full result is larger than we need, such as when a manager asks for a quick preview before running the full report. The database still sorts the rows first, because LIMIT comes after ORDER BY in the statement.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "LIMIT returns only the requested number of rows from the result set. It is useful when a full result is larger than we need, such as when a manager asks for a quick preview before running the full report. The database still sorts the rows first, because LIMIT comes after ORDER BY in the statement.",
           "beat_id": "beat_003"
         },
         {
           "kind": "state",
-          "text": "Right now the result pane shows the full alphabetical list. After we add a LIMIT clause, only the first few rows will remain visible, while the sort order stays the same. This turns a long report into a manageable preview.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Right now the result pane shows the full alphabetical list. After we add a LIMIT clause, only the first few rows will remain visible, while the sort order stays the same. This turns a long report into a manageable preview.",
           "beat_id": "beat_004"
         },
         {
           "kind": "demo",
-          "text": "We type a comment header and the sorted, aliased query with a LIMIT clause.",
           "action": {
             "type": "type_block",
             "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-27\nDescription: Preview of customer contacts\n*/\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\"\nFROM Customer\nORDER BY LastName\nLIMIT 5;"
           },
+          "text": "We type a comment header and the sorted, aliased query with a LIMIT clause.",
           "beat_id": "beat_005"
         },
         {
           "kind": "demo",
-          "text": "We run the query and the result pane shows only the preview rows.",
           "action": {
             "type": "run_query"
           },
+          "text": "We run the query and the result pane shows only the preview rows.",
           "beat_id": "beat_006"
         },
         {
           "kind": "validation",
-          "text": "We see exactly 5 rows returned, confirming the LIMIT clause trimmed the sorted result to the requested preview size. The rows still appear in alphabetical order, so the preview is representative.",
           "action": {
             "type": "verify",
             "detail": "the result pane shows exactly five rows from the sorted contact list"
           },
+          "text": "We see exactly 5 rows returned, confirming the LIMIT clause trimmed the sorted result to the requested preview size. The rows still appear in alphabetical order, so the preview is representative.",
           "beat_id": "beat_007"
         },
         {
           "kind": "explain",
-          "text": "LIMIT trimmed the sorted result to a small preview, and the rows still appear in alphabetical order by last name. The database stopped after the requested number of rows, so the result loads faster and fits neatly on one screen. This is ideal for summaries and quick checks before a manager requests the full data set.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "LIMIT trimmed the sorted result to a small preview, and the rows still appear in alphabetical order by last name. The database stopped after the requested number of rows, so the result loads faster and fits neatly on one screen. This is ideal for summaries and quick checks before a manager requests the full data set.",
           "beat_id": "beat_008"
         },
         {
           "kind": "explain",
-          "text": "LIMIT always comes after ORDER BY in a SELECT statement. If it came before the sort, the database would trim the rows first and then sort, which could return the wrong rows for the preview. Keeping the order SELECT, FROM, ORDER BY, LIMIT makes the query predictable and easy for the team to maintain.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "LIMIT always comes after ORDER BY in a SELECT statement. If it came before the sort, the database would trim the rows first and then sort, which could return the wrong rows for the preview. Keeping the order SELECT, FROM, ORDER BY, LIMIT makes the query predictable and easy for the team to maintain.",
           "beat_id": "beat_009"
         },
         {
           "kind": "close",
-          "text": "We have limited the result set with LIMIT, and the preview remains sorted alphabetically by last name. Next, we will recap the chapter with one clean, well-documented query that combines comments, aliases, ORDER BY, and LIMIT.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "We have limited the result set with LIMIT, and the preview remains sorted alphabetically by last name. Next, we will recap the chapter with one clean, well-documented query that combines comments, aliases, ORDER BY, and LIMIT.",
           "beat_id": "beat_010"
         }
       ],
@@ -505,7 +505,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 272,
+      "estimated_duration_seconds": 172,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -520,91 +520,91 @@
       "script_beats": [
         {
           "kind": "opening",
-          "text": "In this video, we will combine comment headers, aliases, ORDER BY, and LIMIT into one clean query. The previous lessons built each skill step by step; now we use them together in a single professional statement that is ready to share.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "In this video, we will combine comment headers, aliases, ORDER BY, and LIMIT into one clean query. The previous lessons built each skill step by step; now we use them together in a single professional statement that is ready to share.",
           "beat_id": "beat_001"
         },
         {
           "kind": "state",
-          "text": "The Execute SQL tab is open, so we can build the final chapter query step by step. The comment block will come first, followed by SELECT with aliases, then FROM, ORDER BY, and finally LIMIT. Each clause has a specific job that we have already practiced in the earlier videos.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The Execute SQL tab is open, so we can build the final chapter query step by step. The comment block will come first, followed by SELECT with aliases, then FROM, ORDER BY, and finally LIMIT. Each clause has a specific job that we have already practiced in the earlier videos.",
           "beat_id": "beat_002"
         },
         {
           "kind": "explain",
-          "text": "A comment header documents the query's purpose for anyone who opens it later. Aliases make the headers readable, ORDER BY sorts the rows alphabetically, and LIMIT keeps the output concise. Together these four techniques turn a raw database query into a polished, shareable report for management, showing both technical precision and professional presentation.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "A comment header documents the query's purpose for anyone who opens it later. Aliases make the headers readable, ORDER BY sorts the rows alphabetically, and LIMIT keeps the output concise. Together these four techniques turn a raw database query into a polished, shareable report for management, showing both technical precision and professional presentation.",
           "beat_id": "beat_003"
         },
         {
           "kind": "state",
-          "text": "Right now the editor is empty. After we finish, it will hold one contiguous comment block followed by a SELECT statement that uses aliases, ORDER BY LastName, and a LIMIT clause. The result pane will then show the documented preview in a single clean view.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Right now the editor is empty. After we finish, it will hold one contiguous comment block followed by a SELECT statement that uses aliases, ORDER BY LastName, and a LIMIT clause. The result pane will then show the documented preview in a single clean view.",
           "beat_id": "beat_004"
         },
         {
           "kind": "demo",
-          "text": "We type the commented query that uses aliases, orders by last name, and limits the result.",
           "action": {
             "type": "type_block",
             "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-27\nDescription: Clean, documented customer contact preview\n*/\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\"\nFROM Customer\nORDER BY LastName\nLIMIT 5;"
           },
+          "text": "We type the commented query that uses aliases, orders by last name, and limits the result.",
           "beat_id": "beat_005"
         },
         {
           "kind": "demo",
-          "text": "We run the query and the result pane shows the documented preview.",
           "action": {
             "type": "run_query"
           },
+          "text": "We run the query and the result pane shows the documented preview.",
           "beat_id": "beat_006"
         },
         {
           "kind": "validation",
-          "text": "We see 5 rows returned with readable headers sorted alphabetically by last name, confirming the combined query works as one clean statement. The comment block at the top documents the purpose for anyone who opens the file later.",
           "action": {
             "type": "verify",
             "detail": "the SQL editor contains a comment block followed by a SELECT with aliases, ORDER BY, and LIMIT"
           },
+          "text": "We see 5 rows returned with readable headers sorted alphabetically by last name, confirming the combined query works as one clean statement. The comment block at the top documents the purpose for anyone who opens the file later.",
           "beat_id": "beat_007"
         },
         {
           "kind": "explain",
-          "text": "The result pane shows a professional preview with readable rows sorted by last name, demonstrating all three presentation techniques in one statement. The comment header makes the query's intent clear at a glance, while aliases, ORDER BY, and LIMIT handle the headers, order, and size. This is the kind of query a data analyst can confidently share with a manager.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "The result pane shows a professional preview with readable rows sorted by last name, demonstrating all three presentation techniques in one statement. The comment header makes the query's intent clear at a glance, while aliases, ORDER BY, and LIMIT handle the headers, order, and size. This is the kind of query a data analyst can confidently share with a manager.",
           "beat_id": "beat_008"
         },
         {
           "kind": "explain",
-          "text": "Clean query etiquette matters when other people will read or maintain the code. A comment header explains intent, aliases remove jargon, ORDER BY removes ambiguity about row order, and LIMIT prevents accidental overload of a report. These habits separate a quick scratch query from production-ready SQL that a team can trust.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "Clean query etiquette matters when other people will read or maintain the code. A comment header explains intent, aliases remove jargon, ORDER BY removes ambiguity about row order, and LIMIT prevents accidental overload of a report. These habits separate a quick scratch query from production-ready SQL that a team can trust.",
           "beat_id": "beat_009"
         },
         {
           "kind": "close",
-          "text": "We have recapped the chapter with a clean, documented query that combines comment headers, aliases, ORDER BY, and LIMIT. The result is a readable, sorted, and appropriately sized preview. Next, we will filter results with WHERE clauses so we can return only the rows that match specific conditions.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
+          "text": "We have recapped the chapter with a clean, documented query that combines comment headers, aliases, ORDER BY, and LIMIT. The result is a readable, sorted, and appropriately sized preview. Next, we will filter results with WHERE clauses so we can return only the rows that match specific conditions.",
           "beat_id": "beat_010"
         }
       ],
