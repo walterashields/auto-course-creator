@@ -235,7 +235,13 @@ def _db_browser_profile(db_path: str) -> EnvironmentProfile:
             "wait",
             "verify",
             "scroll",
+            "move_cursor",
+            "select_text",
+            "highlight",
         ],
+        execute_scope="whole_script",
+        comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
+        error_signature="red error band in the status region containing the text 'syntax error'",
     )
 
 

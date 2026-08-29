@@ -78,6 +78,8 @@ class NarrationBeat(BaseModel):
     audio_path: Optional[str] = None
     # Structured observed UI state summary captured during execution
     observed_state: Optional[dict] = None
+    # True when this beat should be merged into the previous beat by the renderer
+    merge: bool = False
 
 
 class ExecutionGraph(BaseModel):
@@ -98,6 +100,7 @@ class ExecutionGraph(BaseModel):
     # Telemetry: filled in by the discovery harness
     generation_cost_usd: Optional[float] = None
     reliability_score: Optional[float] = None  # 0.0 to 1.0
+    render_status: Optional[str] = None
 
 
 class DiscoveryResult(BaseModel):
@@ -137,6 +140,13 @@ class EnvironmentProfile(BaseModel):
     action_vocabulary: List[str] = Field(
         default_factory=lambda: ["click", "type", "key", "scroll", "wait"]
     )
+    # Execution semantics for this app
+    execute_scope: Literal["whole_script", "current_statement", "none"] = "current_statement"
+    comment_syntax: Dict[str, str] = Field(
+        default_factory=lambda: {"line": "--", "block_start": "/*", "block_end": "*/"}
+    )
+    # Generic visual error signature (e.g. "red band / syntax error in status region")
+    error_signature: Optional[str] = None
     # Observed facts populated by the scout
     tables: List[str] = Field(default_factory=list)
     columns: Dict[str, List[str]] = Field(default_factory=dict)

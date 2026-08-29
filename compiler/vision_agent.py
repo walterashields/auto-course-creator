@@ -52,7 +52,11 @@ def _default_profile() -> EnvironmentProfile:
         action_vocabulary=[
             "click", "type", "type_block", "append_block", "type_segments",
             "key", "run_query", "wait", "verify", "scroll",
+            "move_cursor", "select_text", "highlight",
         ],
+        execute_scope="whole_script",
+        comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
+        error_signature="red error band in the status region containing the text 'syntax error'",
     )
 
 
@@ -95,6 +99,8 @@ class VisionAgent:
         self.last_api_size: Tuple[int, int] = (0, 0)
         self.last_raw_image: Optional[Image.Image] = None
         self.last_api_image: Optional[Image.Image] = None
+        self.recording = False
+        self._last_executed_statement: str = ""
 
     # ------------------------------------------------------------------
     # Core screenshot / scaling helpers
@@ -350,7 +356,8 @@ class VisionAgent:
         self._ensure_frontmost()
         print(f"  Typing: {text[:80]!r}", file=sys.stderr)
         # pyautogui handles newlines and special characters better than AppleScript.
-        pyautogui.typewrite(text, interval=0.005)
+        # ~0.10 s/char so learners can follow live typing.
+        pyautogui.typewrite(text, interval=0.10)
         time.sleep(0.2)
         return True
 
@@ -397,7 +404,23 @@ class VisionAgent:
             time.sleep(0.3)
 
     def _clear_editor(self) -> None:
-        """Focus the SQL editor, select all, and delete any existing text."""
+        """
+        Focus the SQL editor, select all, and delete any existing text.
+
+        During recording, full clears are banned. Instead, move the cursor to
+        the end of the document so the next input appends.
+        """
+        if self.recording:
+            print(
+                "  [TYPE BLOCK] recording active; appending instead of clearing",
+                file=sys.stderr,
+            )
+            self._ensure_frontmost()
+            self._dismiss_character_viewer()
+            self._focus_editor()
+            self.press_key("cmd+end")
+            time.sleep(0.1)
+            return
         print("  [TYPE BLOCK] clearing editor", file=sys.stderr)
         self._ensure_frontmost()
         self._dismiss_character_viewer()
@@ -423,7 +446,8 @@ class VisionAgent:
                 pyautogui.press("return")
                 time.sleep(0.1)
             if line:
-                pyautogui.typewrite(line, interval=0.03)
+                # ~0.10 s/char so learners can follow live typing.
+                pyautogui.typewrite(line, interval=0.10)
         time.sleep(0.5)
         self._dismiss_character_viewer()
 
@@ -473,19 +497,47 @@ class VisionAgent:
             except Exception:
                 pass
 
-    def _append_text(self, text: str) -> None:
-        """Paste text at the current cursor position without clearing the editor."""
-        print("  [APPEND] pasting new query at cursor", file=sys.stderr)
+    @staticmethod
+    def _ensure_leading_separator(prior: str, text: str) -> str:
+        """Prepend a newline when appending to non-empty content that does not
+        already start with whitespace. This keeps distinct SQL blocks on their
+        own lines while letting inline continuations pass through unchanged."""
+        if prior.strip() and text and not text[0].isspace():
+            return "\n" + text
+        return text
+
+    def _append_text(self, text: str) -> str:
+        """
+        Append text at the end of the editor without clearing existing content.
+
+        The cursor is moved to the end of the document via select-all + right
+        arrow (a reliable cross-editor chord), then the new text is pasted at
+        the end.  A newline is inserted automatically when the editor already
+        contains non-whitespace content and the new text does not begin with
+        whitespace, so distinct blocks (e.g. comment blocks) stay on separate
+        lines. Returns the effective text that was pasted (may include the
+        leading newline).
+        """
+        print("  [APPEND] appending text at end of buffer", file=sys.stderr)
         self._ensure_frontmost()
         self._dismiss_character_viewer()
+        # Ensure the editor is focused, read the existing content (without
+        # re-clicking, which would move the insertion point), then move the
+        # cursor to the end of the document so the paste appends rather than
+        # landing mid-document.
         self._focus_editor()
-        # Move cursor to the end of the existing editor text so the new query is
-        # appended below the commented history.
-        self.press_key("cmd+end")
+        prior = self._read_editor_content(focus=False) or ""
+        text_to_append = self._ensure_leading_separator(prior, text)
+        if text_to_append != text:
+            print("  [APPEND] prepending newline separator", file=sys.stderr)
+        self.press_key("cmd+a")
+        time.sleep(0.1)
+        pyautogui.keyDown("right")
+        pyautogui.keyUp("right")
         time.sleep(0.1)
         original_clipboard = self._read_clipboard()
         try:
-            self._copy_to_clipboard(text)
+            self._copy_to_clipboard(text_to_append)
             time.sleep(0.1)
             pyautogui.hotkey("command", "v")
             time.sleep(0.4)
@@ -494,26 +546,75 @@ class VisionAgent:
                 self._copy_to_clipboard(original_clipboard)
             except Exception:
                 pass
+        return text_to_append
 
     @staticmethod
     def _normalize_editor_text(text: str) -> str:
         """Collapse whitespace, strip, and lowercase for read-back comparison."""
         return re.sub(r"\s+", " ", text).strip().lower()
 
-    def _read_editor_content(self) -> str:
-        """Ask the VLM for the exact text currently in the editor."""
+    @staticmethod
+    def _read_focused_element_value(process_name: str) -> Optional[str]:
+        """Use AppleScript/System Events to read the value of the focused UI element."""
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        set focusedElement to value of attribute "AXFocusedUIElement"
+        tell focusedElement
+            return value
+        end tell
+    end tell
+end tell
+"""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return result.stdout
+        except Exception as exc:
+            print(f"  [READ-BACK] accessibility read failed: {exc}", file=sys.stderr)
+        return None
+
+    def _read_editor_content_vlm(self) -> str:
+        """Fallback VLM transcription of the editor content."""
         editor = self.profile.landmarks.get("editor", "the editable text area")
         prompt = (
-            f"Read only the editable text in {editor} of {self.profile.app_name}. "
-            "Ignore line numbers, UI chrome, prompts, and anything outside the editable text area. "
-            "Return ONLY the exact editable text as a single code block."
+            f"Look at {editor} in {self.profile.app_name}. "
+            "Transcribe the COMPLETE text currently visible in the editor, preserving line breaks. "
+            "Return ONLY the editor text, no markdown or explanation."
         )
-        result = self._call_vlm(prompt, expect_json=False, max_tokens=512)
-        text = result.text
-        fenced = re.search(r"```(?:\w+)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-        if fenced:
-            return fenced.group(1)
-        return text
+        result = self._call_vlm(prompt, expect_json=False, max_tokens=1024)
+        return result.text
+
+    def _read_editor_content(self, focus: bool = True) -> str:
+        """
+        Return the EXACT full text currently in the editor.
+
+        First tries macOS accessibility (value of the focused UI element), which
+        is fast, exact, and immune to clipboard pollution. Falls back to VLM
+        transcription if accessibility fails.
+
+        Args:
+            focus: When False, skip the editor focus click. Callers that have
+                already positioned the cursor (e.g. ``_append_text``) should pass
+                False so the read does not move the insertion point.
+        """
+        self._ensure_frontmost()
+        if focus:
+            self._focus_editor()
+        process_name = self.profile.focus_target or self.profile.app_name
+        content = self._read_focused_element_value(process_name)
+        if content is not None:
+            # Normalize line endings.
+            content = content.replace("\r\n", "\n").replace("\r", "\n")
+            print(f"  [READ-BACK] accessibility read {len(content)} chars", file=sys.stderr)
+            return content
+        print("  [READ-BACK] accessibility failed; falling back to VLM", file=sys.stderr)
+        return self._read_editor_content_vlm()
 
     def _verify_editor_layout(self, intended: str, actual: str) -> bool:
         """
@@ -617,7 +718,7 @@ class VisionAgent:
             "{", "}", "|", ":", "\"", "<", ">", "?",
         }
 
-    def _type_segment_cadence(self, text: str) -> None:
+    def _type_segment_cadence(self, text: str) -> str:
         """
         Enter ``text`` as a single segment at the current cursor position.
 
@@ -626,12 +727,16 @@ class VisionAgent:
         segment is therefore pasted deterministically from the clipboard, keeping
         the segment bound to its narration beat while guaranteeing the exact text
         appears. Newlines inside the segment are preserved by the paste.
+
+        Returns the effective text that was appended (may include a leading
+        newline separator).
         """
         self._ensure_frontmost()
         print(f"  [SEGMENT] entering {len(text)} characters", file=sys.stderr)
-        self._append_text(text)
+        effective = self._append_text(text)
         time.sleep(0.3)
         self._dismiss_character_viewer()
+        return effective
 
     def _undo_segment(self, segment_text: str) -> None:
         """Best-effort undo of the just-typed segment using Cmd+Z."""
@@ -643,19 +748,35 @@ class VisionAgent:
 
     def _editor_texts_match(self, expected: str, actual: str) -> bool:
         """
-        Lenient comparison for VLM read-back of the SQL editor.
+        Strict full-buffer comparison for VLM read-back of the SQL editor.
 
-        The editor content may be taller than the viewport, so the VLM sometimes
-        returns only the visible tail. Accept exact match, or one normalized text
-        being a suffix of the other.
+        Lenient suffix checks are banned: the VLM must return the entire editable
+        content, not just the visible tail.
         """
         expected_norm = self._normalize_editor_text(expected)
         actual_norm = self._normalize_editor_text(actual)
-        if expected_norm == actual_norm:
+        return expected_norm == actual_norm
+
+    def _verify_buffer_exact(self, intended: str, label: str = "") -> bool:
+        """
+        Full-buffer read-back and diff after a mutation.
+
+        Fails loudly if the normalized editor content does not match the
+        intended content exactly.
+        """
+        read_back = self._read_editor_content()
+        if self._editor_texts_match(intended, read_back):
+            print(f"  [{label}] read-back OK", file=sys.stderr)
             return True
-        if expected_norm and actual_norm:
-            if expected_norm.endswith(actual_norm) or actual_norm.endswith(expected_norm):
-                return True
+        print(f"  [{label}] read-back mismatch", file=sys.stderr)
+        print(
+            f"  [{label}] intended: {self._normalize_editor_text(intended)!r}",
+            file=sys.stderr,
+        )
+        print(
+            f"  [{label}] actual:   {self._normalize_editor_text(read_back)!r}",
+            file=sys.stderr,
+        )
         return False
 
     def type_segments(
@@ -671,10 +792,8 @@ class VisionAgent:
           - narration (optional): the narration line for the segment
 
         On a segment mismatch the segment is undone and retyped (up to 2 tries).
-        After 2 segment failures the ``fallback_text`` (the intended cumulative
-        block) is pasted so the editor is never left with partially-corrupted
-        content. If ``fallback_text`` is not supplied, it defaults to the editor
-        content observed at the start plus all segments.
+        After 2 segment failures, the failed segment is pasted in place; the
+        editor is NEVER fully cleared during recording.
         """
         if not segments:
             return True
@@ -683,10 +802,18 @@ class VisionAgent:
         # Capture any content already in the editor (e.g. commented history from
         # stage-prep) so segmented typing appends rather than replacing it.
         initial = self._read_editor_content() or ""
-        segments_text = "".join(
-            (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
-        )
-        full_text = initial + segments_text
+        # Build the fallback cumulative block using the same separator logic so
+        # the nuclear paste fallback matches what the editor will actually hold.
+        def _build_cumulative(base: str, segs: List[Any]) -> str:
+            out = base
+            for s in segs:
+                t = s.get("text", "") if isinstance(s, dict) else str(s)
+                if out.strip() and t and not t[0].isspace():
+                    t = "\n" + t
+                out += t
+            return out
+
+        full_text = _build_cumulative(initial, segments)
         # Use the caller-provided intended block if available; this guarantees the
         # fallback pastes the real target text even if the live editor is corrupted.
         intended_fallback = fallback_text if fallback_text is not None else full_text
@@ -701,6 +828,10 @@ class VisionAgent:
             text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
             if not text:
                 continue
+            # Predict the separator the append will insert so expected_sofar
+            # matches the editor content after paste.
+            if expected_sofar.strip() and text and not text[0].isspace():
+                text = "\n" + text
             print(
                 f"  [SEGMENTS] segment {seg_idx + 1}/{len(segments)} ({len(text)} chars)",
                 file=sys.stderr,
@@ -709,10 +840,7 @@ class VisionAgent:
             for attempt in range(1, 3):
                 self._ensure_frontmost()
                 self._type_segment_cadence(text)
-                expected_sofar += text
-                read_back = self._read_editor_content()
-                if self._editor_texts_match(expected_sofar, read_back):
-                    print(f"  [SEGMENTS] segment {seg_idx + 1} read-back OK", file=sys.stderr)
+                if self._verify_buffer_exact(expected_sofar + text, "SEGMENTS"):
                     segment_ok = True
                     break
                 print(
@@ -721,61 +849,56 @@ class VisionAgent:
                 )
                 # Undo the bad segment and retype it.
                 self._undo_segment(text)
-                expected_sofar = expected_sofar[: -len(text)]
 
             if not segment_ok:
                 print(
-                    f"  [SEGMENTS] segment {seg_idx + 1} failed twice; falling back to paste",
+                    f"  [SEGMENTS] segment {seg_idx + 1} failed twice; pasting segment in place",
                     file=sys.stderr,
                 )
-                # Paste the intended cumulative block so the fallback never leaves a
-                # partially-typed or corrupted query.
-                self._clear_editor()
-                self._paste_text(intended_fallback)
-                read_back = self._read_editor_content()
-                if self._editor_texts_match(intended_fallback, read_back):
-                    print("  [SEGMENTS] paste fallback OK", file=sys.stderr)
-                    return True
-                print("  [SEGMENTS] paste fallback FAILED", file=sys.stderr)
-                return False
+                # Paste only the failed segment at the current cursor; never clear.
+                self._append_text(text)
+                if self._verify_buffer_exact(expected_sofar + text, "SEGMENTS"):
+                    segment_ok = True
+                else:
+                    # Nuclear fallback only when not recording: paste full intended block.
+                    if not self.recording:
+                        self._clear_editor()
+                        self._paste_text(intended_fallback)
+                        if self._verify_buffer_exact(intended_fallback, "SEGMENTS"):
+                            print("  [SEGMENTS] paste fallback OK", file=sys.stderr)
+                            return True
+                    print("  [SEGMENTS] in-place repair FAILED", file=sys.stderr)
+                    return False
+
+            expected_sofar = expected_sofar + text
 
         print("  [SEGMENTS] all segments typed and verified", file=sys.stderr)
         return True
 
     def type_block(self, text: str) -> bool:
         """
-        Paste a multi-line SQL block into the active editor with read-back
-        and layout verification.
+        Paste a multi-line SQL block into the active editor with full-buffer
+        read-back verification.
 
-        ``text`` is the FULL block: comment header and query together. The editor
-        is cleared, the block is pasted from the clipboard, and the VLM reads back
-        the entire editor content. The read-back must match the intended text AND
-        keep the query adjacent to the comment block. One retry is attempted; on
-        failure the method returns False so the caller can abort the beat.
+        ``text`` is the FULL block: comment header and query together. During
+        recording the block is appended at the end of the editor rather than
+        replacing existing content. The VLM reads back the entire editor content
+        and it must match the intended text exactly.
         """
         if not text:
             return True
-
-        def _matches(read_text: str) -> bool:
-            return self._verify_editor_layout(text, read_text)
 
         self._clear_editor()
         self._paste_text(text)
 
         for attempt in range(1, 3):
-            read_back = self._read_editor_content()
-            if _matches(read_back):
-                print("  [TYPE BLOCK] read-back OK", file=sys.stderr)
+            if self._verify_buffer_exact(text, "TYPE BLOCK"):
                 print("  [TYPE BLOCK] line-adjacency OK", file=sys.stderr)
                 self.press_key("esc")
                 print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
                 return True
             print(
-                f"  [TYPE BLOCK] read-back mismatch, retry {attempt}/2",
-                file=sys.stderr,
-            )
-            print(
-                f"  [TYPE BLOCK] line-adjacency mismatch, retry {attempt}/2",
+                f"  [TYPE BLOCK] retry {attempt}/2",
                 file=sys.stderr,
             )
             self._clear_editor()
@@ -786,20 +909,24 @@ class VisionAgent:
 
     def paste_history_block(self, text: str) -> bool:
         """
-        Paste a long commented SQL history into the editor without full read-back.
+        Paste a long commented SQL history into the editor with full read-back.
 
-        Continuity history can be taller than the editor viewport, so the VLM read-
-        back used by ``type_block`` may only see the tail and fail. This method
-        clears the editor and pastes deterministically, then does a cheap end-of-
-        document check (cursor at end, last line visible). It does NOT verify the
-        full history content.
+        Full-buffer verification is now required after every mutation, including
+        history pastes. During recording the editor is not cleared; the history
+        is appended at the end.
         """
         if not text:
             return True
         self._ensure_frontmost()
-        print("  [PASTE HISTORY] clearing editor and pasting commented history", file=sys.stderr)
+        print("  [PASTE HISTORY] pasting commented history", file=sys.stderr)
         self._clear_editor()
         self._paste_text(text)
+        # Scroll to the top so the VLM can read the full history if needed.
+        self.press_key("cmd+home")
+        time.sleep(0.2)
+        if not self._verify_buffer_exact(text, "PASTE HISTORY"):
+            print("  [PASTE HISTORY] verification FAILED", file=sys.stderr)
+            return False
         # Move cursor to the end so the next append_block lands after the history.
         self.press_key("cmd+end")
         time.sleep(0.2)
@@ -812,36 +939,33 @@ class VisionAgent:
 
         Used for continuity-by-design: the commented history is already in the
         editor, and this method pastes only the new query below it. The read-back
-        must end with the new query text.
+        must match the full intended editor content exactly. A newline separator
+        is inserted automatically when the prior content does not end with
+        whitespace and the new block does not begin with whitespace.
         """
         if not text:
             return True
 
-        self._append_text(text)
+        # The caller is responsible for tracking the full intended buffer if it
+        # includes prior history; we verify the new text appears at the end.
+        prior = self._read_editor_content() or ""
+        text_to_append = self._ensure_leading_separator(prior, text)
+        intended = prior + text_to_append
+        self._append_text(text_to_append)
 
         for attempt in range(1, 3):
-            read_back = self._read_editor_content()
-            normalized_intended = self._normalize_editor_text(text)
-            normalized_actual = self._normalize_editor_text(read_back)
-            if normalized_actual.endswith(normalized_intended):
-                print("  [APPEND] read-back OK", file=sys.stderr)
+            if self._verify_buffer_exact(intended, "APPEND"):
                 self.press_key("esc")
                 return True
             print(
-                f"  [APPEND] read-back mismatch, retry {attempt}/2",
+                f"  [APPEND] retry {attempt}/2",
                 file=sys.stderr,
             )
-            print(
-                f"  [APPEND] read-back normalized: {normalized_actual!r}",
-                file=sys.stderr,
-            )
-            print(
-                f"  [APPEND] intended suffix:      {normalized_intended!r}",
-                file=sys.stderr,
-            )
-            # Re-focus and re-append; duplicates are possible but the suffix check
-            # will still pass if the final text is correct.
-            self._append_text(text)
+            # Re-read prior in case it changed, then re-append.
+            prior = self._read_editor_content() or ""
+            text_to_append = self._ensure_leading_separator(prior, text)
+            intended = prior + text_to_append
+            self._append_text(text_to_append)
 
         print("  [APPEND] paste verification FAILED", file=sys.stderr)
         return False
@@ -882,6 +1006,140 @@ class VisionAgent:
         self._dismiss_character_viewer()
         return dismissed
 
+    def _extract_uncommented_sql(self, content: str) -> Tuple[Optional[str], List[Tuple[int, str]]]:
+        """
+        Extract the single uncommented SQL block from ``content``.
+
+        Returns (uncommented_text, uncommented_lines) where uncommented_lines is
+        a list of (line_index, stripped_text) for diagnostics. Returns (None, [])
+        if no uncommented text is found.
+
+        Both line comments (e.g. '--') and block comments (e.g. '/*' ... '*/')
+        declared in the EnvironmentProfile are respected.  Whitespace-only lines
+        are ignored, so blank lines inside the SQL statement do not break the
+        contiguous-block check.
+        """
+        comment_syntax = self.profile.comment_syntax or {}
+        line_prefix = comment_syntax.get("line", "--")
+        block_start = comment_syntax.get("block_start", "/*")
+        block_end = comment_syntax.get("block_end", "*/")
+        lines = content.splitlines()
+        in_block_comment = False
+        uncommented_lines: List[Tuple[int, str]] = []
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            stripped = line.strip()
+            if in_block_comment:
+                if block_end and block_end in stripped:
+                    in_block_comment = False
+                continue
+            if block_start and stripped.startswith(block_start):
+                if block_end and block_end not in stripped:
+                    in_block_comment = True
+                continue
+            if stripped.startswith(line_prefix):
+                continue
+            uncommented_lines.append((i, stripped))
+        if not uncommented_lines:
+            return None, uncommented_lines
+        return "\n".join(text for _, text in uncommented_lines), uncommented_lines
+
+    def _verify_statement_isolation(self, current_statement: str) -> bool:
+        """
+        Profile-driven pre-execution verifier.
+
+        For execute_scope == 'whole_script', all uncommented text in the editor
+        must be exactly the current statement. Any extra uncommented line or
+        trailing fragment is treated as an orphan and fails loudly.
+        """
+        scope = getattr(self.profile, "execute_scope", "current_statement")
+        if scope != "whole_script":
+            return True
+        if not current_statement or not current_statement.strip():
+            return True
+        content = self._read_editor_content()
+        uncommented_text, uncommented_lines = self._extract_uncommented_sql(content)
+        current_norm = self._normalize_editor_text(current_statement)
+
+        if uncommented_text is None:
+            print(
+                "  [ISOLATION] no uncommented statement found; refusing to execute",
+                file=sys.stderr,
+            )
+            return False
+
+        # The uncommented text must form exactly one logical block: between the
+        # first and last uncommented non-whitespace line there must be no
+        # comment-prefixed or block-comment line.  Blank/whitespace-only lines
+        # are allowed inside the statement.
+        uncommented_indices = {i for i, _ in uncommented_lines}
+        first_idx = uncommented_lines[0][0]
+        last_idx = uncommented_lines[-1][0]
+        comment_syntax = self.profile.comment_syntax or {}
+        line_prefix = comment_syntax.get("line", "--")
+        block_start = comment_syntax.get("block_start", "/*")
+        block_end = comment_syntax.get("block_end", "*/")
+        for i, line in enumerate(content.splitlines()):
+            if first_idx < i < last_idx and line.strip():
+                stripped = line.strip()
+                if (
+                    stripped.startswith(line_prefix)
+                    or stripped.startswith(block_start)
+                    or stripped == block_end
+                ):
+                    continue
+                if i not in uncommented_indices:
+                    print(
+                        "  [ISOLATION] uncommented text is split into multiple blocks",
+                        file=sys.stderr,
+                    )
+                    return False
+
+        uncommented_norm = self._normalize_editor_text(uncommented_text)
+        # Allow equality or current statement plus a trailing fragment that is
+        # a continuation of the last line (no semicolon boundary).
+        if uncommented_norm == current_norm:
+            return True
+        if uncommented_norm.startswith(current_norm):
+            trailing = uncommented_norm[len(current_norm):].strip()
+            if trailing:
+                print(
+                    f"  [ISOLATION] trailing uncommented fragment: {trailing!r}",
+                    file=sys.stderr,
+                )
+                return False
+            return True
+
+        print(
+            "  [ISOLATION] uncommented block does not match current statement",
+            file=sys.stderr,
+        )
+        return False
+
+    def _result_pane_shows_error(self) -> bool:
+        """Ask the VLM whether the profile's error_signature is visible."""
+        signature = getattr(self.profile, "error_signature", None)
+        if not signature:
+            return False
+        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
+        prompt = (
+            f"Look at {result_pane} in {self.profile.app_name}. "
+            f"Does it show {signature}? "
+            "Reply exactly YES or NO, nothing else."
+        )
+        check = self._call_vlm(prompt, expect_json=False, max_tokens=32)
+        return check.text.strip().upper().startswith("YES")
+
+    def _repair_editor_and_rerun(self, current_statement: str) -> bool:
+        """Re-paste only the current statement and run the query again."""
+        print("  [RUN QUERY] repairing buffer and re-running", file=sys.stderr)
+        self._clear_editor()
+        self._paste_text(current_statement)
+        if not self._verify_buffer_exact(current_statement, "REPAIR"):
+            return False
+        return self.run_query()
+
     def _results_visible(self) -> bool:
         """Ask the VLM whether the result pane shows query output."""
         result_pane = self.profile.landmarks.get("result_pane", "the result pane")
@@ -896,15 +1154,41 @@ class VisionAgent:
         )
         return check.text.strip().upper().startswith("YES")
 
-    def run_query(self) -> bool:
+    def run_query(self, current_statement: str = "") -> bool:
         """
         Execute the SQL in the active editor by clicking the Execute/Run toolbar button.
 
         No function keys are used. The button is located by the VLM using the same
         prompting and corner-rejection logic as ``find_and_click``. If the result
         pane does not populate, the VLM is asked to click the Result tab.
+
+        Before execution, a profile-driven verifier ensures no orphan uncommented
+        fragments are present. The exact statement to be executed is derived from
+        the editor so that segmented beats that built up a query across multiple
+        steps execute the full cumulative SQL. After execution, if the profile's
+        error_signature appears, the buffer is repaired and the query re-run once.
         """
         self._ensure_frontmost()
+        editor_statement, _ = self._extract_uncommented_sql(self._read_editor_content())
+        passed_statement = current_statement or self._last_executed_statement
+        statement: str = passed_statement or editor_statement or ""
+        # When the caller's statement is only a segment, prefer the full uncommented
+        # block currently in the editor.
+        if (
+            editor_statement
+            and statement
+            and self._normalize_editor_text(editor_statement)
+            != self._normalize_editor_text(statement)
+        ):
+            print(
+                "  [RUN QUERY] using full editor statement instead of passed segment",
+                file=sys.stderr,
+            )
+            statement = editor_statement
+        if statement and not self._verify_statement_isolation(statement):
+            print("  [RUN QUERY] pre-execution isolation check FAILED", file=sys.stderr)
+            return False
+
         print("  [RUN QUERY] locating Execute/Run toolbar button", file=sys.stderr)
 
         run_button = self.profile.landmarks.get(
@@ -916,23 +1200,32 @@ class VisionAgent:
             run_button,
         )
 
+        executed = False
         if clicked:
             # Give the app time to execute and render the result pane.
             time.sleep(2.5)
+            executed = True
             if self._results_visible():
-                print("  [RUN QUERY] results visible", file=sys.stderr)
-                return True
+                if not self._result_pane_shows_error():
+                    print("  [RUN QUERY] results visible", file=sys.stderr)
+                    return True
+                print("  [RUN QUERY] error signature detected after run", file=sys.stderr)
 
-        print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
-        result_tab = self.profile.landmarks.get("result_tab", "the Result tab")
-        if self.find_and_click(
-            "Show the query results",
-            f"{result_tab} in {self.profile.app_name}",
-        ):
-            time.sleep(1.0)
-            if self._results_visible():
-                print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
-                return True
+        if not executed:
+            print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
+            result_tab = self.profile.landmarks.get("result_tab", "the Result tab")
+            if self.find_and_click(
+                "Show the query results",
+                f"{result_tab} in {self.profile.app_name}",
+            ):
+                time.sleep(1.0)
+                if self._results_visible() and not self._result_pane_shows_error():
+                    print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
+                    return True
+
+        # Repair path: if we executed and saw an error signature, try once more.
+        if executed and statement and self._result_pane_shows_error():
+            return self._repair_editor_and_rerun(statement)
 
         print("  Warning: VLM did not find Execute/Run button or Result tab", file=sys.stderr)
         return False
@@ -1020,8 +1313,11 @@ class VisionAgent:
 
     def verify_state(self, expected_description: str) -> bool:
         """Ask the VLM whether the screen matches the expected description."""
+        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
         prompt = (
-            f"Look at the screenshot. Does the current screen show: {expected_description}?\n\n"
+            f"Look at this {self.profile.app_name} screenshot. "
+            f"Check {result_pane}, the status bar, and any visible numbers. "
+            f"Does the current screen show: {expected_description}?\n\n"
             "Respond in exactly this format on the first line:\n"
             "YES: <concise reason>\n"
             "or\n"
@@ -1208,18 +1504,25 @@ class VisionAgent:
 
         if action_type == "type_block":
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
+            self._last_executed_statement = text
             return self.type_block(text)
 
         if action_type == "type_segments":
             segments = beat_dict.get("segments") or []
+            full = "".join(
+                (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
+            )
+            self._last_executed_statement = full
             return self.type_segments(segments, fallback_text=fallback_text)
 
         if action_type == "append_block":
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
+            self._last_executed_statement = text
             return self.append_block(text)
 
         if action_type == "run_query":
-            return self.run_query()
+            statement = beat_dict.get("statement") or self._last_executed_statement
+            return self.run_query(current_statement=statement)
 
         if action_type == "summarize_result_pane":
             # This action does not move the UI; it only populates observed_state.
@@ -1233,6 +1536,15 @@ class VisionAgent:
         if action_type == "verify":
             return self.verify_state(detail)
 
+        if action_type == "move_cursor":
+            return self._move_cursor_to_text(detail)
+
+        if action_type == "select_text":
+            return self._select_text_in_editor(detail)
+
+        if action_type == "highlight":
+            return self._select_text_in_editor(detail)
+
         if action_type == "sequence":
             sub_actions = beat_dict.get("actions", [])
             for sub in sub_actions:
@@ -1242,6 +1554,93 @@ class VisionAgent:
 
         print(f"Warning: unknown vision-agent action_type {action_type!r}", file=sys.stderr)
         return False
+
+    def _locate_editor_text(self, text: str) -> Optional[Dict[str, int]]:
+        """Ask the VLM for a bounding box of ``text`` inside the editor."""
+        if not text:
+            return None
+        editor = self.profile.landmarks.get("editor", "the editable text area")
+        prompt = (
+            f"Find the first occurrence of the text {text!r} inside {editor} of "
+            f"{self.profile.app_name}. Return ONLY a JSON object with this exact shape: "
+            '{"x": int, "y": int, "w": int, "h": int}. '
+            "Use coordinates in the screenshot's pixel space. Do not add any other text."
+        )
+        result = self._call_vlm(prompt, expect_json=True, max_tokens=128)
+        action = result.action
+        if not action:
+            return None
+        try:
+            return {
+                "x": int(action["x"]),
+                "y": int(action["y"]),
+                "w": int(action.get("w", 0)),
+                "h": int(action.get("h", 0)),
+            }
+        except Exception:
+            return None
+
+    def _move_cursor_to_text(self, text: str) -> bool:
+        """Move the animated cursor to the first occurrence of ``text``."""
+        bbox = self._locate_editor_text(text)
+        if not bbox:
+            return False
+        lx, ly = self._api_to_logical(
+            bbox["x"] + bbox["w"] / 2, bbox["y"] + bbox["h"] / 2
+        )
+        self._ensure_frontmost()
+        pyautogui.moveTo(lx, ly, duration=0.4, tween=pyautogui.easeInOutQuad)
+        time.sleep(0.2)
+        return True
+
+    def _select_text_in_editor(self, text: str) -> bool:
+        """Select/highlight the first occurrence of ``text`` in the editor."""
+        bbox = self._locate_editor_text(text)
+        if not bbox:
+            return False
+        x1, y1 = self._api_to_logical(bbox["x"], bbox["y"] + bbox["h"] / 2)
+        x2, y2 = self._api_to_logical(
+            bbox["x"] + bbox["w"], bbox["y"] + bbox["h"] / 2
+        )
+        self._ensure_frontmost()
+        pyautogui.moveTo(x1, y1, duration=0.4, tween=pyautogui.easeInOutQuad)
+        pyautogui.mouseDown()
+        pyautogui.moveTo(x2, y2, duration=0.4, tween=pyautogui.easeInOutQuad)
+        pyautogui.mouseUp()
+        time.sleep(0.2)
+        return True
+
+    def frame_shows_error_signature(self, frame_path: str) -> bool:
+        """Return True if ``frame_path`` matches the profile's error_signature."""
+        signature = getattr(self.profile, "error_signature", None)
+        if not signature or not Path(frame_path).exists():
+            return False
+        prompt = (
+            f"Look at this screenshot of {self.profile.app_name}. "
+            f"Does it show {signature}? "
+            "Reply exactly YES or NO, nothing else."
+        )
+        try:
+            b64 = base64.standard_b64encode(Path(frame_path).read_bytes()).decode("utf-8")
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=32,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+            )
+            text_parts = [block.text for block in response.content if block.type == "text"]
+            full_text = "\n".join(text_parts).strip()
+            return full_text.upper().startswith("YES")
+        except Exception as exc:
+            print(f"Warning: error-signature frame check failed: {exc}", file=sys.stderr)
+            return False
 
     def verify_app_visible_in_frames(
         self,

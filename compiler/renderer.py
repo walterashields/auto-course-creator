@@ -30,9 +30,10 @@ HIGHLIGHT_COLOR = "#FF2D95"
 HIGHLIGHT_RGB = (255, 45, 149)
 HIGHLIGHT_WIDTH = 3
 HIGHLIGHT_SIZE = 40  # width/height of the highlight box centered on the click point
-WORDS_PER_SECOND = 2.5
+WORDS_PER_SECOND = 2.2
 MIN_STATE_DURATION = 2.0
 MIN_EDGE_DURATION = 1.0
+MAX_CLONE_PAD_SECONDS = 4.0
 FPS = 30
 VIDEO_MAX_WIDTH = 1280
 
@@ -259,7 +260,7 @@ class GraphRenderer:
                     # long as its narration AND its recorded action clip, so
                     # no recorded content is ever trimmed and audio/picture
                     # share the same clock.
-                    frame_durations = self._synced_beat_durations(
+                    frame_durations, debt_by_beat = self._synced_beat_durations(
                         graph, script_beats, audio_durations
                     )
                     cursor = 0.0
@@ -268,6 +269,14 @@ class GraphRenderer:
                         beat.start_time = round(cursor, 3)
                         cursor += duration
                         beat.end_time = round(cursor, 3)
+
+                    # Write timing report and flag videos that exceed the pad cap.
+                    timing_report_path = output_dir / f"{graph_id}_timing_report.json"
+                    self._write_timing_report(
+                        graph_id, audio_durations, script_beats, debt_by_beat, timing_report_path
+                    )
+                    if debt_by_beat:
+                        graph.render_status = "NEEDS_TIMING_FIX"
 
                     # Persist the re-timed graph before rendering.
                     store = GraphStore()
@@ -294,13 +303,18 @@ class GraphRenderer:
                         graph_id, video_manifest, script_beats, output_dir
                     )
                     total_duration = graph.narration_beats[-1].end_time if graph.narration_beats else 0.0
-                    return {
+                    result = {
                         "video_path": video_path,
                         "audio_path": audio_path,
                         "final_path": final_path,
                         "duration": round(total_duration, 3),
                         "script_path": script_path,
+                        "timing_report_path": str(timing_report_path.resolve()),
                     }
+                    if debt_by_beat:
+                        result["status"] = "NEEDS_TIMING_FIX"
+                        result["timing_debt_seconds"] = round(sum(debt_by_beat.values()), 3)
+                    return result
             except Exception as exc:
                 print(f"Warning: TTS pass failed ({exc}); falling back to silent.", file=sys.stderr)
 
@@ -444,12 +458,14 @@ class GraphRenderer:
         Compute the final on-screen duration for every script beat.
 
         Each beat lasts the MAXIMUM of:
-          - the actual TTS narration length (when audio is available),
           - the recorded action-clip length (demo beats with a clip),
-          - the minimum hold time for the beat's attachment type.
+          - the minimum hold time for the beat's attachment type,
+          - the actual TTS narration length, BUT capped at clip+MAX_CLONE_PAD_SECONDS
+            for demo beats so silent clone padding never exceeds 4 seconds.
 
-        Taking the maximum guarantees a recorded clip is never trimmed and
-        the narration never outruns the picture. Returns {beat_id: seconds}.
+        When narration exceeds the cap, the excess is recorded as timing debt
+        and the video is flagged NEEDS_TIMING_FIX. Returns a tuple of
+        ({beat_id: seconds}, {beat_id: timing_debt_seconds}).
         """
         minimums: Dict[str, float] = {
             nb.beat_id: (
@@ -459,20 +475,88 @@ class GraphRenderer:
         }
 
         durations: Dict[str, float] = {}
+        debt_by_beat: Dict[str, float] = {}
         for beat in beats:
-            candidates = [minimums.get(beat.beat_id, MIN_STATE_DURATION)]
+            min_dur = minimums.get(beat.beat_id, MIN_STATE_DURATION)
+            audio_dur: Optional[float] = None
             if audio_durations and beat.beat_id in audio_durations:
-                candidates.append(audio_durations[beat.beat_id])
+                audio_dur = audio_durations[beat.beat_id]
+            clip_dur: Optional[float] = None
             if (
                 beat.kind == "demo"
                 and beat.video_clip_path
                 and Path(beat.video_clip_path).exists()
             ):
                 clip_dur = self._media_duration(beat.video_clip_path)
-                if clip_dur:
-                    candidates.append(clip_dur)
-            durations[beat.beat_id] = round(max(candidates), 3)
-        return durations
+
+            candidates = [min_dur]
+            if clip_dur:
+                candidates.append(clip_dur)
+                if audio_dur is not None:
+                    allowed = clip_dur + MAX_CLONE_PAD_SECONDS
+                    if audio_dur > allowed:
+                        debt_by_beat[beat.beat_id] = round(audio_dur - allowed, 3)
+                    candidates.append(min(audio_dur, allowed))
+                else:
+                    candidates.append(audio_dur)
+            elif audio_dur is not None:
+                candidates.append(audio_dur)
+
+            duration = round(max(c for c in candidates if c is not None), 3)
+            durations[beat.beat_id] = duration
+        return durations, debt_by_beat
+
+    @staticmethod
+    def _write_timing_report(
+        graph_id: str,
+        audio_durations: Dict[str, float],
+        beats: List[ScriptBeat],
+        debt_by_beat: Dict[str, float],
+        out_path: Path,
+    ) -> None:
+        """Write a JSON report of per-beat timing debt."""
+        beat_clip_durations: Dict[str, float] = {}
+        for beat in beats:
+            if beat.kind == "demo" and beat.video_clip_path and Path(beat.video_clip_path).exists():
+                try:
+                    import subprocess
+
+                    result = subprocess.run(
+                        [
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-show_entries",
+                            "format=duration",
+                            "-of",
+                            "default=noprint_wrappers=1:nokey=1",
+                            str(beat.video_clip_path),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    beat_clip_durations[beat.beat_id] = float(result.stdout.strip())
+                except Exception:
+                    beat_clip_durations[beat.beat_id] = 0.0
+        report = {
+            "graph_id": graph_id,
+            "max_clone_pad_seconds": MAX_CLONE_PAD_SECONDS,
+            "total_debt_seconds": round(sum(debt_by_beat.values()), 3),
+            "beats": [
+                {
+                    "beat_id": beat_id,
+                    "audio_seconds": round(audio_durations.get(beat_id, 0.0), 3),
+                    "clip_seconds": round(beat_clip_durations.get(beat_id, 0.0), 3),
+                    "allowed_video_seconds": round(
+                        beat_clip_durations.get(beat_id, 0.0) + MAX_CLONE_PAD_SECONDS, 3
+                    ),
+                    "debt_seconds": debt,
+                }
+                for beat_id, debt in debt_by_beat.items()
+            ],
+        }
+        out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Frame building
@@ -895,11 +979,14 @@ class GraphRenderer:
                 )
             else:
                 # Video: hold the last frame if the clip is shorter than the
-                # target duration, or trim if it is longer.
+                # target duration, but cap clone padding at MAX_CLONE_PAD_SECONDS.
+                clip_dur = self._media_duration(frame["media_path"]) or 0.0
+                pad = min(max(duration - clip_dur, 0.0), MAX_CLONE_PAD_SECONDS)
+                segment_dur = clip_dur + pad
                 filter_parts.append(
                     f"[{idx}:v]scale={VIDEO_MAX_WIDTH}:-2,fps={FPS},"
-                    f"setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={duration:.6f},"
-                    f"trim=duration={duration:.6f}[v{idx}]"
+                    f"setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={pad:.6f},"
+                    f"trim=duration={segment_dur:.6f}[v{idx}]"
                 )
             concat_inputs.append(f"[v{idx}]")
 

@@ -10,6 +10,7 @@ TTS audio.
 from __future__ import annotations
 
 import io
+import json
 import math
 import shutil
 import subprocess
@@ -592,7 +593,8 @@ class TestEditorReadBack(unittest.TestCase):
         ):
             self.assertTrue(agent.type_block("SELECT 1;"))
             log = stderr.getvalue()
-            self.assertIn("[TYPE BLOCK] read-back mismatch, retry 1/2", log)
+            self.assertIn("[TYPE BLOCK] read-back mismatch", log)
+            self.assertIn("[TYPE BLOCK] retry 1/2", log)
             self.assertIn("[TYPE BLOCK] read-back OK", log)
 
     def test_full_block_adjacency_verified(self) -> None:
@@ -767,6 +769,8 @@ class TestRunQuery(unittest.TestCase):
         with (
             mock.patch.object(agent, "_call_vlm", side_effect=vlm_side_effect),
             mock.patch.object(agent, "_ensure_frontmost"),
+            mock.patch.object(agent, "_read_editor_content", return_value="SELECT 1;"),
+            mock.patch.object(agent, "_result_pane_shows_error", return_value=False),
             mock.patch("compiler.vision_agent.pyautogui.moveTo"),
             mock.patch("compiler.vision_agent.pyautogui.click"),
             mock.patch.object(agent, "press_key") as mock_press,
@@ -827,18 +831,31 @@ class TestSegmentedTyping(unittest.TestCase):
             {"text": "SELECT 1;"},
             {"text": "SELECT 2;"},
         ]
-        remaining = "".join(s["text"] for s in segments)
-        # Initial empty editor read, two failed read-backs, then fallback paste read-back succeeds.
-        read_values = ["", "WRONG", "WRONG", remaining]
+        # Segments that do not start with whitespace are separated by a newline
+        # when appended to non-empty editor content.
+        remaining = "SELECT 1;\nSELECT 2;"
+
+        def verify_side_effect(intended: str, label: str = "") -> bool:
+            # Fail first two segment checks, fail in-place repair, succeed fallback.
+            norm = agent._normalize_editor_text(intended)
+            if norm == agent._normalize_editor_text("SELECT 1;"):
+                return False
+            if norm == agent._normalize_editor_text(remaining):
+                return True
+            return False
+
         with (
             mock.patch.object(agent, "_ensure_frontmost"),
             mock.patch.object(agent, "_type_segment_cadence"),
             mock.patch.object(agent, "_undo_segment"),
-            mock.patch.object(agent, "_read_editor_content", side_effect=read_values),
+            mock.patch.object(agent, "_verify_buffer_exact", side_effect=verify_side_effect),
+            mock.patch.object(agent, "_read_editor_content", return_value=""),
+            mock.patch.object(agent, "_append_text") as mock_append,
             mock.patch.object(agent, "_clear_editor") as mock_clear,
             mock.patch.object(agent, "_paste_text") as mock_paste,
         ):
             self.assertTrue(agent.type_segments(segments))
+            mock_append.assert_called_once()
             mock_clear.assert_called_once()
             mock_paste.assert_called_once()
             pasted = mock_paste.call_args[0][0]
@@ -916,6 +933,183 @@ class TestEnvironmentProfile(unittest.TestCase):
         self.assertNotIn("DB Browser", " ".join(str(x) for x in activation_calls))
 
 
+class TestCommentExecutionVerifier(unittest.TestCase):
+    def test_orphan_uncommented_line_fails_isolation(self) -> None:
+        """A bare continuation line outside the current statement must block execution."""
+        agent = VisionAgent()
+        profile = EnvironmentProfile(
+            application="db_browser_sqlite",
+            app_name="DB Browser for SQLite",
+            focus_target="DB Browser for SQLite",
+            execute_scope="whole_script",
+            comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
+        )
+        agent.profile = profile
+        with mock.patch.object(
+            agent,
+            "_read_editor_content",
+            return_value="SELECT FirstName FROM Customer;\nLastName",
+        ):
+            self.assertFalse(agent._verify_statement_isolation("SELECT FirstName FROM Customer;"))
+
+    def test_commented_history_passes_isolation(self) -> None:
+        """Non-current lines that are commented out are allowed."""
+        agent = VisionAgent()
+        profile = EnvironmentProfile(
+            application="db_browser_sqlite",
+            app_name="DB Browser for SQLite",
+            focus_target="DB Browser for SQLite",
+            execute_scope="whole_script",
+            comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
+        )
+        agent.profile = profile
+        buffer = "-- SELECT * FROM Old;\nSELECT FirstName FROM Customer;"
+        with mock.patch.object(agent, "_read_editor_content", return_value=buffer):
+            self.assertTrue(agent._verify_statement_isolation("SELECT FirstName FROM Customer;"))
+
+    def test_block_comment_history_passes_isolation(self) -> None:
+        """A block-commented history above the current statement is allowed."""
+        agent = VisionAgent()
+        profile = EnvironmentProfile(
+            application="db_browser_sqlite",
+            app_name="DB Browser for SQLite",
+            focus_target="DB Browser for SQLite",
+            execute_scope="whole_script",
+            comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
+        )
+        agent.profile = profile
+        buffer = "/*\nOld query\n*/\nSELECT FirstName FROM Customer;"
+        with mock.patch.object(agent, "_read_editor_content", return_value=buffer):
+            self.assertTrue(agent._verify_statement_isolation("SELECT FirstName FROM Customer;"))
+
+
+class TestRendererPaddingCap(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_pad_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_long_narration_writes_timing_report_and_flags_debt(self) -> None:
+        """If narration exceeds clip+4s the renderer reports timing debt."""
+        clip = _make_video(self.tmpdir / "short_action.mp4", duration=2.0, motion=True)
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="demo",
+                text="This narration is deliberately long enough to exceed the four second padding cap when spoken at a normal pace.",
+                action={"type": "click", "target": {"x": 0.5, "y": 0.5}},
+                video_clip_path=str(clip.resolve()),
+            )
+        ]
+
+        class Manifest:
+            title = "Padding test"
+            learning_objective = "Test padding cap."
+            application = "db_browser_sqlite"
+            format_tier = "short"
+
+        renderer = GraphRenderer(output_dir=str(self.tmpdir))
+        tts_durations = {"beat_001": 12.0}
+        original = fake_tts(None, tts_durations)  # type: ignore[arg-type]
+        try:
+            out_path = str(self.tmpdir / "pad_test.mp4")
+            result = renderer.render_from_script(
+                video_manifest=Manifest(),
+                script_beats=beats,
+                output_path=out_path,
+                output_mode="hybrid",
+            )
+            self.assertIsNotNone(result)
+            self.assertEqual(result.get("status"), "NEEDS_TIMING_FIX")
+            report_path = Path(result["timing_report_path"])
+            self.assertTrue(report_path.exists())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["max_clone_pad_seconds"], 4.0)
+            self.assertGreater(report["total_debt_seconds"], 0.0)
+            self.assertEqual(len(report["beats"]), 1)
+            self.assertAlmostEqual(report["beats"][0]["debt_seconds"], 6.0, delta=0.5)
+        finally:
+            restore_tts(original)
+
+
+class TestAdaptationUniqueness(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_similar_consecutive_beats_yield_merge(self) -> None:
+        """Two adapted concept beats with no new datum produce a MERGE."""
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="concept",
+                text="We see 60 rows with FirstName and LastName.",
+                observed_state={
+                    "active_tab": "Execute SQL",
+                    "visible_table": "Customer",
+                    "row_range_text": "1 - 20 of 60",
+                    "column_headers": ["FirstName", "LastName"],
+                    "summary": "Result grid visible.",
+                },
+            ),
+            ScriptBeat(
+                beat_id="beat_002",
+                kind="concept",
+                text="We see 100 rows with FirstName and LastName.",
+                observed_state={
+                    "active_tab": "Execute SQL",
+                    "visible_table": "Customer",
+                    "row_range_text": "1 - 20 of 60",
+                    "column_headers": ["FirstName", "LastName"],
+                    "summary": "Result grid still visible.",
+                },
+            ),
+        ]
+
+        def fake_llm_response(*args, **kwargs):
+            """Return a rewrite that drops the conflicting number."""
+            class Block:
+                text = "We see rows with FirstName and LastName."
+                type = "text"
+
+            class Response:
+                content = [Block()]
+
+            return Response()
+
+        with mock.patch.object(
+            self.builder.client.messages, "create", side_effect=fake_llm_response
+        ):
+            self.builder._adapt_beats_to_observed_state(beats)
+        # The second beat must be marked MERGE because the rewrite adds no new datum.
+        self.assertTrue(
+            beats[1].merge,
+            "adapted beat repeated the previous one without a MERGE flag",
+        )
+
+
+class TestFullBufferReadBack(unittest.TestCase):
+    def _agent_with_mocks(self) -> VisionAgent:
+        agent = VisionAgent()
+        mock.patch.object(agent, "find_and_click", return_value=True).start()
+        mock.patch.object(agent, "press_key", return_value=True).start()
+        self.addCleanup(mock.patch.stopall)
+        return agent
+
+    def test_mangled_multiline_paste_detected(self) -> None:
+        """A paste that drops a line must fail full-buffer verification."""
+        agent = self._agent_with_mocks()
+        intended = "SELECT\n    FirstName,\n    LastName\nFROM Customer;"
+        # VLM returns content missing the LastName line.
+        with (
+            mock.patch.object(agent, "_read_editor_content", return_value="SELECT\n    FirstName,\nFROM Customer;"),
+            mock.patch("pyautogui.typewrite"),
+            mock.patch("pyautogui.press"),
+            mock.patch("time.sleep"),
+        ):
+            self.assertFalse(agent._verify_buffer_exact(intended, "TEST"))
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -937,6 +1131,10 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestSegmentedTyping))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
+    suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
+    suite.addTests(loader.loadTestsFromTestCase(TestRendererPaddingCap))
+    suite.addTests(loader.loadTestsFromTestCase(TestAdaptationUniqueness))
+    suite.addTests(loader.loadTestsFromTestCase(TestFullBufferReadBack))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1

@@ -142,7 +142,8 @@ class LessonBuilder:
 
     @staticmethod
     def _truncate(text: str, max_words: int) -> str:
-        """Truncate text only at sentence boundaries, never mid-sentence."""
+        """Truncate text at sentence boundaries, or at a word boundary inside a
+        single sentence if the sentence alone exceeds the budget."""
         text = text.strip()
         words = text.split()
         if len(words) <= max_words:
@@ -158,11 +159,16 @@ class LessonBuilder:
             if count + sentence_words <= max_words:
                 chosen.append(sentence)
                 count += sentence_words
+            elif count == 0:
+                # The first sentence alone exceeds the budget; truncate it.
+                truncated = " ".join(sentence.split()[:max_words]).rstrip(",;:")
+                if truncated:
+                    truncated += "."
+                return truncated
             else:
                 break
         if chosen:
             return " ".join(chosen)
-        # Cannot truncate without breaking a sentence.
         return text
 
     @staticmethod
@@ -171,6 +177,34 @@ class LessonBuilder:
         return {"opening": 60, "demo": 25, "validation": 45, "close": 70}.get(
             kind, 25
         )
+
+    @staticmethod
+    def _planned_action_seconds(action: Optional[Dict[str, Any]]) -> float:
+        """Estimate how many seconds a demo action should take on screen."""
+        if not isinstance(action, dict):
+            return 2.0
+        action_type = action.get("type")
+        if action_type == "wait":
+            return float(action.get("duration", 1.5))
+        if action_type in ("type_block", "type"):
+            text = str(action.get("text") or action.get("detail") or "")
+            return max(1.5, 0.10 * len(text) + 0.5)
+        if action_type == "type_segments":
+            segments = action.get("segments") or []
+            text = "".join(
+                (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
+            )
+            return max(1.5, 0.10 * len(text) + 0.5)
+        if action_type in ("run_query", "execute_query"):
+            return 2.0
+        if action_type == "key":
+            return 1.0
+        if action_type == "click":
+            return 1.5
+        if action_type == "sequence":
+            subs = action.get("actions") or []
+            return sum(LessonBuilder._planned_action_seconds(sub) for sub in subs) or 2.0
+        return 2.0
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
@@ -1317,11 +1351,13 @@ class LessonBuilder:
             }
 
         def _segment_beat(beat_id: str, text: str, narration: str) -> ScriptBeat:
+            action = _segment_action(text)
             return ScriptBeat(
                 beat_id=beat_id,
                 kind="demo",
                 text=narration,
-                action=_segment_action(text),
+                action=action,
+                planned_duration=LessonBuilder._planned_action_seconds(action),
             )
 
         beats: List[ScriptBeat] = []
@@ -2051,19 +2087,25 @@ class LessonBuilder:
             "close": 70,
         }
         minima = {
-            "opening": 30,
-            "concept": 30,
-            "state": 30,
-            "explain": 40,
-            "demo": 8,
-            "validation": 20,
-            "close": 30,
+            "opening": 5,
+            "concept": 5,
+            "state": 5,
+            "explain": 5,
+            "demo": 5,
+            "validation": 5,
+            "close": 5,
         }
         total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
 
-        # First pass: hard cap per kind.
+        # First pass: budget narration to the planned action duration.
+        # words ≈ 2.2 × planned action seconds, bounded by per-kind caps/minima.
         for beat in beats:
-            beat.text = self._truncate(beat.text, limits.get(beat.kind, 15))
+            planned = beat.planned_duration or self._planned_action_seconds(beat.action)
+            beat.planned_duration = planned
+            duration_budget = int(2.2 * planned)
+            cap = min(limits.get(beat.kind, 15), max(duration_budget, minima.get(beat.kind, 5)))
+            cap = max(cap, minima.get(beat.kind, 5))
+            beat.text = self._truncate(beat.text, cap)
 
         # Second pass: if total still exceeds limit, trim non-essential words
         # from the longest beat, but never below its minimum and never remove
@@ -2555,6 +2597,8 @@ Return ONLY a JSON array of beats like:
                     continue
                 beat.action = _format_action_sql(beat.action)
                 beat.action = LessonBuilder._normalize_action(beat.action)
+                if beat.planned_duration is None:
+                    beat.planned_duration = LessonBuilder._planned_action_seconds(beat.action)
             cleaned.append(beat)
 
         cleaned = LessonBuilder._split_atomic_demo_beats(cleaned)
@@ -2577,12 +2621,14 @@ Return ONLY a JSON array of beats like:
             texts = LessonBuilder._split_demo_text(beat.text, len(sub_actions))
             for i, (sub_action, sub_text) in enumerate(zip(sub_actions, texts), start=1):
                 suffix = f"_{chr(ord('a') + i - 1)}"
+                normalized = LessonBuilder._normalize_action(sub_action)
                 result.append(
                     ScriptBeat(
                         beat_id=f"{beat.beat_id}{suffix}",
                         kind="demo",
                         text=sub_text,
-                        action=LessonBuilder._normalize_action(sub_action),
+                        action=normalized,
+                        planned_duration=LessonBuilder._planned_action_seconds(normalized),
                     )
                 )
         return result
@@ -2884,6 +2930,7 @@ Return ONLY a JSON array of beats like:
 
         # ADAPT narration for validation/concept beats that conflict with observed facts.
         self._adapt_beats_to_observed_state(beats)
+        beats = self._collapse_merge_beats(beats)
 
         return result
 
@@ -2895,12 +2942,20 @@ Return ONLY a JSON array of beats like:
         available to the renderer; only the narration text is rewritten when it
         conflicts with the observed state. Validation beats are preserved so the
         renderer can end on the last demo clip's final frame.
+
+        Each adapted beat must add new information compared to all previously
+        finalized beats; otherwise it is marked MERGE and collapsed later.
         """
         self._enforce_clip_truthfulness(beats)
+        finalized_texts: List[str] = []
         for beat in beats:
+            if beat.merge:
+                continue
             if beat.kind == "concept" and beat.observed_state:
                 if self._beat_conflicts_with_observed_state(beat):
-                    self._rewrite_beat_from_observed(beat, "state")
+                    self._rewrite_beat_from_observed(
+                        beat, "state", previous_texts=finalized_texts
+                    )
             # Continuity-aware rendering: opening state beats that could not be
             # established must be rewritten to describe the actual screen. When the
             # continuity history was successfully pasted, also rewrite the state beat
@@ -2911,7 +2966,9 @@ Return ONLY a JSON array of beats like:
                 and beat.observed_state.get("opening_state_strategy") == "adapted"
             ):
                 if self._beat_conflicts_with_observed_state(beat):
-                    self._rewrite_beat_from_observed(beat, "state")
+                    self._rewrite_beat_from_observed(
+                        beat, "state", previous_texts=finalized_texts
+                    )
             elif (
                 beat.kind == "state"
                 and beat.observed_state
@@ -2929,7 +2986,9 @@ Return ONLY a JSON array of beats like:
                         "previous queries sit above, commented out, and that the new query "
                         "is being added below them."
                     ),
+                    previous_texts=finalized_texts,
                 )
+            finalized_texts.append(beat.text)
 
     def _enforce_clip_truthfulness(self, beats: List[ScriptBeat]) -> List[ScriptBeat]:
         """
@@ -2943,15 +3002,18 @@ Return ONLY a JSON array of beats like:
         visible change. Validation beats are always preserved.
         """
         previous_observed: Optional[Dict[str, Any]] = None
+        finalized_texts: List[str] = []
         for beat in beats:
             if beat.kind == "validation":
                 # Validation beats are allowed without clips or observed_state.
+                finalized_texts.append(beat.text)
                 continue
             if beat.kind == "demo" and beat.observed_state:
                 if self._action_produces_visible_change(beat.action):
                     # The action itself guarantees visible change; keep the
                     # original narration and recorded clip.
                     previous_observed = beat.observed_state
+                    finalized_texts.append(beat.text)
                     continue
                 if previous_observed and self._observed_state_unchanged(
                     previous_observed, beat.observed_state
@@ -2963,9 +3025,28 @@ Return ONLY a JSON array of beats like:
                             "The screen did not visibly change during this beat. "
                             "Rewrite the narration to describe the existing state while keeping the demo intent."
                         ),
+                        previous_texts=finalized_texts,
                     )
+            finalized_texts.append(beat.text)
             previous_observed = beat.observed_state or previous_observed
         return beats
+
+    @staticmethod
+    def _collapse_merge_beats(beats: List[ScriptBeat]) -> List[ScriptBeat]:
+        """Join each beat marked merge into the previous beat and remove it."""
+        collapsed: List[ScriptBeat] = []
+        for beat in beats:
+            if beat.merge and collapsed:
+                prev = collapsed[-1]
+                prev.text = f"{prev.text} {beat.text}".strip()
+                # Inherit the latest clip if the merge beat carried one.
+                if beat.video_clip_path:
+                    prev.video_clip_path = beat.video_clip_path
+                    prev.action = beat.action or prev.action
+                print(f"  Merged {beat.beat_id} into {prev.beat_id}", file=sys.stderr)
+                continue
+            collapsed.append(beat)
+        return collapsed
 
     @staticmethod
     def _action_produces_visible_change(action: Optional[Dict[str, Any]]) -> bool:
@@ -2986,14 +3067,41 @@ Return ONLY a JSON array of beats like:
             )
         return False
 
+    @staticmethod
+    def _extract_data_tokens(text: str) -> Set[str]:
+        """Return numbers and column-like identifiers present in ``text``."""
+        lowered = text.lower()
+        tokens: Set[str] = set()
+        # Numbers
+        tokens.update(re.findall(r"\d+(?:\.\d+)?", lowered))
+        # Column-like identifiers (underscore or capitalized camel/Pascal)
+        tokens.update(re.findall(r"\b[a-z]+_[a-z_]+\b", lowered))
+        tokens.update(re.findall(r"\b[a-z]+[A-Z][a-zA-Z]*\b", lowered))
+        # Verification words
+        tokens.update({w for w in {"confirms", "confirms", "verified", "validation", "returned"} if w in lowered})
+        return tokens
+
     def _rewrite_beat_from_observed(
         self,
         beat: ScriptBeat,
         target_kind: str,
         extra_instruction: str = "",
+        previous_texts: Optional[List[str]] = None,
     ) -> None:
         """Use a text-only LLM call to rewrite a beat from observed facts."""
         observed = beat.observed_state
+        previous_texts = previous_texts or []
+        previous_block = ""
+        if previous_texts:
+            previous_block = "\nPreviously finalized narration:\n" + "\n".join(
+                f"- {t}" for t in previous_texts
+            )
+            previous_block += (
+                "\n\nThe rewritten beat must add NEW concrete information "
+                "(a number, column name, table name, or verification claim) "
+                "that is not already in the previously finalized narration. "
+                "If there is no new concrete information, reply with the literal token MERGE."
+            )
         prompt = (
             "Rewrite this narration beat to describe ONLY the stable observed state. "
             "Do not invent numbers, column names, or table names. "
@@ -3001,6 +3109,7 @@ Return ONLY a JSON array of beats like:
             "Describe only what is persistently visible in the main window. "
             "Keep first person plural, present tense, and the original intent. "
             + extra_instruction
+            + previous_block
             + "\n\n"
             f"Original beat: {beat.text}\n"
             f"Observed facts:\n"
@@ -3018,7 +3127,20 @@ Return ONLY a JSON array of beats like:
             )
             text_parts = [block.text for block in response.content if block.type == "text"]
             rewritten = "\n".join(text_parts).strip().strip('"')
+            if rewritten.upper() == "MERGE":
+                print(f"  Adapted {beat.beat_id}: marked MERGE", file=sys.stderr)
+                beat.merge = True
+                return
             if rewritten:
+                # Enforce new-information rule locally as well.
+                new_data = self._extract_data_tokens(rewritten)
+                previous_data = set().union(
+                    *(self._extract_data_tokens(t) for t in previous_texts)
+                )
+                if previous_texts and not (new_data - previous_data):
+                    print(f"  Adapted {beat.beat_id}: no new datum; marked MERGE", file=sys.stderr)
+                    beat.merge = True
+                    return
                 print(
                     f"  Adapted {beat.beat_id}: '{beat.text[:50]}...' -> '{rewritten[:50]}...'",
                     file=sys.stderr,

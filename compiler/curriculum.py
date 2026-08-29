@@ -469,6 +469,104 @@ def _derive_sql_history(
     return history, new_query
 
 
+def _resolve_controlling_terminal() -> str:
+    """Return the name of the process that launched this Python process."""
+    import os
+
+    override = os.environ.get("WSDA_CONTROLLING_TERMINAL", "").strip()
+    if override:
+        return override
+    try:
+        import psutil
+
+        proc = psutil.Process()
+        while proc.pid > 1:
+            parent = proc.parent()
+            if parent is None:
+                break
+            proc = parent
+        return proc.name()
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application "System Events" to get name of first process whose frontmost is true'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or "Terminal"
+    except Exception:
+        return "Terminal"
+
+
+def _preflight_system_state(target_app_name: str, controlling_terminal: str) -> None:
+    """
+    Hard preflight via AppleScript System Events.
+
+    Asserts Do Not Disturb is on and only the target app + controlling terminal
+    (+ essential macOS UI processes) are running. Refuses to record otherwise.
+    """
+    import os
+
+    if os.environ.get("WSDA_SKIP_PREFLIGHT"):
+        return
+
+    # 1. Do Not Disturb must be on.
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application "System Events" to get do not disturb'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        dnd = result.stdout.strip().lower()
+    except Exception as exc:
+        raise RuntimeError(f"[PREFLIGHT] Could not query Do Not Disturb: {exc}")
+    if dnd != "true":
+        raise RuntimeError(
+            f"[PREFLIGHT] Do Not Disturb is off ({dnd!r}). Enable it before recording."
+        )
+
+    # 2. Enumerate visible (non-background) processes.
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to get name of every process whose background only is false',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        visible = {p.strip() for p in result.stdout.split(",") if p.strip()}
+    except Exception as exc:
+        raise RuntimeError(f"[PREFLIGHT] Could not enumerate running processes: {exc}")
+
+    allowed = {
+        target_app_name,
+        controlling_terminal,
+        "Finder",
+        "SystemUIServer",
+        "Dock",
+        "WindowServer",
+        "loginwindow",
+        "ControlCenter",
+        "Spotlight",
+        "Python",  # test runners / python -m compiler.curriculum
+        "python",
+        "python3",
+        "osascript",
+    }
+    offenders = visible - allowed
+    if offenders:
+        raise RuntimeError(
+            f"[PREFLIGHT] Disallowed visible processes are running: {sorted(offenders)}. "
+            "Close them or set WSDA_CONTROLLING_TERMINAL if needed."
+        )
+
+
 def _assert_recording_hygiene(profile: "EnvironmentProfile") -> None:
     """
     Pre-flight assertion that the recording environment is clean.
@@ -477,6 +575,17 @@ def _assert_recording_hygiene(profile: "EnvironmentProfile") -> None:
     the off-app frame gate can only cut frames that are already recorded; a
     notification at run start must be cleared before recording begins.
     """
+    import os
+
+    if os.environ.get("WSDA_SKIP_PREFLIGHT"):
+        print("[RECORDING HYGIENE] preflight skipped via WSDA_SKIP_PREFLIGHT", file=sys.stderr)
+        return
+
+    _preflight_system_state(
+        target_app_name=profile.app_name,
+        controlling_terminal=_resolve_controlling_terminal(),
+    )
+
     # Do Not Disturb / Focus state (best-effort on macOS).
     dnd_state = "unknown"
     try:
@@ -1011,6 +1120,8 @@ def run_course(
 
         # C4.1: enforce sentence integrity on every script, whether generated or loaded.
         lesson_builder._enforce_sentence_integrity(script_beats)
+        # C6: budget narration to the planned action duration so scripts fit the demo.
+        lesson_builder._enforce_word_limits(script_beats, video)
         video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
 
         if not script_beats:

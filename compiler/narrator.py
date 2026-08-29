@@ -44,6 +44,10 @@ class ScriptBeat:
     video_clip_path: Optional[str] = None
     # Filled during execution-time sight: structured observed UI state summary.
     observed_state: Optional[Dict[str, Any]] = None
+    # Planned action duration used to budget narration length.
+    planned_duration: Optional[float] = None
+    # True when this beat should be merged into the previous beat by the renderer.
+    merge: bool = False
 
 
 # ---------------------------------------------------------------------------

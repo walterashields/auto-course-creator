@@ -124,6 +124,33 @@ def _clip_has_off_app_interval(
     return False
 
 
+def _extract_frame(video_path: str, out_path: str, offset: float = 0.5) -> bool:
+    """Extract a single PNG frame from ``video_path`` at ``offset`` seconds."""
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(offset),
+                "-i",
+                video_path,
+                "-vframes",
+                "1",
+                "-pix_fmt",
+                "rgb24",
+                out_path,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        return Path(out_path).exists()
+    except Exception as exc:
+        print(f"Warning: could not extract sample frame: {exc}", file=sys.stderr)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Screen recording and cursor animation
 # ---------------------------------------------------------------------------
@@ -1201,6 +1228,34 @@ def _ground_query_result(beat: "ScriptBeat", db_path: Optional[str]) -> None:
     beat.observed_state["query_result"] = ground
 
 
+def _extract_expected_row_count(text: str) -> Optional[int]:
+    """Return the first integer followed by 'row' or 'rows' in ``text``, if any."""
+    match = re.search(r"\b(\d+)\s+rows?\b", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _parse_row_count(value: Any) -> Optional[int]:
+    """Normalize a row_count value from a result summary to an int."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower().strip()
+        if "of" in lowered:
+            try:
+                return int(lowered.split("of")[0].strip())
+            except Exception:
+                return None
+        try:
+            return int(lowered)
+        except Exception:
+            return None
+    return None
+
+
 # Programmatic bounding box dimensions (in API screenshot pixels) for each
 # element type.  The vision model returns only a center point; we expand it to
 # a full clickable area centered on that point.
@@ -2269,7 +2324,7 @@ class EndStateDiscovery:
             first_state.observed_state["opening_state_strategy"] = strategy
             first_state.observed_state["opening_state_log"] = log_line
 
-        def _verify_or_rewrite() -> None:
+        def _verify_or_rewrite(already_ran_query: bool = False) -> None:
             """VLM-verify the screen against the state beat and rewrite on mismatch."""
             verified = agent.verify_state(first_state.text)
             observed["opening_state_verified"] = verified
@@ -2280,7 +2335,11 @@ class EndStateDiscovery:
                 "attempting one fix",
                 file=sys.stderr,
             )
-            if query_to_type:
+            # Only append and re-run the prior query as a fix when it has not
+            # already been executed as part of the continuity setup. Re-running
+            # after the commented history has been staged would leave an
+            # uncommented duplicate in the editor and break statement isolation.
+            if query_to_type and not already_ran_query:
                 agent.append_block(query_to_type)
                 agent.execute_beat({"type": "run_query"})
                 verified = agent.verify_state(first_state.text)
@@ -2317,7 +2376,7 @@ class EndStateDiscovery:
                 agent.dismiss_transient_ui()
                 observed = agent.summarize_observed_state()
                 observed["history_pasted"] = True
-                _verify_or_rewrite()
+                _verify_or_rewrite(already_ran_query=True)
                 _log_and_store(
                     "established" if observed.get("opening_state_verified") else "adapted",
                     "continuity history + prior query results staged",
@@ -2576,6 +2635,7 @@ class EndStateDiscovery:
                         agent.prepare_sql_editor()
                     else:
                         agent.dismiss_transient_ui()
+                    agent.recording = True
                     recorder.start()
                 clip_start = time.time()
 
@@ -2601,6 +2661,34 @@ class EndStateDiscovery:
                                 file=sys.stderr,
                             )
                             time.sleep(0.5)
+
+                        # Programmatic fallback for row-count validations: the VLM
+                        # sometimes focuses on the SQL editor instead of the result
+                        # pane. If the beat asserts a specific row count, trust the
+                        # actual result-pane summary when it matches.
+                        if not beat_ok and beat.kind == "validation":
+                            expected_rows = _extract_expected_row_count(beat.text)
+                            if expected_rows is not None:
+                                try:
+                                    pane_summary = agent.summarize_result_pane()
+                                    actual_rows = _parse_row_count(
+                                        pane_summary.get("row_count")
+                                    )
+                                    if actual_rows is not None and actual_rows == expected_rows:
+                                        print(
+                                            f"  [VALIDATION] result pane confirms {actual_rows} rows; "
+                                            "overriding VLM NO",
+                                            file=sys.stderr,
+                                        )
+                                        beat_ok = True
+                                        if beat.observed_state is None:
+                                            beat.observed_state = {}
+                                        beat.observed_state["query_result"] = pane_summary
+                                except Exception as exc:
+                                    print(
+                                        f"  [VALIDATION] programmatic row-count check failed: {exc}",
+                                        file=sys.stderr,
+                                    )
 
                         if not beat_ok:
                             recovery = agent.ask_recovery(
@@ -2672,6 +2760,7 @@ class EndStateDiscovery:
                 finally:
                     if not skipped:
                         recorder.stop()
+                        agent.recording = False
                 clip_end = time.time()
 
                 if skipped:
@@ -2694,11 +2783,34 @@ class EndStateDiscovery:
                             )
                             beat_failed = True
                             break
-                    else:
-                        if clip_path.exists():
-                            self._trim_clip_to_motion(clip_path)
-                            beat.video_clip_path = str(clip_path.resolve())
-                        break
+
+                    # Drop any clip that shows the profile's error signature.
+                    if self.profile.error_signature and clip_path.exists():
+                        sample_frame = self.output_dir / f"{run_id}_{beat.beat_id}_sample.png"
+                        if _extract_frame(str(clip_path), str(sample_frame)):
+                            if agent.frame_shows_error_signature(str(sample_frame)):
+                                print(
+                                    f"[ERROR-SIG] {beat.beat_id} attempt {retry + 1} contains error signature",
+                                    file=sys.stderr,
+                                )
+                                try:
+                                    clip_path.unlink()
+                                except Exception:
+                                    pass
+                                if retry < 1:
+                                    beat_ok = False
+                                    continue
+                                else:
+                                    failed_reason = (
+                                        f"[ERROR-SIG] {beat.beat_id} still contains error signature after retries"
+                                    )
+                                    beat_failed = True
+                                    break
+
+                    if clip_path.exists():
+                        self._trim_clip_to_motion(clip_path)
+                        beat.video_clip_path = str(clip_path.resolve())
+                    break
 
             if beat_failed:
                 break
