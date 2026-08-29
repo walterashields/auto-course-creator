@@ -22,6 +22,12 @@ from typing import List, Literal, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from .discovery import EndStateDiscovery
+from .frame_analysis import (
+    compute_video_metrics,
+    format_gate_table,
+    reconcile_summary,
+    run_acceptance_gates,
+)
 from .graph_store import GraphStore
 from .lesson_builder import LessonBuilder
 from .narrator import ScriptBeat
@@ -564,6 +570,22 @@ def _preflight_system_state(target_app_name: str, controlling_terminal: str) -> 
         raise RuntimeError(
             f"[PREFLIGHT] Disallowed visible processes are running: {sorted(offenders)}. "
             "Close them or set WSDA_CONTROLLING_TERMINAL if needed."
+        )
+
+    # 3. Optional dedicated render-account check.
+    render_user = os.environ.get("WSDA_RENDER_USER")
+    if render_user:
+        current_user = os.environ.get("USER", "")
+        if current_user != render_user:
+            raise RuntimeError(
+                f"[PREFLIGHT] WSDA_RENDER_USER is set to {render_user!r} but the "
+                f"current console user is {current_user!r}. Switch to the render account."
+            )
+    else:
+        print(
+            "[PREFLIGHT] WSDA_RENDER_USER is not set; running base preflight. "
+            "Set WSDA_RENDER_USER to enforce a dedicated render account.",
+            file=sys.stderr,
         )
 
 
@@ -1229,6 +1251,16 @@ def run_course(
             print("FAILED (render from script)")
             raise RuntimeError(f"Render from script failed for {video.video_id}")
 
+        if render_result.get("needs_reshoot"):
+            print("FAILED (recording deficit >4s/beat; re-record before TTS)")
+            print(
+                f"  timing_report: {render_result.get('timing_report_path')}",
+                file=sys.stderr,
+            )
+            raise RuntimeError(
+                f"Recording deficit for {video.video_id}; see timing_report.json"
+            )
+
         # Post-render hard gates: whatever files the renderer claimed to produce
         # must actually exist on disk.
         video_path = render_result.get("video_path")
@@ -1262,7 +1294,41 @@ def run_course(
             print(f"FAILED (whole-video off-app frame gate): {exc}", file=sys.stderr)
             raise
 
-        duration = render_result.get("duration", 0.0)
+        # Part B acceptance gates + A4 reconciliation.
+        final_path_obj = Path(final_path)
+        audio_path_obj = (
+            Path(audio_path) if audio_path and Path(audio_path).exists() else None
+        )
+        reference_path_obj = Path(render_result.get("script_path") or "")
+        computed_metrics = compute_video_metrics(
+            final_path_obj, audio_path_obj, reference_path_obj, profile
+        )
+        renderer_summary = {
+            "duration_seconds": render_result.get("duration", 0.0),
+            "audio_duration_seconds": _media_duration(audio_path) if audio_path else 0.0,
+            "word_count": sum(len(b.text.split()) for b in script_beats),
+            "frozen_pct": 0.0,
+            "error_frames": 0,
+        }
+        discrepancies = reconcile_summary(renderer_summary, computed_metrics)
+        if discrepancies:
+            print(
+                f"FAILED (summary reconciliation): {discrepancies}",
+                file=sys.stderr,
+            )
+            raise RuntimeError(f"Summary reconciliation failed: {discrepancies}")
+
+        gate_result = run_acceptance_gates(
+            final_path_obj, audio_path_obj, reference_path_obj, profile
+        )
+        print(f"[GATES] {video.video_id}", file=sys.stderr)
+        print(format_gate_table(gate_result), file=sys.stderr)
+        if not gate_result["passed"]:
+            raise RuntimeError(
+                f"Acceptance gates failed for {video.video_id}"
+            )
+
+        duration = computed_metrics["duration_seconds"]
         logging.info(
             "Completed video %s (%s): duration=%.3fs final=%s",
             video.video_id,
@@ -1279,6 +1345,8 @@ def run_course(
                 "reference_path": render_result.get("script_path"),
                 "duration": round(duration, 3),
                 "graph_id": graph_id,
+                "metrics": computed_metrics,
+                "gates": gate_result["gates"],
             }
         )
 

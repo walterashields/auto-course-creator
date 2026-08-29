@@ -17,7 +17,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 0,
+      "estimated_duration_seconds": 71,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -29,7 +29,127 @@
       "has_preview": false,
       "recap_text_hint": null,
       "preview_text_hint": null,
-      "script_beats": [],
+      "script_beats": [
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "In this video, we will.",
+          "kind": "opening",
+          "beat_id": "beat_001"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The editor is empty and.",
+          "kind": "state",
+          "beat_id": "beat_002"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "SELECT is the SQL command.",
+          "kind": "explain",
+          "beat_id": "beat_003"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Right now the editor is.",
+          "kind": "state",
+          "beat_id": "beat_004"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-28\nDescription: Customer contact list for management\n*/"
+              }
+            ]
+          },
+          "text": "We type a comment header that records who created the query, when it was written, and what problem it solves.",
+          "kind": "demo",
+          "beat_id": "beat_005"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\n\nSELECT\n    FirstName,\n    LastName,\n    Email"
+              }
+            ]
+          },
+          "text": "We type the SELECT clause, listing the columns FirstName, LastName, and.",
+          "kind": "demo",
+          "beat_id": "beat_006"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nFROM Customer;"
+              }
+            ]
+          },
+          "text": "We type FROM Customer to.",
+          "kind": "demo",
+          "beat_id": "beat_007"
+        },
+        {
+          "action": {
+            "type": "run_query"
+          },
+          "text": "We run the query and.",
+          "kind": "demo",
+          "beat_id": "beat_008"
+        },
+        {
+          "action": {
+            "type": "verify",
+            "detail": "the Execute SQL tab shows a populated results grid below the query"
+          },
+          "text": "We see 60 rows returned.",
+          "kind": "validation",
+          "beat_id": "beat_009"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The result pane shows the.",
+          "kind": "explain",
+          "beat_id": "beat_010"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Adding a comment header at.",
+          "kind": "explain",
+          "beat_id": "beat_011"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "We have written our first.",
+          "kind": "close",
+          "beat_id": "beat_012"
+        }
+      ],
       "planned_queries": [
         "SELECT FirstName, LastName, Email FROM Customer;"
       ]
@@ -49,7 +169,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 0,
+      "estimated_duration_seconds": 38,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -61,7 +181,127 @@
       "has_preview": false,
       "recap_text_hint": null,
       "preview_text_hint": null,
-      "script_beats": [],
+      "script_beats": [
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "In this video, we will.",
+          "kind": "opening",
+          "beat_id": "beat_001"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Our previous query sits above.",
+          "kind": "state",
+          "beat_id": "beat_002"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The AS keyword gives a.",
+          "kind": "explain",
+          "beat_id": "beat_003"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Right now the result headers.",
+          "kind": "state",
+          "beat_id": "beat_004"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-28\nDescription: Readable customer contact headers\n*/"
+              }
+            ]
+          },
+          "text": "We type a comment header that explains this query makes the column headers readable.",
+          "kind": "demo",
+          "beat_id": "beat_005"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\""
+              }
+            ]
+          },
+          "text": "We type the SELECT clause with AS aliases so First Name, Last Name, and Email Address appear as headers.",
+          "kind": "demo",
+          "beat_id": "beat_006"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nFROM Customer;"
+              }
+            ]
+          },
+          "text": "We type FROM Customer to.",
+          "kind": "demo",
+          "beat_id": "beat_007"
+        },
+        {
+          "action": {
+            "type": "run_query"
+          },
+          "text": "We run the query and.",
+          "kind": "demo",
+          "beat_id": "beat_008"
+        },
+        {
+          "action": {
+            "type": "verify",
+            "detail": "the Execute SQL tab shows a populated results grid with aliased headers"
+          },
+          "text": "We see 60 rows returned.",
+          "kind": "validation",
+          "beat_id": "beat_009"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The headers now show the.",
+          "kind": "explain",
+          "beat_id": "beat_010"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Aliases also help when a.",
+          "kind": "explain",
+          "beat_id": "beat_011"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "We have used the AS.",
+          "kind": "close",
+          "beat_id": "beat_012"
+        }
+      ],
       "planned_queries": [
         "SELECT FirstName AS \"First Name\", LastName AS \"Last Name\", Email AS \"Email Address\" FROM Customer;"
       ]
@@ -81,7 +321,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 0,
+      "estimated_duration_seconds": 38,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -93,7 +333,140 @@
       "has_preview": false,
       "recap_text_hint": null,
       "preview_text_hint": null,
-      "script_beats": [],
+      "script_beats": [
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "In this video, we will.",
+          "kind": "opening",
+          "beat_id": "beat_001"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Our previous queries sit above.",
+          "kind": "state",
+          "beat_id": "beat_002"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "ORDER BY tells the database.",
+          "kind": "explain",
+          "beat_id": "beat_003"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Right now the rows appear.",
+          "kind": "state",
+          "beat_id": "beat_004"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-28\nDescription: Customer contact list sorted by last name\n*/"
+              }
+            ]
+          },
+          "text": "We type a comment header that says this query sorts the contact list by last name.",
+          "kind": "demo",
+          "beat_id": "beat_005"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\""
+              }
+            ]
+          },
+          "text": "We type the SELECT clause again with the friendly aliases so the headers stay readable.",
+          "kind": "demo",
+          "beat_id": "beat_006"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nFROM Customer"
+              }
+            ]
+          },
+          "text": "We type FROM Customer so.",
+          "kind": "demo",
+          "beat_id": "beat_007"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nORDER BY LastName;"
+              }
+            ]
+          },
+          "text": "We type ORDER BY LastName.",
+          "kind": "demo",
+          "beat_id": "beat_008"
+        },
+        {
+          "action": {
+            "type": "run_query"
+          },
+          "text": "We run the query and.",
+          "kind": "demo",
+          "beat_id": "beat_009"
+        },
+        {
+          "action": {
+            "type": "verify",
+            "detail": "the result pane rows are sorted by LastName in ascending order"
+          },
+          "text": "We see 60 rows returned.",
+          "kind": "validation",
+          "beat_id": "beat_010"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The rows are now arranged.",
+          "kind": "explain",
+          "beat_id": "beat_011"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "ORDER BY belongs at the.",
+          "kind": "explain",
+          "beat_id": "beat_012"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "We have sorted the customer.",
+          "kind": "close",
+          "beat_id": "beat_013"
+        }
+      ],
       "planned_queries": [
         "SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName;"
       ]
@@ -113,7 +486,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 0,
+      "estimated_duration_seconds": 53,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -125,7 +498,153 @@
       "has_preview": false,
       "recap_text_hint": null,
       "preview_text_hint": null,
-      "script_beats": [],
+      "script_beats": [
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "In this video, we will.",
+          "kind": "opening",
+          "beat_id": "beat_001"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Our previous queries sit above.",
+          "kind": "state",
+          "beat_id": "beat_002"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "LIMIT returns only the requested.",
+          "kind": "explain",
+          "beat_id": "beat_003"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Right now the result pane.",
+          "kind": "state",
+          "beat_id": "beat_004"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-28\nDescription: Preview of customer contacts\n*/"
+              }
+            ]
+          },
+          "text": "We type a comment header that says this query is a preview of customer contacts.",
+          "kind": "demo",
+          "beat_id": "beat_005"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\""
+              }
+            ]
+          },
+          "text": "We type the SELECT clause with the friendly aliases so the headers stay readable.",
+          "kind": "demo",
+          "beat_id": "beat_006"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nFROM Customer"
+              }
+            ]
+          },
+          "text": "We type FROM Customer so.",
+          "kind": "demo",
+          "beat_id": "beat_007"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nORDER BY LastName"
+              }
+            ]
+          },
+          "text": "We type ORDER BY LastName.",
+          "kind": "demo",
+          "beat_id": "beat_008"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nLIMIT 5;"
+              }
+            ]
+          },
+          "text": "We type LIMIT 5 so.",
+          "kind": "demo",
+          "beat_id": "beat_009"
+        },
+        {
+          "action": {
+            "type": "run_query"
+          },
+          "text": "We run the query and.",
+          "kind": "demo",
+          "beat_id": "beat_010"
+        },
+        {
+          "action": {
+            "type": "verify",
+            "detail": "the result pane shows exactly five rows from the sorted contact list"
+          },
+          "text": "We see exactly 5 rows.",
+          "kind": "validation",
+          "beat_id": "beat_011"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "LIMIT trimmed the sorted result.",
+          "kind": "explain",
+          "beat_id": "beat_012"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "LIMIT always comes after ORDER.",
+          "kind": "explain",
+          "beat_id": "beat_013"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "We have limited the result.",
+          "kind": "close",
+          "beat_id": "beat_014"
+        }
+      ],
       "planned_queries": [
         "SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName LIMIT 5;"
       ]
@@ -145,7 +664,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 0,
+      "estimated_duration_seconds": 43,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -157,7 +676,153 @@
       "has_preview": false,
       "recap_text_hint": null,
       "preview_text_hint": null,
-      "script_beats": [],
+      "script_beats": [
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "In this video, we will.",
+          "kind": "opening",
+          "beat_id": "beat_001"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Our previous queries sit above.",
+          "kind": "state",
+          "beat_id": "beat_002"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "A comment header documents the.",
+          "kind": "explain",
+          "beat_id": "beat_003"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Right now the editor shows.",
+          "kind": "state",
+          "beat_id": "beat_004"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-28\nDescription: Clean, documented customer contact preview\n*/"
+              }
+            ]
+          },
+          "text": "We type a comment header that documents this clean, professional query.",
+          "kind": "demo",
+          "beat_id": "beat_005"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\n\nSELECT\n    FirstName AS \"First Name\",\n    LastName AS \"Last Name\",\n    Email AS \"Email Address\""
+              }
+            ]
+          },
+          "text": "We type the SELECT clause with AS aliases for readable headers.",
+          "kind": "demo",
+          "beat_id": "beat_006"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nFROM Customer"
+              }
+            ]
+          },
+          "text": "We type FROM Customer to.",
+          "kind": "demo",
+          "beat_id": "beat_007"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nORDER BY LastName"
+              }
+            ]
+          },
+          "text": "We type ORDER BY LastName.",
+          "kind": "demo",
+          "beat_id": "beat_008"
+        },
+        {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nLIMIT 5;"
+              }
+            ]
+          },
+          "text": "We type LIMIT 5 to.",
+          "kind": "demo",
+          "beat_id": "beat_009"
+        },
+        {
+          "action": {
+            "type": "run_query"
+          },
+          "text": "We run the query and.",
+          "kind": "demo",
+          "beat_id": "beat_010"
+        },
+        {
+          "action": {
+            "type": "verify",
+            "detail": "the SQL editor contains a comment block followed by a SELECT with aliases, ORDER BY, and LIMIT"
+          },
+          "text": "We see 5 rows returned.",
+          "kind": "validation",
+          "beat_id": "beat_011"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The result pane shows a.",
+          "kind": "explain",
+          "beat_id": "beat_012"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Clean query etiquette matters when.",
+          "kind": "explain",
+          "beat_id": "beat_013"
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "We have recapped the chapter.",
+          "kind": "close",
+          "beat_id": "beat_014"
+        }
+      ],
       "planned_queries": [
         "SELECT FirstName AS \"First Name\", LastName AS \"Last Name\", Email AS \"Email Address\" FROM Customer ORDER BY LastName LIMIT 5;"
       ]

@@ -145,8 +145,12 @@ class EnvironmentProfile(BaseModel):
     comment_syntax: Dict[str, str] = Field(
         default_factory=lambda: {"line": "--", "block_start": "/*", "block_end": "*/"}
     )
-    # Generic visual error signature (e.g. "red band / syntax error in status region")
-    error_signature: Optional[str] = None
+    # Generic visual error signature. Dict keys:
+    #   status_region: {x, y, w, h} normalized coords
+    #   color_ranges: list of {lower: [H,S,V], upper: [H,S,V]} OpenCV HSV bounds
+    #   min_area_ratio: minimum matching fraction of the region
+    #   text_hint: optional human-readable hint for logs/VLM prompts
+    error_signature: Optional[Dict[str, Any]] = None
     # Observed facts populated by the scout
     tables: List[str] = Field(default_factory=list)
     columns: Dict[str, List[str]] = Field(default_factory=dict)

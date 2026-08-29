@@ -24,10 +24,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import anthropic
+import cv2
+import numpy as np
 import pyautogui
 from PIL import Image
 
 from .schemas import EnvironmentProfile
+from .frame_analysis import detect_error_signature
 
 TARGET_LONG_EDGE = 1568
 DEFAULT_MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
@@ -56,7 +59,15 @@ def _default_profile() -> EnvironmentProfile:
         ],
         execute_scope="whole_script",
         comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
-        error_signature="red error band in the status region containing the text 'syntax error'",
+        error_signature={
+            "status_region": {"x": 0.0, "y": 0.80, "w": 1.0, "h": 0.20},
+            "color_ranges": [
+                {"lower": [0, 100, 50], "upper": [10, 255, 255]},
+                {"lower": [160, 100, 50], "upper": [180, 255, 255]},
+            ],
+            "min_area_ratio": 0.02,
+            "text_hint": "red error band in the status region containing the text 'syntax error'",
+        },
     )
 
 
@@ -1118,18 +1129,22 @@ end tell
         return False
 
     def _result_pane_shows_error(self) -> bool:
-        """Ask the VLM whether the profile's error_signature is visible."""
+        """Pixel-check whether the profile's error_signature is visible on screen."""
         signature = getattr(self.profile, "error_signature", None)
         if not signature:
             return False
-        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
-        prompt = (
-            f"Look at {result_pane} in {self.profile.app_name}. "
-            f"Does it show {signature}? "
-            "Reply exactly YES or NO, nothing else."
-        )
-        check = self._call_vlm(prompt, expect_json=False, max_tokens=32)
-        return check.text.strip().upper().startswith("YES")
+        # Use the most recent raw screenshot if available; otherwise capture one.
+        raw = self.last_raw_image
+        if raw is None:
+            self.screenshot()
+            raw = self.last_raw_image
+        if raw is None:
+            return False
+        bgr = cv2.cvtColor(np.array(raw), cv2.COLOR_RGB2BGR)
+        result = detect_error_signature(bgr, self.profile)
+        if result:
+            print("  [RUN QUERY] pixel error signature detected", file=sys.stderr)
+        return result
 
     def _repair_editor_and_rerun(self, current_statement: str) -> bool:
         """Re-paste only the current statement and run the query again."""
@@ -1610,34 +1625,100 @@ end tell
         time.sleep(0.2)
         return True
 
+    def emphasize_element(self, description: str, select: bool = False) -> bool:
+        """
+        Generic emphasis action: move the animated cursor to a UI element described
+        by ``description`` and optionally highlight/select it.
+
+        The description is grounded by the VLM in the live screenshot, so this works
+        for any app whose landmarks are declared in the EnvironmentProfile.
+        """
+        if not description:
+            return False
+        self._ensure_frontmost()
+        prompt = (
+            f"You are controlling {self.profile.app_name}. "
+            f"Move the cursor to this element: {description}. "
+            "Return ONLY a JSON object with this exact shape: "
+            '{"action": "click", "point": {"x": int, "y": int}, "element_type": "...", "description": "..."}\n'
+            "The point must be the center of the element in the screenshot coordinate space."
+        )
+        result = self._call_vlm(prompt, expect_json=True, max_tokens=128)
+        action = result.action
+        if not action:
+            return False
+        point = action.get("point") or action
+        if not isinstance(point, dict) or "x" not in point or "y" not in point:
+            return False
+        lx, ly = self._api_to_logical(point["x"], point["y"])
+        print(f"  [EMPHASIS] move to '{description}' at ({lx}, {ly})", file=sys.stderr)
+        pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+        time.sleep(0.2)
+        if select and "highlight" in self.profile.action_vocabulary:
+            pyautogui.mouseDown()
+            time.sleep(0.1)
+            pyautogui.mouseUp()
+            time.sleep(0.1)
+        return True
+
+    def perform_emphasis_actions(self, beat: ScriptBeat) -> bool:
+        """
+        Parse a non-demo beat's narration into clauses and perform one emphasis
+        action per clause so the cursor moves while the narration plays.
+        """
+        if not beat or not beat.text:
+            return False
+        text = beat.text.strip()
+        # Split on sentence boundaries and coordinating conjunctions.
+        clauses = [c.strip() for c in re.split(r"(?<=[.!?])\s+|\s+and\s+|\s+while\s+|\s+as\s+", text) if c.strip()]
+        # Heuristic mapping from clause content to a generic UI description.
+        descriptions: List[str] = []
+        for clause in clauses:
+            lowered = clause.lower()
+            if "result pane" in lowered or "result" in lowered:
+                descriptions.append("the result pane showing query output")
+            elif "editor" in lowered or "query" in lowered:
+                descriptions.append("the SQL editor text area")
+            elif "header" in lowered:
+                descriptions.append("the column headers in the result pane")
+            elif "row" in lowered or "rows" in lowered:
+                descriptions.append("the rows in the result grid")
+            elif "column" in lowered:
+                # Try to extract column name.
+                col_match = re.search(r"([A-Z][a-zA-Z]+)\s+(?:column|header)", clause)
+                if col_match:
+                    descriptions.append(f"the {col_match.group(1)} column header")
+                else:
+                    descriptions.append("the relevant column in the result pane")
+            elif "comment" in lowered:
+                descriptions.append("the comment block in the SQL editor")
+            elif "alias" in lowered or "as " in lowered:
+                descriptions.append("the aliased column headers in the result pane")
+            elif "limit" in lowered:
+                descriptions.append("the LIMIT clause in the SQL editor")
+            elif "order by" in lowered:
+                descriptions.append("the ORDER BY clause in the SQL editor")
+
+        if not descriptions:
+            descriptions.append("the main UI element relevant to the narration")
+
+        ok = True
+        for description in descriptions[:3]:  # Cap at 3 emphasis actions per beat.
+            if not self.emphasize_element(description, select=False):
+                ok = False
+            time.sleep(0.3)
+        return ok
+
     def frame_shows_error_signature(self, frame_path: str) -> bool:
-        """Return True if ``frame_path`` matches the profile's error_signature."""
+        """Return True if ``frame_path`` matches the profile's error_signature (pixel check)."""
         signature = getattr(self.profile, "error_signature", None)
         if not signature or not Path(frame_path).exists():
             return False
-        prompt = (
-            f"Look at this screenshot of {self.profile.app_name}. "
-            f"Does it show {signature}? "
-            "Reply exactly YES or NO, nothing else."
-        )
         try:
-            b64 = base64.standard_b64encode(Path(frame_path).read_bytes()).decode("utf-8")
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=32,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
-            )
-            text_parts = [block.text for block in response.content if block.type == "text"]
-            full_text = "\n".join(text_parts).strip()
-            return full_text.upper().startswith("YES")
+            bgr = cv2.imread(str(frame_path))
+            if bgr is None:
+                return False
+            return detect_error_signature(bgr, self.profile)
         except Exception as exc:
             print(f"Warning: error-signature frame check failed: {exc}", file=sys.stderr)
             return False

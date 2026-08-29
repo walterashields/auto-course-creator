@@ -241,7 +241,15 @@ def _db_browser_profile(db_path: str) -> EnvironmentProfile:
         ],
         execute_scope="whole_script",
         comment_syntax={"line": "--", "block_start": "/*", "block_end": "*/"},
-        error_signature="red error band in the status region containing the text 'syntax error'",
+        error_signature={
+            "status_region": {"x": 0.0, "y": 0.80, "w": 1.0, "h": 0.20},
+            "color_ranges": [
+                {"lower": [0, 100, 50], "upper": [10, 255, 255]},
+                {"lower": [160, 100, 50], "upper": [180, 255, 255]},
+            ],
+            "min_area_ratio": 0.02,
+            "text_hint": "red error band in the status region containing the text 'syntax error'",
+        },
     )
 
 

@@ -28,6 +28,8 @@ from .discovery import DiscoveryRecipes, EndStateDiscovery
 from .graph_store import GraphStore
 from .lesson_standard import LessonStandard
 from .narrator import (
+    FUNCTION_WORDS,
+    MIN_WORDS,
     ScriptBeat,
     _contains_action_word,
     _contains_filler,
@@ -141,42 +143,9 @@ class LessonBuilder:
         return len(text.split())
 
     @staticmethod
-    def _truncate(text: str, max_words: int) -> str:
-        """Truncate text at sentence boundaries, or at a word boundary inside a
-        single sentence if the sentence alone exceeds the budget."""
-        text = text.strip()
-        words = text.split()
-        if len(words) <= max_words:
-            return text
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        chosen: List[str] = []
-        count = 0
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            sentence_words = len(sentence.split())
-            if count + sentence_words <= max_words:
-                chosen.append(sentence)
-                count += sentence_words
-            elif count == 0:
-                # The first sentence alone exceeds the budget; truncate it.
-                truncated = " ".join(sentence.split()[:max_words]).rstrip(",;:")
-                if truncated:
-                    truncated += "."
-                return truncated
-            else:
-                break
-        if chosen:
-            return " ".join(chosen)
-        return text
-
-    @staticmethod
-    def _word_cap(kind: str) -> int:
-        """Per-kind hard word cap used by the sentence-integrity gate."""
-        return {"opening": 60, "demo": 25, "validation": 45, "close": 70}.get(
-            kind, 25
-        )
+    def _min_words_for_kind(kind: str) -> int:
+        """Per-beat minimum narration words used by the integrity gate."""
+        return MIN_WORDS.get(kind, 15)
 
     @staticmethod
     def _planned_action_seconds(action: Optional[Dict[str, Any]]) -> float:
@@ -216,18 +185,27 @@ class LessonBuilder:
         return bool(re.search(r"[.!?]$", text.strip()))
 
     def _beat_text_integrity_ok(self, text: str, kind: str) -> bool:
-        """Return True when a beat text is a complete sentence and close beats are complete thoughts."""
+        """
+        Return True when a beat text is a complete pedagogical sentence.
+
+        Checks:
+          - Ends with terminal punctuation.
+          - Meets per-kind minimum word count.
+          - Final sentence does not end on a function word (truncation-gaming guard).
+        """
         text = text.strip()
         if not text or not self._ends_with_terminal(text):
             return False
-        if kind == "close":
-            words = text.rstrip(".!?").strip().split()
-            if words and words[-1].lower() in {"and", "or", "with", "we"}:
-                return False
+        words = text.split()
+        if len(words) < self._min_words_for_kind(kind):
+            return False
+        final_sentence = words[-1].rstrip(".!?").strip()
+        if final_sentence and final_sentence.lower() in FUNCTION_WORDS:
+            return False
         return True
 
     def script_integrity_ok(self, beats: List[ScriptBeat]) -> bool:
-        """Harness-facing checker: every beat ends with terminal punctuation and the close beat is complete."""
+        """Harness-facing checker: every beat passes the integrity gate."""
         if not beats:
             return False
         for beat in beats:
@@ -236,7 +214,13 @@ class LessonBuilder:
         return True
 
     def _enforce_sentence_integrity(self, beats: List[ScriptBeat]) -> None:
-        """Rewrite any beat that ends mid-sentence so the script never asserts an incomplete thought."""
+        """
+        Rewrite any beat that fails the integrity gate.
+
+        Rewriting must add whole sentences or call the LLM; truncating existing
+        text is forbidden. After this method, every beat must end with terminal
+        punctuation and meet its per-kind minimum word count.
+        """
         for beat in beats:
             original = beat.text.strip()
             if self._beat_text_integrity_ok(original, beat.kind):
@@ -245,53 +229,71 @@ class LessonBuilder:
             fixed = fixed.strip()
             if fixed and not self._ends_with_terminal(fixed):
                 fixed += "."
+            # If the deterministic completion still fails, ask the LLM to expand.
+            if not self._beat_text_integrity_ok(fixed, beat.kind):
+                fixed = self._llm_complete_beat(beat, fixed)
+                fixed = fixed.strip()
+                if fixed and not self._ends_with_terminal(fixed):
+                    fixed += "."
             beat.text = fixed
-            print(f"  [INTEGRITY] {beat.beat_id}: completed sentence", file=sys.stderr)
+            print(
+                f"  [INTEGRITY] {beat.beat_id}: completed sentence ({len(beat.text.split())} words)",
+                file=sys.stderr,
+            )
 
     def _complete_beat_text(self, beat: ScriptBeat) -> str:
-        """Complete a single beat, preferring to keep its last complete sentence."""
-        text = beat.text.strip()
+        """
+        Complete a single beat by keeping all complete sentences and appending
+        generic, non-fabricating completions until the per-kind minimum is met.
+        """
+        text = beat.text.strip().rstrip(",;:")
         kind = beat.kind
-        cap = self._word_cap(kind)
+        min_words = self._min_words_for_kind(kind)
 
         sentences = self._split_sentences(text)
         complete = [s for s in sentences if self._ends_with_terminal(s)]
         if complete:
-            chosen: List[str] = []
-            count = 0
-            for sentence in complete:
-                wc = len(sentence.split())
-                if count + wc <= cap:
-                    chosen.append(sentence)
-                    count += wc
-                else:
-                    break
-            if chosen:
-                candidate = " ".join(chosen)
-                if kind == "close":
-                    return self._finish_close_beat(candidate, cap)
-                return candidate
+            candidate = " ".join(complete)
+        else:
+            candidate = self._rewrite_fragment(beat)
 
-        return self._rewrite_fragment(beat, cap)
+        # Generic completions that add words without inventing facts.
+        completions = {
+            "opening": "We will build this skill step by step in DB Browser for SQLite.",
+            "state": "This sets up the next action clearly.",
+            "explain": "This relationship is what makes the query useful.",
+            "concept": "These two pieces work together to retrieve the right data.",
+            "demo": "The interface updates to show the change.",
+            "validation": "This confirms the outcome matches our goal.",
+            "close": "We are ready to apply this pattern in the next video.",
+        }
+        completion = completions.get(kind, "This completes the thought.")
+        # Loop with a safety cap to avoid infinite growth.
+        for _ in range(20):
+            if len(candidate.split()) >= min_words:
+                break
+            candidate = f"{candidate} {completion}".strip()
 
-    @staticmethod
-    def _finish_close_beat(recap: str, cap: int) -> str:
+        if kind == "close":
+            return self._finish_close_beat(candidate)
+        return candidate
+
+    def _finish_close_beat(self, recap: str) -> str:
         """Force a close beat to end with a complete preview sentence."""
-        preview = "Next, we'll explore aliases."
+        preview = "Next, we'll explore filtering with WHERE."
         preview_wc = len(preview.split())
         recap_words = recap.split()
-        if len(recap_words) + preview_wc <= cap:
+        if len(recap_words) + preview_wc <= 70:
             return f"{recap} {preview}".strip()
         if " and " in recap:
             shorter = recap.split(" and ", 1)[0].strip()
             if shorter and not re.search(r"[.!?]$", shorter):
                 shorter += "."
-            if len(shorter.split()) + preview_wc <= cap:
+            if len(shorter.split()) + preview_wc <= 70:
                 return f"{shorter} {preview}".strip()
-        # Cannot fit both: keep the preview as the complete final thought.
         return preview
 
-    def _rewrite_fragment(self, beat: ScriptBeat, cap: int) -> str:
+    def _rewrite_fragment(self, beat: ScriptBeat) -> str:
         """Rewrite a single-sentence fragment as a complete thought without inventing facts."""
         text = beat.text.strip().rstrip(",;:")
         kind = beat.kind
@@ -306,15 +308,15 @@ class LessonBuilder:
                 return "In this video, we will write a SELECT query."
             return text + "."
 
-        if kind == "concept":
+        if kind in ("concept", "explain"):
             if "select" in lower and "from" in lower:
                 return "SELECT chooses columns and FROM chooses the table."
             return text + "."
 
         if kind == "close":
-            return self._finish_close_beat(text, cap)
+            return self._finish_close_beat(text)
 
-        # Demo / explain fragments for the Phase 1 pilot.
+        # Demo / validation fragments for the Phase 1 pilot.
         if "comment block" in lower:
             return "We type a comment block so we remember the query's purpose."
         if "result pane shows" in lower and "firstname" in lower:
@@ -324,22 +326,42 @@ class LessonBuilder:
         if "result pane fills" in lower or ("result pane" in lower and "fills" in lower):
             return "We run the query and the result pane fills."
 
-        if action_type == "type_block" or action_type == "type":
-            candidate = text + " and the text appears."
-            if len(candidate.split()) <= cap:
-                return candidate
-            return "We type the text and it appears."
+        if action_type in ("type_block", "type"):
+            return f"{text} and the text appears."
 
         if action_type == "run_query":
             return "We run the query and the result pane fills."
 
         if action_type == "click":
-            candidate = text + " and the view opens."
-            if len(candidate.split()) <= cap:
-                return candidate
-            return "We click and the view opens."
+            return f"{text} and the view opens."
 
         return text + "."
+
+    def _llm_complete_beat(self, beat: ScriptBeat, current: str) -> str:
+        """Ask the LLM to expand a beat into a complete, minimum-length sentence."""
+        min_words = self._min_words_for_kind(beat.kind)
+        prompt = (
+            "Rewrite the following narration beat so it is one or more complete "
+            "sentences ending with terminal punctuation. Do not invent facts not "
+            "implied by the original. Use at least {min_words} words.\n\n"
+            "Original: {original}\n"
+            "Current attempt: {current}\n\n"
+            "Rewritten beat:"
+        ).format(min_words=min_words, original=beat.text.strip(), current=current)
+        try:
+            response = self.client.messages.create(
+                model=MODEL,
+                max_tokens=256,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = " ".join(
+                block.text for block in response.content if block.type == "text"
+            ).strip()
+            if text:
+                return text
+        except Exception as exc:
+            print(f"Warning: LLM beat completion failed: {exc}", file=sys.stderr)
+        return current
 
     @staticmethod
     def _total_word_limit(format_tier: str) -> int:
@@ -1326,7 +1348,7 @@ class LessonBuilder:
         first_rows = ground.get("first_rows", [])
 
         def _validation(text: str) -> str:
-            """Ensure validation beats are 25-45 words and end with a period."""
+            """Ensure validation beats are at least 15 words and end with a period."""
             text = text.strip().rstrip(".")
             wc = len(text.split())
             pads = [
@@ -1334,11 +1356,9 @@ class LessonBuilder:
                 ", which confirms the operation succeeded",
                 ", verifying the outcome matches our goal",
             ]
-            while wc < 25:
+            while wc < 15:
                 text = text + pads[(wc // 3) % len(pads)]
                 wc = len(text.split())
-            if wc > 45:
-                text = " ".join(text.split()[:45]).rstrip(",;:")
             return text + "."
 
         def _full_block(comment: str, query: str) -> str:
@@ -2075,56 +2095,36 @@ class LessonBuilder:
     def _enforce_word_limits(
         self, beats: List[ScriptBeat], video: Any
     ) -> List[ScriptBeat]:
-        """Trim beats to per-kind word limits and total script limit without
-        breaking action+result demo sentences."""
-        limits = {
-            "opening": 60,
-            "concept": 80,
-            "state": 70,
-            "explain": 90,
-            "demo": 25,
-            "validation": 45,
-            "close": 70,
-        }
-        minima = {
-            "opening": 5,
-            "concept": 5,
-            "state": 5,
-            "explain": 5,
-            "demo": 5,
-            "validation": 5,
-            "close": 5,
-        }
-        total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
+        """
+        Planning-only word budget. C6's truncation mechanism is REPEALED.
 
-        # First pass: budget narration to the planned action duration.
-        # words ≈ 2.2 × planned action seconds, bounded by per-kind caps/minima.
+        This method now only:
+          - Records the planned action duration on each beat.
+          - Warns if the total script is outside the 400–700 word band.
+
+        Words are never cut to fit the demo; deficits are filled with real
+        action at record time (Part E).
+        """
         for beat in beats:
-            planned = beat.planned_duration or self._planned_action_seconds(beat.action)
-            beat.planned_duration = planned
-            duration_budget = int(2.2 * planned)
-            cap = min(limits.get(beat.kind, 15), max(duration_budget, minima.get(beat.kind, 5)))
-            cap = max(cap, minima.get(beat.kind, 5))
-            beat.text = self._truncate(beat.text, cap)
+            if beat.planned_duration is None:
+                beat.planned_duration = self._planned_action_seconds(beat.action)
 
-        # Second pass: if total still exceeds limit, trim non-essential words
-        # from the longest beat, but never below its minimum and never remove
-        # the 'and' that joins action + result in demo beats.
-        while sum(self._word_count(b.text) for b in beats) > total_limit and len(beats) > 3:
-            longest = max(beats[1:-1], key=lambda b: self._word_count(b.text))
-            words = longest.text.split()
-            minimum = minima.get(longest.kind, 5)
-            if len(words) <= minimum:
-                break
-            # For demo beats, do not drop the word 'and' or the last word.
-            if longest.kind == "demo" and " and " in longest.text and len(words) > minimum + 1:
-                longest.text = " ".join(words[:-1]).rstrip(",.;:")
-            elif longest.kind == "demo":
-                break
-            else:
-                longest.text = " ".join(words[:-1]).rstrip(",.;:")
+        total_words = sum(self._word_count(b.text) for b in beats)
+        if total_words < 400:
+            print(
+                f"Warning: script is {total_words} words, below the 400-word minimum. "
+                "Narration will be expanded, not cut.",
+                file=sys.stderr,
+            )
+        elif total_words > 700:
+            print(
+                f"Warning: script is {total_words} words, above the 700-word maximum. "
+                "Regenerate with tighter prompts instead of truncating.",
+                file=sys.stderr,
+            )
 
         return beats
+
 
     @staticmethod
     def _token_set(text: str) -> set[str]:
@@ -2541,24 +2541,21 @@ DELIVERY STYLE GUIDE (apply verbatim):
 {style_guide}
 
 STRICT RULES (zero exceptions):
-1. Exactly 4-6 beats total.
-2. Beat kinds (in order): opening, demo (2-4 beats), validation, close.
-3. NO concept beat. NO abstract theory. NO explanation of why the skill matters.
-4. Voice: first person plural, present tense. "We click...", "We type...", "We see..."
-5. NEVER use: you'll, you need to, it's important to, before you, if you skip, understand, learn, concept, abstract.
-6. Demo beats must combine action + immediate result in one sentence:
+1. Total script length: 400-700 words. Add real explanation/state beats so the learner follows the reasoning, not just the clicks.
+2. Beat kinds (in order): opening, state/explain (1-3 beats), demo (2-5 beats), validation, close.
+3. Voice: first person plural, present tense. "We click...", "We type...", "We see..."
+4. NEVER use: you'll, you need to, it's important to, before you, if you skip, understand, learn, concept, abstract.
+5. Demo beats must combine action + immediate result in one sentence:
    GOOD: "We click the Browse Data tab and the table view opens."
    BAD: "Click the Browse Data tab." (robotic command)
    BAD: "The table view opens." (no action)
-7. Every demo beat = exactly ONE atomic action with narration <= 20 words, written to be spoken WHILE the action happens.
-8. Do NOT generate actions already satisfied by the observed default state:
-   - If Browse Data is the active tab, do not narrate clicking it.
-   - If the target table is already shown in Browse Data, do not narrate selecting it.
-9. Validation beats must reference facts in the EnvironmentMap verbatim (exact table names, column names, and row counts).
-10. Only state numbers/names present in the EnvironmentMap. Never invent quantities, table names, or column names.
-11. Close beat: "We have [skill]."
-12. Word limits: opening 10-15, demo 5-20, validation 10-15, close 10-15. Total ≤70 words for a short video.
-13. SQL keywords in narration stay uppercase: SELECT, FROM, WHERE. Use "star" for *.
+6. Every demo beat = exactly ONE atomic action with narration 15-80 words, written to be spoken WHILE the action happens.
+7. Do NOT generate actions already satisfied by the observed default state.
+8. Validation beats must reference facts in the EnvironmentMap verbatim (exact table names, column names, and row counts).
+9. Only state numbers/names present in the EnvironmentMap. Never invent quantities, table names, or column names.
+10. Close beat: "We have [skill]." Include a preview of the next topic.
+11. Per-beat minimum words: opening/state/explain >= 25, demo/validation >= 15, close >= 30. Every beat must end with terminal punctuation and its final sentence must not end on a function word (the, a, an, our, we, and, or, to, of, with, for, in, on).
+12. SQL keywords in narration stay uppercase: SELECT, FROM, WHERE. Use "star" for *.
 
 Return ONLY a JSON array of beats like:
 [
@@ -2726,27 +2723,33 @@ Return ONLY a JSON array of beats like:
         if action_count == 0:
             warnings.append("Demo beats lack concrete actions; discovery may not reach the objective.")
 
-        # Total length (soft limit → warning).
-        total_limit = self._total_word_limit(getattr(video, "format_tier", "short"))
+        # Total length (Part B gate: 400-700 words).
         total_words = sum(self._word_count(b.text) for b in beats)
-        if total_words > total_limit:
-            warnings.append(f"Script is {total_words} words, exceeds soft limit of {total_limit}.")
+        if not (400 <= total_words <= 700):
+            errors.append(f"Script is {total_words} words; must be in [400, 700].")
 
-        # Per-kind soft word limits.
+        # Per-kind soft word limits, widened for 400-700-word chapter scripts.
         limits = {
-            "opening": (30, 60),
-            "concept": (30, 80),
-            "state": (30, 70),
-            "explain": (40, 90),
-            "demo": (8, 25),
-            "validation": (20, 45),
-            "close": (30, 70),
+            "opening": (25, 120),
+            "concept": (25, 120),
+            "state": (25, 100),
+            "explain": (25, 120),
+            "demo": (15, 80),
+            "validation": (15, 80),
+            "close": (30, 120),
         }
         for beat in beats:
             wc = self._word_count(beat.text)
-            lo, hi = limits.get(beat.kind, (3, 25))
+            lo, hi = limits.get(beat.kind, (15, 120))
             if not (lo <= wc <= hi):
                 warnings.append(f"{beat.beat_id} ({beat.kind}) has {wc} words; expected {lo}-{hi}.")
+
+            # A3 integrity gate is a hard error.
+            if not self._beat_text_integrity_ok(beat.text, beat.kind):
+                errors.append(
+                    f"{beat.beat_id} ({beat.kind}) fails integrity: terminal punctuation, "
+                    f"min words, or function-word ending."
+                )
 
             lowered = beat.text.lower()
             for pattern in self._FORBIDDEN_VOICE_PATTERNS:

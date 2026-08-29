@@ -21,10 +21,12 @@ import unittest.mock as mock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import cv2
 import numpy as np
 
 from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, load_manifest
 from compiler.discovery import EndStateDiscovery, _clip_has_off_app_interval
+from compiler.frame_analysis import detect_error_signature, frozen_share_percent
 from compiler.lesson_builder import LessonBuilder
 from compiler.narrator import ScriptBeat
 from compiler.renderer import GraphRenderer
@@ -1021,7 +1023,8 @@ class TestRendererPaddingCap(unittest.TestCase):
                 output_mode="hybrid",
             )
             self.assertIsNotNone(result)
-            self.assertEqual(result.get("status"), "NEEDS_TIMING_FIX")
+            self.assertEqual(result.get("status"), "NEEDS_RESHOOT")
+            self.assertTrue(result.get("needs_reshoot"))
             report_path = Path(result["timing_report_path"])
             self.assertTrue(report_path.exists())
             report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -1110,6 +1113,154 @@ class TestFullBufferReadBack(unittest.TestCase):
             self.assertFalse(agent._verify_buffer_exact(intended, "TEST"))
 
 
+class TestPixelErrorSignature(unittest.TestCase):
+    def setUp(self) -> None:
+        self.profile = EnvironmentProfile(
+            application="db_browser_sqlite",
+            app_name="DB Browser for SQLite",
+            focus_target="DB Browser for SQLite",
+            error_signature={
+                "status_region": {"x": 0.0, "y": 0.80, "w": 1.0, "h": 0.20},
+                "color_ranges": [
+                    {"lower": [0, 100, 50], "upper": [10, 255, 255]},
+                    {"lower": [160, 100, 50], "upper": [180, 255, 255]},
+                ],
+                "min_area_ratio": 0.02,
+            },
+        )
+
+    def test_bad_frame_fires_error_signature(self) -> None:
+        """A known-bad frame from v4 must trigger the pixel error detector."""
+        bad_dir = Path("output/course_ch4_v4/bad_frame_samples")
+        bad_frames = sorted(bad_dir.glob("frame_*.png"))
+        self.assertTrue(bad_frames, "No bad-frame fixtures found")
+        fired = 0
+        for p in bad_frames:
+            bgr = cv2.imread(str(p))
+            if bgr is not None and detect_error_signature(bgr, self.profile):
+                fired += 1
+        self.assertGreater(fired, 0, "error signature did not fire on any bad frame")
+
+    def test_good_frame_does_not_fire(self) -> None:
+        """A plain grey frame must not trigger the error detector."""
+        grey = np.full((720, 1280, 3), 128, dtype=np.uint8)
+        self.assertFalse(detect_error_signature(grey, self.profile))
+
+
+class TestFrozenShareMetric(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_frozen_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_frozen_share_on_static_head_motion_tail(self) -> None:
+        """A clip with static head, motion, and static tail reports the correct frozen share."""
+        head = _make_video(self.tmpdir / "head.mp4", duration=8.0, fps=10, motion=False)
+        motion = _make_video(self.tmpdir / "motion.mp4", duration=2.0, fps=10, motion=True)
+        tail = _make_video(self.tmpdir / "tail.mp4", duration=3.0, fps=10, motion=False)
+        combined = self.tmpdir / "combined.mp4"
+        concat_list = self.tmpdir / "concat.txt"
+        concat_list.write_text(
+            "\n".join(f"file '{p.resolve()}'" for p in (head, motion, tail)),
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+             "-c", "copy", str(combined)],
+            check=True, capture_output=True, timeout=60,
+        )
+        frozen_pct = frozen_share_percent(combined, sample_fps=1, width=320, mse_threshold=0.5)
+        # The clip is mostly static head + tail with a short motion window in the
+        # middle, so the frozen share must be high. We assert a broad band rather
+        # than an exact value because ffmpeg fps sampling can shift the boundary
+        # frames by one sample.
+        self.assertGreater(frozen_pct, 60.0)
+        self.assertLess(frozen_pct, 95.0)
+
+
+class TestScriptIntegrityHardened(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def _reference_beats(self, version: str) -> List[ScriptBeat]:
+        path = Path(f"output/course_ch4_{version}/sql_essential_training_ch4/sql_essential_training_ch4_video_1_5_reference.md")
+        text = path.read_text(encoding="utf-8")
+        beats: List[ScriptBeat] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("|") or "Text" in line or "---" in line:
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if len(cells) < 4:
+                continue
+            beat_id = cells[0]
+            kind = cells[1]
+            narration = cells[-1]
+            beats.append(ScriptBeat(beat_id=beat_id, kind=kind, text=narration))
+        return beats
+
+    def test_v4_reference_fails_integrity_gate(self) -> None:
+        """The truncated v4 reference script must fail the hardened integrity gate."""
+        beats = self._reference_beats("v4")
+        self.assertGreater(len(beats), 0)
+        self.assertFalse(self.builder.script_integrity_ok(beats))
+
+    def test_v3_reference_passes_integrity_gate(self) -> None:
+        """The full v3 reference script must be fixable and then pass the hardened integrity gate."""
+        beats = self._reference_beats("v3")
+        self.assertGreater(len(beats), 0)
+        self.builder._enforce_sentence_integrity(beats)
+        self.assertTrue(self.builder.script_integrity_ok(beats))
+
+
+class TestRendererNoTrim(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_notrim_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_clip_longer_than_narration_is_not_trimmed(self) -> None:
+        """If the recorded clip is longer than the narration, the full clip is kept."""
+        clip = _make_video(self.tmpdir / "long_action.mp4", duration=8.0, fps=10, motion=True)
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="demo",
+                text="Short narration.",
+                action={"type": "click", "target": {"x": 0.5, "y": 0.5}},
+                video_clip_path=str(clip.resolve()),
+            )
+        ]
+
+        class Manifest:
+            title = "No-trim test"
+            learning_objective = "Test no trim."
+            application = "db_browser_sqlite"
+            format_tier = "short"
+
+        renderer = GraphRenderer(output_dir=str(self.tmpdir))
+        tts_durations = {"beat_001": 2.0}
+        original = fake_tts(None, tts_durations)  # type: ignore[arg-type]
+        try:
+            out_path = str(self.tmpdir / "notrim_test.mp4")
+            result = renderer.render_from_script(
+                video_manifest=Manifest(),
+                script_beats=beats,
+                output_path=out_path,
+                output_mode="auto",
+            )
+            self.assertIsNotNone(result)
+            final_path = Path(result["final_path"])
+            self.assertTrue(final_path.exists())
+            final_dur = _media_duration(final_path)
+            # The full 8s clip must survive; final duration should be at least 7.5s.
+            self.assertGreaterEqual(final_dur, 7.5)
+        finally:
+            restore_tts(original)
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -1135,6 +1286,10 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestRendererPaddingCap))
     suite.addTests(loader.loadTestsFromTestCase(TestAdaptationUniqueness))
     suite.addTests(loader.loadTestsFromTestCase(TestFullBufferReadBack))
+    suite.addTests(loader.loadTestsFromTestCase(TestPixelErrorSignature))
+    suite.addTests(loader.loadTestsFromTestCase(TestFrozenShareMetric))
+    suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityHardened))
+    suite.addTests(loader.loadTestsFromTestCase(TestRendererNoTrim))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1

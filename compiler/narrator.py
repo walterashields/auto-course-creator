@@ -55,6 +55,24 @@ class ScriptBeat:
 # ---------------------------------------------------------------------------
 
 
+# Per-beat minimum narration words (excluding markdown syntax).
+MIN_WORDS = {
+    "opening": 25,
+    "state": 25,
+    "explain": 25,
+    "concept": 25,
+    "demo": 15,
+    "validation": 15,
+    "close": 30,
+    "recap": 25,
+    "preview": 25,
+}
+
+# Final-sentence words that indicate truncation, not completion.
+FUNCTION_WORDS = {
+    "the", "a", "an", "our", "we", "and", "or", "to", "of", "with", "for", "in", "on",
+}
+
 _GENERIC_FILLER = {
     "basically", "essentially", "fundamentally",
     "it is important to note", "the fact that", "in order to",

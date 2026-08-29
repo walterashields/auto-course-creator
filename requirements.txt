@@ -15,3 +15,5 @@ pydub>=0.25.1
 audioop-lts>=0.2.0
 elevenlabs>=2.0.0
 scikit-image>=0.20.0
+pyobjc-framework-ScreenCaptureKit>=12.0
+pyobjc-framework-Quartz>=12.0

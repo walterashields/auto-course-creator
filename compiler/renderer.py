@@ -276,7 +276,7 @@ class GraphRenderer:
                         graph_id, audio_durations, script_beats, debt_by_beat, timing_report_path
                     )
                     if debt_by_beat:
-                        graph.render_status = "NEEDS_TIMING_FIX"
+                        graph.render_status = "NEEDS_RESHOOT"
 
                     # Persist the re-timed graph before rendering.
                     store = GraphStore()
@@ -312,7 +312,8 @@ class GraphRenderer:
                         "timing_report_path": str(timing_report_path.resolve()),
                     }
                     if debt_by_beat:
-                        result["status"] = "NEEDS_TIMING_FIX"
+                        result["status"] = "NEEDS_RESHOOT"
+                        result["needs_reshoot"] = True
                         result["timing_debt_seconds"] = round(sum(debt_by_beat.values()), 3)
                     return result
             except Exception as exc:
@@ -457,15 +458,16 @@ class GraphRenderer:
         """
         Compute the final on-screen duration for every script beat.
 
-        Each beat lasts the MAXIMUM of:
-          - the recorded action-clip length (demo beats with a clip),
-          - the minimum hold time for the beat's attachment type,
-          - the actual TTS narration length, BUT capped at clip+MAX_CLONE_PAD_SECONDS
-            for demo beats so silent clone padding never exceeds 4 seconds.
+        Rules (Part D timing contract):
+          - beat_duration = max(actual_tts_duration, clip_duration, beat_minimum).
+          - Demo-beat clone padding is capped at MAX_CLONE_PAD_SECONDS per beat.
+          - If narration exceeds clip + MAX_CLONE_PAD_SECONDS, the excess is a
+            recording deficit; it is recorded as timing debt and the render is
+            marked NEEDS_RESHOOT. The video duration for that beat stays at
+            clip + MAX_CLONE_PAD_SECONDS so silent padding never exceeds 4s.
+          - Clips are NEVER trimmed to fit narration.
 
-        When narration exceeds the cap, the excess is recorded as timing debt
-        and the video is flagged NEEDS_TIMING_FIX. Returns a tuple of
-        ({beat_id: seconds}, {beat_id: timing_debt_seconds}).
+        Returns ({beat_id: seconds}, {beat_id: timing_debt_seconds}).
         """
         minimums: Dict[str, float] = {
             nb.beat_id: (
@@ -489,21 +491,22 @@ class GraphRenderer:
             ):
                 clip_dur = self._media_duration(beat.video_clip_path)
 
-            candidates = [min_dur]
-            if clip_dur:
-                candidates.append(clip_dur)
+            if clip_dur is not None:
+                # Never trim the clip; base duration includes the full clip.
+                base = max(min_dur, clip_dur)
                 if audio_dur is not None:
                     allowed = clip_dur + MAX_CLONE_PAD_SECONDS
                     if audio_dur > allowed:
                         debt_by_beat[beat.beat_id] = round(audio_dur - allowed, 3)
-                    candidates.append(min(audio_dur, allowed))
+                    duration = max(base, min(audio_dur, allowed))
                 else:
-                    candidates.append(audio_dur)
+                    duration = base
             elif audio_dur is not None:
-                candidates.append(audio_dur)
+                duration = max(min_dur, audio_dur)
+            else:
+                duration = min_dur
 
-            duration = round(max(c for c in candidates if c is not None), 3)
-            durations[beat.beat_id] = duration
+            durations[beat.beat_id] = round(duration, 3)
         return durations, debt_by_beat
 
     @staticmethod

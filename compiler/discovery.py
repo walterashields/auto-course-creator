@@ -38,6 +38,7 @@ import numpy as np
 import pyautogui
 from PIL import Image
 
+from .frame_analysis import count_error_signature_frames
 from .narrator import ScriptBeat
 from .schemas import DiscoveryResult, EnvironmentProfile, ScreenState
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
@@ -263,6 +264,259 @@ class ScreenRecorder:
 def animate_cursor_to(x: float, y: float, duration: float = 0.6) -> None:
     """Move the mouse cursor smoothly to (x, y) in macOS logical points."""
     pyautogui.moveTo(x, y, duration=duration, tween=pyautogui.easeInOutQuad)
+
+
+def _find_window_id(app_name: str) -> Optional[int]:
+    """Return the window ID of the frontmost window owned by ``app_name``."""
+    try:
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(app_name)}
+        if exists window 1 then
+            return id of window 1
+        end if
+    end tell
+end tell
+"""
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip())
+    except Exception as exc:
+        print(f"Warning: could not find window id for {app_name}: {exc}", file=sys.stderr)
+    return None
+
+
+class _ScreenCaptureKitRecorder:
+    """
+    Window-targeted screen recorder using ScreenCaptureKit (macOS 12.3+).
+
+    Captures only the window owned by the profile app so occluding windows never
+    appear in the recording. Falls back to full-display capture with a warning if
+    the framework is unavailable.
+    """
+
+    TARGET_WIDTH = 1280
+
+    def __init__(self, output_path: str, fps: int = 10, app_name: str = ""):
+        self.output_path = Path(output_path)
+        self.fps = fps
+        self.app_name = app_name
+        self._writer: Optional[cv2.VideoWriter] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._frame_shape: Optional[Tuple[int, int]] = None
+        self._stream: Any = None
+        self._delegate: Any = None
+        self._samples: List[Any] = []
+        self._lock = threading.Lock()
+        self._fallback: Optional[ScreenRecorder] = None
+
+    def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+        if w <= self.TARGET_WIDTH:
+            return frame
+        scale = self.TARGET_WIDTH / w
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        new_w = new_w - (new_w % 2)
+        new_h = new_h - (new_h % 2)
+        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    def _draw_cursor(self, frame: np.ndarray) -> np.ndarray:
+        try:
+            cursor_x, cursor_y = pyautogui.position()
+        except Exception:
+            return frame
+        logical_w, logical_h = pyautogui.size()
+        if logical_w == 0 or logical_h == 0:
+            return frame
+        frame_h, frame_w = frame.shape[:2]
+        scale = frame_w / logical_w
+        x = int(round(cursor_x * scale))
+        y = int(round(cursor_y * scale))
+        x = max(0, min(x, frame_w - 1))
+        y = max(0, min(y, frame_h - 1))
+        cv2.circle(frame, (x, y), 8, (0, 0, 0), 2)
+        cv2.circle(frame, (x, y), 5, (255, 0, 255), -1)
+        return frame
+
+    def _sample_buffer_to_bgr(self, sample_buffer) -> Optional[np.ndarray]:
+        """Convert a CMSampleBuffer to a BGR numpy array."""
+        try:
+            import CoreMedia
+            image_buffer = CoreMedia.CMSampleBufferGetImageBuffer(sample_buffer)
+            if image_buffer is None:
+                return None
+            CoreMedia.CVPixelBufferLockBaseAddress(image_buffer, 0)
+            width = CoreMedia.CVPixelBufferGetWidth(image_buffer)
+            height = CoreMedia.CVPixelBufferGetHeight(image_buffer)
+            base_address = CoreMedia.CVPixelBufferGetBaseAddress(image_buffer)
+            bytes_per_row = CoreMedia.CVPixelBufferGetBytesPerRow(image_buffer)
+            # BGRA 32-bit.
+            import ctypes
+            buf = np.frombuffer(
+                (ctypes.c_char * (bytes_per_row * height)).from_address(base_address),
+                dtype=np.uint8,
+            ).reshape((height, bytes_per_row // 4, 4))[:, :width, :]
+            CoreMedia.CVPixelBufferUnlockBaseAddress(image_buffer, 0)
+            return cv2.cvtColor(buf, cv2.COLOR_BGRA2BGR)
+        except Exception as exc:
+            print(f"Warning: could not convert sample buffer: {exc}", file=sys.stderr)
+            return None
+
+    def _writer_loop(self) -> None:
+        interval = 1.0 / self.fps
+        while not self._stop_event.is_set():
+            start = time.time()
+            sample = None
+            with self._lock:
+                if self._samples:
+                    sample = self._samples.pop(0)
+            if sample is not None:
+                frame = self._sample_buffer_to_bgr(sample)
+                if frame is not None:
+                    frame = self._resize_frame(frame)
+                    frame = self._draw_cursor(frame)
+                    if self._writer is None:
+                        h, w = frame.shape[:2]
+                        self._frame_shape = (w, h)
+                        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                        self._writer = cv2.VideoWriter(
+                            str(self.output_path), fourcc, self.fps, (w, h)
+                        )
+                    self._writer.write(frame)
+            elapsed = time.time() - start
+            sleep_time = max(0.0, interval - elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def _build_delegate(self):
+        from ScreenCaptureKit import SCStreamOutputType, SCStreamDelegate
+
+        recorder = self
+
+        class _Delegate(SCStreamDelegate):
+            def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, output_type):
+                if output_type == SCStreamOutputType.SCStreamOutputTypeScreen:
+                    with recorder._lock:
+                        recorder._samples.append(sample_buffer)
+
+        return _Delegate.alloc().init()
+
+    def _get_shareable_content(self):
+        """Fetch SCShareableContent synchronously from the async API."""
+        from ScreenCaptureKit import SCShareableContent
+        import threading
+
+        event = threading.Event()
+        result = {}
+
+        def handler(content, error):
+            result["content"] = content
+            result["error"] = error
+            event.set()
+
+        SCShareableContent.getShareableContentWithCompletionHandler_(handler)
+        event.wait(timeout=5.0)
+        return result.get("content"), result.get("error")
+
+    def _start_stream(self) -> bool:
+        try:
+            import objc
+            from ScreenCaptureKit import (
+                SCStream,
+                SCStreamConfiguration,
+                SCStreamFilter,
+                SCStreamOutputType,
+            )
+            from Quartz import CoreGraphics
+
+            window_id = _find_window_id(self.app_name)
+            if window_id is None:
+                print(
+                    f"[WINDOW-CAPTURE] could not find window for {self.app_name}; falling back to full screen",
+                    file=sys.stderr,
+                )
+                return False
+
+            content, error = self._get_shareable_content()
+            if content is None:
+                print(
+                    f"[WINDOW-CAPTURE] could not get shareable content: {error}; falling back",
+                    file=sys.stderr,
+                )
+                return False
+
+            target_window = None
+            for window in content.windows():
+                if int(window.windowID()) == window_id:
+                    target_window = window
+                    break
+            if target_window is None:
+                print(
+                    f"[WINDOW-CAPTURE] window id {window_id} not in SCShareableContent; falling back",
+                    file=sys.stderr,
+                )
+                return False
+
+            filter_ = SCStreamFilter.alloc().initWithDesktopIndependentWindow_(target_window)
+            config = SCStreamConfiguration.alloc().init()
+            config.setCapturesAudio_(False)
+            config.setPixelFormat_(CoreGraphics.kCVPixelFormatType_32BGRA)
+            config.setWidth_(1920)
+            config.setHeight_(1200)
+            config.setMinimumFrameInterval_(CoreGraphics.CMTimeMake(1, self.fps))
+
+            self._delegate = self._build_delegate()
+            self._stream = SCStream.alloc().initWithFilter_configuration_delegate_(filter_, config, self._delegate)
+            self._stream.addStreamOutput_type_sampleHandlerQueue_error_(
+                self._delegate,
+                SCStreamOutputType.SCStreamOutputTypeScreen,
+                objc.dispatch_queue_create("wsda.scstream", None),
+                None,
+            )
+            self._stream.startCaptureWithCompletionHandler_(lambda error: None)
+            return True
+        except Exception as exc:
+            print(
+                f"[WINDOW-CAPTURE] ScreenCaptureKit failed: {exc}; falling back to full screen",
+                file=sys.stderr,
+            )
+            return False
+
+    def start(self) -> None:
+        self._stop_event.clear()
+        if self._start_stream():
+            self._thread = threading.Thread(target=self._writer_loop, daemon=True)
+            self._thread.start()
+        else:
+            print(
+                "[WINDOW-CAPTURE] falling back to full-display MSS capture",
+                file=sys.stderr,
+            )
+            self._fallback = ScreenRecorder(str(self.output_path), fps=self.fps)
+            self._fallback.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._fallback is not None:
+            self._fallback.stop()
+            return
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        if self._stream is not None:
+            try:
+                self._stream.stopCaptureWithCompletionHandler_(lambda error: None)
+            except Exception:
+                pass
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
 
 
 class DiscoveryRecipes:
@@ -1554,7 +1808,11 @@ class EndStateDiscovery:
                     targets_to_try.append(fb_api)
 
             step_video_path = self.output_dir / f"{run_id}_step_{step_idx}.mp4"
-            recorder = ScreenRecorder(str(step_video_path), fps=10)
+            recorder: Any = ScreenRecorder(str(step_video_path), fps=10)
+            if self.profile and self.profile.app_name:
+                recorder = _ScreenCaptureKitRecorder(
+                    str(step_video_path), fps=10, app_name=self.profile.app_name
+                )
             recorder.start()
             try:
                 action_succeeded = False
@@ -2623,7 +2881,11 @@ class EndStateDiscovery:
                 if retry > 0 and not skipped:
                     self._reset_editor_for_retry(agent, self.opening_state_history)
 
-                recorder = ScreenRecorder(str(clip_path), fps=10)
+                recorder: Any = ScreenRecorder(str(clip_path), fps=10)
+                if self.profile and self.profile.app_name:
+                    recorder = _ScreenCaptureKitRecorder(
+                        str(clip_path), fps=10, app_name=self.profile.app_name
+                    )
                 if not skipped:
                     # Stage prep before recording: clear editor for standalone typing
                     # beats, but keep the commented history in place for continuity
@@ -2716,6 +2978,14 @@ class EndStateDiscovery:
                             if action.get("type") == "run_query":
                                 agent.scroll_result_pane_top()
                             agent.dismiss_transient_ui()
+                        elif beat_ok and beat.kind in ("state", "explain", "concept"):
+                            # Part E: fill explain/state beats with real cursor motion
+                            # so the clip is not a static hold.
+                            print(
+                                f"  [EMPHASIS] {beat.beat_id}: performing emphasis actions",
+                                file=sys.stderr,
+                            )
+                            agent.perform_emphasis_actions(beat)
 
                             # Persist the verified editor content for type_block beats.
                             if action.get("type") == "type_block":
@@ -2786,26 +3056,27 @@ class EndStateDiscovery:
 
                     # Drop any clip that shows the profile's error signature.
                     if self.profile.error_signature and clip_path.exists():
-                        sample_frame = self.output_dir / f"{run_id}_{beat.beat_id}_sample.png"
-                        if _extract_frame(str(clip_path), str(sample_frame)):
-                            if agent.frame_shows_error_signature(str(sample_frame)):
-                                print(
-                                    f"[ERROR-SIG] {beat.beat_id} attempt {retry + 1} contains error signature",
-                                    file=sys.stderr,
+                        error_frame_count = count_error_signature_frames(
+                            clip_path, self.profile, sample_fps=1
+                        )
+                        if error_frame_count > 0:
+                            print(
+                                f"[ERROR-SIG] {beat.beat_id} attempt {retry + 1} contains {error_frame_count} error-signature frame(s)",
+                                file=sys.stderr,
+                            )
+                            try:
+                                clip_path.unlink()
+                            except Exception:
+                                pass
+                            if retry < 1:
+                                beat_ok = False
+                                continue
+                            else:
+                                failed_reason = (
+                                    f"[ERROR-SIG] {beat.beat_id} still contains error signature after retries"
                                 )
-                                try:
-                                    clip_path.unlink()
-                                except Exception:
-                                    pass
-                                if retry < 1:
-                                    beat_ok = False
-                                    continue
-                                else:
-                                    failed_reason = (
-                                        f"[ERROR-SIG] {beat.beat_id} still contains error signature after retries"
-                                    )
-                                    beat_failed = True
-                                    break
+                                beat_failed = True
+                                break
 
                     if clip_path.exists():
                         self._trim_clip_to_motion(clip_path)
