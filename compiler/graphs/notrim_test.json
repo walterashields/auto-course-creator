@@ -1,0 +1,82 @@
+{
+  "graph_id": "notrim_test",
+  "learning_objective": "Test no trim.",
+  "application": "db_browser_sqlite",
+  "end_state": {
+    "state_id": "state_end",
+    "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_notrim_ox2usv1b/notrim_test_blank.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "End"
+  },
+  "start_state": {
+    "state_id": "state_start",
+    "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_notrim_ox2usv1b/notrim_test_blank.png",
+    "timestamp": 0.0,
+    "application": "db_browser_sqlite",
+    "platform_snapshot": {},
+    "visual_summary": "Start"
+  },
+  "states": [
+    {
+      "state_id": "state_001",
+      "screenshot_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_notrim_ox2usv1b/notrim_test_blank.png",
+      "timestamp": 0.0,
+      "application": "db_browser_sqlite",
+      "platform_snapshot": {},
+      "visual_summary": "After beat_001"
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "from_state_id": "state_start",
+      "to_state_id": "state_001",
+      "action_type": "click",
+      "target": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "payload": null,
+      "expected_duration": 2.0,
+      "video_path": "/private/var/folders/zp/w0n58vdd3vd_bmn34yshgq880000gn/T/wsda_test_notrim_ox2usv1b/long_action.mp4",
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    },
+    {
+      "edge_id": "edge_002",
+      "from_state_id": "state_001",
+      "to_state_id": "state_end",
+      "action_type": "wait",
+      "target": {},
+      "payload": null,
+      "expected_duration": 1.0,
+      "video_path": null,
+      "highlight_style": {
+        "color": "#FF2D95",
+        "width": 3
+      }
+    }
+  ],
+  "narration_beats": [
+    {
+      "beat_id": "beat_001",
+      "attaches_to": "edge",
+      "target_id": "edge_001",
+      "text": "Short narration.",
+      "tts_text": null,
+      "word_count": 2,
+      "start_time": 0.0,
+      "end_time": 8.0,
+      "audio_path": null,
+      "observed_state": null,
+      "merge": false
+    }
+  ],
+  "generation_cost_usd": null,
+  "reliability_score": null,
+  "render_status": null
+}

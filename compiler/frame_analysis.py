@@ -218,8 +218,9 @@ def frozen_share_percent(
 
 def _strip_markdown_syntax(text: str) -> str:
     """Remove markdown table delimiters, headers, and extra formatting."""
-    # Drop table separator lines like |------|------|...
-    text = re.sub(r"\|[-:|\s]+\|", "", text)
+    # Drop table separator lines like |------|------|... without consuming
+    # surrounding newlines, so adjacent table rows stay on separate lines.
+    text = re.sub(r"^\|[-:|\s]+\|.*$", "", text, flags=re.MULTILINE)
     # Drop markdown links, bold, code.
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"[*_`#]+", "", text)

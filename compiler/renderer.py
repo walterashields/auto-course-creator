@@ -994,16 +994,25 @@ class GraphRenderer:
                     f"[{idx}:v]scale={VIDEO_MAX_WIDTH}:-2,fps={FPS},trim=duration={duration:.6f}[v{idx}]"
                 )
             else:
-                # Video: hold the last frame if the clip is shorter than the
-                # target duration, but cap clone padding at MAX_CLONE_PAD_SECONDS.
+                # Video: loop the recorded clip if the target duration exceeds
+                # the clip length, capped at MAX_CLONE_PAD_SECONDS. Repeating
+                # legitimate recorded motion (cursor emphasis, progressive typing)
+                # avoids frozen last-frame padding while staying honest to what
+                # was actually recorded.
                 clip_dur = self._media_duration(frame["media_path"]) or 0.0
                 pad = min(max(duration - clip_dur, 0.0), MAX_CLONE_PAD_SECONDS)
                 segment_dur = clip_dur + pad
-                filter_parts.append(
-                    f"[{idx}:v]scale={VIDEO_MAX_WIDTH}:-2,fps={FPS},"
-                    f"setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={pad:.6f},"
-                    f"trim=duration={segment_dur:.6f}[v{idx}]"
-                )
+                if pad > 0:
+                    filter_parts.append(
+                        f"[{idx}:v]loop=loop=-1:size=0:start=0,"
+                        f"scale={VIDEO_MAX_WIDTH}:-2,fps={FPS},"
+                        f"setpts=PTS-STARTPTS,trim=duration={segment_dur:.6f}[v{idx}]"
+                    )
+                else:
+                    filter_parts.append(
+                        f"[{idx}:v]scale={VIDEO_MAX_WIDTH}:-2,fps={FPS},"
+                        f"setpts=PTS-STARTPTS,trim=duration={segment_dur:.6f}[v{idx}]"
+                    )
             concat_inputs.append(f"[v{idx}]")
 
         concat_n = len(grouped)
