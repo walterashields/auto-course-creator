@@ -3437,13 +3437,19 @@ class EndStateDiscovery:
                 agent.dismiss_transient_ui()
                 try:
                     observed = agent.summarize_observed_state()
-                    # Preserve any SQL grounding data already attached to the beat.
+                    # Preserve verified editor content and SQL grounding data already
+                    # attached to the beat; summarize_observed_state() returns UI
+                    # metadata, not the authoritative text we read back during
+                    # composition/execution.
+                    prior_editor_content = (beat.observed_state or {}).get("editor_content")
                     prior_query_result = (beat.observed_state or {}).get("query_result")
                     # Preserve continuity-aware opening-state metadata set during stage prep.
                     prior_opening_strategy = (beat.observed_state or {}).get("opening_state_strategy")
                     prior_opening_log = (beat.observed_state or {}).get("opening_state_log")
                     prior_history_pasted = (beat.observed_state or {}).get("history_pasted")
                     beat.observed_state = observed
+                    if prior_editor_content:
+                        beat.observed_state["editor_content"] = prior_editor_content
                     if prior_query_result:
                         beat.observed_state["query_result"] = prior_query_result
                     if prior_opening_strategy:
