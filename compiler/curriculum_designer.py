@@ -25,6 +25,7 @@ from .curriculum import CourseManifest, VideoManifest
 from .lesson_builder import LessonBuilder
 from .lesson_standard import LessonStandard
 from .sql_formatter import format_sql_in_text
+from .cost_tracker import get_tracker, tracked_create
 
 DEFAULT_MODEL = os.environ.get("CURRICULUM_MODEL", "claude-sonnet-5")
 _CACHE_VERSION = "20"  # Bump when prompt/schema changes to invalidate old caches
@@ -613,6 +614,7 @@ class CurriculumDesigner:
         )
 
         errors = self._validate_manifest(manifest, depth=depth)
+        # Ceiling: 2 manifest-fix attempts.
         for fix_attempt in range(2):
             if not errors:
                 break
@@ -760,8 +762,10 @@ class CurriculumDesigner:
         messages: List[Dict[str, Any]] = [{"role": "user", "content": user}]
         full_text = ""
 
+        # Ceiling: 3 JSON parse/continue attempts.
         for attempt in range(3):
-            response = self.client.messages.create(
+            response = tracked_create(
+                self.client,
                 model=DEFAULT_MODEL,
                 max_tokens=8192,
                 system=system,
@@ -846,8 +850,10 @@ class CurriculumDesigner:
         messages: List[Dict[str, Any]] = [{"role": "user", "content": user}]
         full_text = ""
 
+        # Ceiling: 3 JSON parse/continue attempts.
         for attempt in range(3):
-            response = self.client.messages.create(
+            response = tracked_create(
+                self.client,
                 model=DEFAULT_MODEL,
                 max_tokens=4096,
                 system=system,

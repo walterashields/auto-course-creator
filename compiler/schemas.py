@@ -117,6 +117,8 @@ class DiscoveryResult(BaseModel):
     std_cost_usd: float
     # The full log of every attempt (for debugging)
     attempt_logs: List[dict] = Field(default_factory=list)
+    # Exact editor text read back via accessibility at the end of a successful run.
+    final_editor_content: Optional[str] = None
 
 
 class EnvironmentProfile(BaseModel):
@@ -151,6 +153,9 @@ class EnvironmentProfile(BaseModel):
     #   min_area_ratio: minimum matching fraction of the region
     #   text_hint: optional human-readable hint for logs/VLM prompts
     error_signature: Optional[Dict[str, Any]] = None
+    # Whitespace handling for editable regions. "exact" preserves leading
+    # indentation byte-for-byte; "normalized" allows fuzzy whitespace compare.
+    whitespace_policy: Literal["exact", "normalized"] = "normalized"
     # Observed facts populated by the scout
     tables: List[str] = Field(default_factory=list)
     columns: Dict[str, List[str]] = Field(default_factory=dict)

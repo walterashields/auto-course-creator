@@ -9,3 +9,5 @@ compiler/courses/.cache/
 compiler/.DS_Store
 .vscode/
 .idea/
+# Iteration artifact graphs (hex-suffixed single-video graphs)
+compiler/graphs/video_*_*.json

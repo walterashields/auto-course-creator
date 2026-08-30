@@ -43,6 +43,7 @@ from .narrator import ScriptBeat
 from .schemas import DiscoveryResult, EnvironmentProfile, ScreenState
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
 from .vision_agent import VisionAgent
+from .cost_tracker import get_tracker, tracked_create
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -51,10 +52,16 @@ from .vision_agent import VisionAgent
 SUPPORTED_APPLICATIONS = {"db_browser_sqlite"}
 MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
 TARGET_LONG_EDGE = 1568
-MOTION_DIFF_THRESHOLD = 2.0  # Mean absolute grayscale frame diff used to detect action.
+MOTION_DIFF_THRESHOLD = 0.05  # Mean absolute grayscale frame diff; catches cursor and small-region motion.
 MIN_CLIP_DURATION_SECONDS = 1.5
-MOTION_PAD_SECONDS = 0.7
-NO_MOTION_KEEP_SECONDS = 2.0
+MOTION_PAD_SECONDS = 0.5
+NO_MOTION_KEEP_SECONDS = 1.5
+
+# C10 hard ceilings for unbounded / weakly-bounded loops.
+MAX_SCREEN_RECORDER_FRAMES = 1_080_000  # ~3 hours at 10 fps
+MAX_SC_RECORDER_SAMPLES = 1_080_000     # ~3 hours at 10 fps
+MAX_TRIM_FRAMES = 1_000_000
+MAX_BEAT_RETRIES = max(1, int(os.environ.get("WSDA_MAX_ATTEMPTS", "3")))
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -213,9 +220,12 @@ class ScreenRecorder:
 
     def _capture_loop(self) -> None:
         interval = 1.0 / self.fps
+        frame_count = 0
         with mss.MSS() as sct:
             monitor = sct.monitors[0]  # Full screen
-            while not self._stop_event.is_set():
+            # Ceiling: MAX_SCREEN_RECORDER_FRAMES (~3h at 10fps); loud abort if exceeded.
+            while not self._stop_event.is_set() and frame_count < MAX_SCREEN_RECORDER_FRAMES:
+                frame_count += 1
                 start = time.time()
                 try:
                     raw = sct.grab(monitor)
@@ -228,7 +238,8 @@ class ScreenRecorder:
                 frame = np.array(raw)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
                 frame = self._resize_frame(frame)
-                frame = self._draw_cursor(frame)
+                # C9: do not draw a synthetic cursor overlay; only real cursor
+                # motion from emphasis actions should appear in the recording.
 
                 if self._writer is None:
                     h, w = frame.shape[:2]
@@ -244,6 +255,12 @@ class ScreenRecorder:
                 sleep_time = max(0.0, interval - elapsed)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+            if frame_count >= MAX_SCREEN_RECORDER_FRAMES:
+                print(
+                    f"[CIRCUIT BREAKER] ScreenRecorder hit frame ceiling "
+                    f"({MAX_SCREEN_RECORDER_FRAMES}); stopping capture loop.",
+                    file=sys.stderr,
+                )
 
     def start(self) -> None:
         """Start recording in a background thread."""
@@ -269,26 +286,38 @@ def animate_cursor_to(x: float, y: float, duration: float = 0.6) -> None:
 def _find_window_id(app_name: str) -> Optional[int]:
     """Return the window ID of the frontmost window owned by ``app_name``."""
     try:
-        script = f"""\
-tell application "System Events"
-    tell process {json.dumps(app_name)}
-        if exists window 1 then
-            return id of window 1
-        end if
-    end tell
-end tell
-"""
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
+        from Quartz import CoreGraphics
+
+        window_list = CoreGraphics.CGWindowListCopyWindowInfo(
+            CoreGraphics.kCGWindowListOptionOnScreenOnly,
+            CoreGraphics.kCGNullWindowID,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return int(result.stdout.strip())
+        for entry in window_list:
+            owner = entry.get(CoreGraphics.kCGWindowOwnerName, "")
+            name = entry.get(CoreGraphics.kCGWindowName, "")
+            if owner == app_name or name == app_name:
+                return int(entry[CoreGraphics.kCGWindowNumber])
     except Exception as exc:
         print(f"Warning: could not find window id for {app_name}: {exc}", file=sys.stderr)
     return None
+
+
+def _load_sc_class(name: str) -> Any:
+    """Import a ScreenCaptureKit class, falling back to objc.lookUpClass."""
+    try:
+        import ScreenCaptureKit as sc
+
+        cls = getattr(sc, name, None)
+        if cls is not None:
+            return cls
+    except Exception:
+        pass
+    try:
+        import objc
+
+        return objc.lookUpClass(name)
+    except Exception as exc:
+        raise ImportError(f"ScreenCaptureKit class {name!r} is not available: {exc}")
 
 
 class _ScreenCaptureKitRecorder:
@@ -349,21 +378,30 @@ class _ScreenCaptureKitRecorder:
         """Convert a CMSampleBuffer to a BGR numpy array."""
         try:
             import CoreMedia
+            from Quartz.CoreVideo import (
+                CVPixelBufferGetBaseAddress,
+                CVPixelBufferGetBytesPerRow,
+                CVPixelBufferGetHeight,
+                CVPixelBufferGetWidth,
+                CVPixelBufferLockBaseAddress,
+                CVPixelBufferUnlockBaseAddress,
+                kCVPixelBufferLock_ReadOnly,
+            )
+
             image_buffer = CoreMedia.CMSampleBufferGetImageBuffer(sample_buffer)
             if image_buffer is None:
                 return None
-            CoreMedia.CVPixelBufferLockBaseAddress(image_buffer, 0)
-            width = CoreMedia.CVPixelBufferGetWidth(image_buffer)
-            height = CoreMedia.CVPixelBufferGetHeight(image_buffer)
-            base_address = CoreMedia.CVPixelBufferGetBaseAddress(image_buffer)
-            bytes_per_row = CoreMedia.CVPixelBufferGetBytesPerRow(image_buffer)
-            # BGRA 32-bit.
-            import ctypes
+            CVPixelBufferLockBaseAddress(image_buffer, kCVPixelBufferLock_ReadOnly)
+            width = CVPixelBufferGetWidth(image_buffer)
+            height = CVPixelBufferGetHeight(image_buffer)
+            base_address = CVPixelBufferGetBaseAddress(image_buffer)
+            bytes_per_row = CVPixelBufferGetBytesPerRow(image_buffer)
+            # BGRA 32-bit. PyObjC returns the base address as an objc.varlist;
+            # as_buffer gives a memoryview we can feed directly to numpy.
             buf = np.frombuffer(
-                (ctypes.c_char * (bytes_per_row * height)).from_address(base_address),
-                dtype=np.uint8,
+                base_address.as_buffer(bytes_per_row * height), dtype=np.uint8
             ).reshape((height, bytes_per_row // 4, 4))[:, :width, :]
-            CoreMedia.CVPixelBufferUnlockBaseAddress(image_buffer, 0)
+            CVPixelBufferUnlockBaseAddress(image_buffer, kCVPixelBufferLock_ReadOnly)
             return cv2.cvtColor(buf, cv2.COLOR_BGRA2BGR)
         except Exception as exc:
             print(f"Warning: could not convert sample buffer: {exc}", file=sys.stderr)
@@ -371,7 +409,10 @@ class _ScreenCaptureKitRecorder:
 
     def _writer_loop(self) -> None:
         interval = 1.0 / self.fps
-        while not self._stop_event.is_set():
+        sample_count = 0
+        # Ceiling: MAX_SC_RECORDER_SAMPLES (~3h at 10fps); loud abort if exceeded.
+        while not self._stop_event.is_set() and sample_count < MAX_SC_RECORDER_SAMPLES:
+            sample_count += 1
             start = time.time()
             sample = None
             with self._lock:
@@ -381,7 +422,7 @@ class _ScreenCaptureKitRecorder:
                 frame = self._sample_buffer_to_bgr(sample)
                 if frame is not None:
                     frame = self._resize_frame(frame)
-                    frame = self._draw_cursor(frame)
+                    # C9: no synthetic cursor overlay; keep only real cursor motion.
                     if self._writer is None:
                         h, w = frame.shape[:2]
                         self._frame_shape = (w, h)
@@ -394,23 +435,40 @@ class _ScreenCaptureKitRecorder:
             sleep_time = max(0.0, interval - elapsed)
             if sleep_time > 0:
                 time.sleep(sleep_time)
+        if sample_count >= MAX_SC_RECORDER_SAMPLES:
+            print(
+                f"[CIRCUIT BREAKER] _ScreenCaptureKitRecorder hit sample ceiling "
+                f"({MAX_SC_RECORDER_SAMPLES}); stopping writer loop.",
+                file=sys.stderr,
+            )
 
     def _build_delegate(self):
-        from ScreenCaptureKit import SCStreamOutputType, SCStreamDelegate
+        import ScreenCaptureKit as sc
+        NSObject = _load_sc_class("NSObject")
 
         recorder = self
 
-        class _Delegate(SCStreamDelegate):
-            def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, output_type):
-                if output_type == SCStreamOutputType.SCStreamOutputTypeScreen:
-                    with recorder._lock:
-                        recorder._samples.append(sample_buffer)
+        # Each delegate must have a unique Objective-C class name; reusing the
+        # same name across recorder instances causes a registration conflict.
+        class_name = f"_WSDAScreenCaptureDelegate_{uuid.uuid4().hex}"
 
-        return _Delegate.alloc().init()
+        def _stream_didOutputSampleBuffer_ofType_(
+            self, stream, sample_buffer, output_type
+        ):
+            if output_type == sc.SCStreamOutputTypeScreen:
+                with recorder._lock:
+                    recorder._samples.append(sample_buffer)
+
+        DelegateClass = type(
+            class_name,
+            (NSObject,),
+            {"stream_didOutputSampleBuffer_ofType_": _stream_didOutputSampleBuffer_ofType_},
+        )
+        return DelegateClass.alloc().init()
 
     def _get_shareable_content(self):
         """Fetch SCShareableContent synchronously from the async API."""
-        from ScreenCaptureKit import SCShareableContent
+        SCShareableContent = _load_sc_class("SCShareableContent")
         import threading
 
         event = threading.Event()
@@ -428,13 +486,14 @@ class _ScreenCaptureKitRecorder:
     def _start_stream(self) -> bool:
         try:
             import objc
-            from ScreenCaptureKit import (
-                SCStream,
-                SCStreamConfiguration,
-                SCStreamFilter,
-                SCStreamOutputType,
-            )
+
+            SCStream = _load_sc_class("SCStream")
+            SCStreamConfiguration = _load_sc_class("SCStreamConfiguration")
+            SCContentFilter = _load_sc_class("SCContentFilter")
+            import ScreenCaptureKit as sc
             from Quartz import CoreGraphics
+            from Quartz.CoreVideo import kCVPixelFormatType_32BGRA
+            import CoreMedia
 
             window_id = _find_window_id(self.app_name)
             if window_id is None:
@@ -444,40 +503,44 @@ class _ScreenCaptureKitRecorder:
                 )
                 return False
 
-            content, error = self._get_shareable_content()
-            if content is None:
-                print(
-                    f"[WINDOW-CAPTURE] could not get shareable content: {error}; falling back",
-                    file=sys.stderr,
-                )
-                return False
+            filter_ = SCContentFilter.alloc().initWithWindowId_(window_id)
+            if filter_ is None:
+                # Fallback to the shareable-content path if initWithWindowId_ is unavailable.
+                content, error = self._get_shareable_content()
+                if content is None:
+                    print(
+                        f"[WINDOW-CAPTURE] could not get shareable content: {error}; falling back",
+                        file=sys.stderr,
+                    )
+                    return False
 
-            target_window = None
-            for window in content.windows():
-                if int(window.windowID()) == window_id:
-                    target_window = window
-                    break
-            if target_window is None:
-                print(
-                    f"[WINDOW-CAPTURE] window id {window_id} not in SCShareableContent; falling back",
-                    file=sys.stderr,
-                )
-                return False
+                target_window = None
+                for window in content.windows():
+                    if int(window.windowID()) == window_id:
+                        target_window = window
+                        break
+                if target_window is None:
+                    print(
+                        f"[WINDOW-CAPTURE] window id {window_id} not in SCShareableContent; falling back",
+                        file=sys.stderr,
+                    )
+                    return False
 
-            filter_ = SCStreamFilter.alloc().initWithDesktopIndependentWindow_(target_window)
+                filter_ = SCContentFilter.alloc().initWithDesktopIndependentWindow_(target_window)
             config = SCStreamConfiguration.alloc().init()
             config.setCapturesAudio_(False)
-            config.setPixelFormat_(CoreGraphics.kCVPixelFormatType_32BGRA)
+            config.setPixelFormat_(kCVPixelFormatType_32BGRA)
             config.setWidth_(1920)
             config.setHeight_(1200)
-            config.setMinimumFrameInterval_(CoreGraphics.CMTimeMake(1, self.fps))
+            config.setShowsCursor_(True)
+            config.setMinimumFrameInterval_(CoreMedia.CMTimeMake(1, self.fps))
 
             self._delegate = self._build_delegate()
             self._stream = SCStream.alloc().initWithFilter_configuration_delegate_(filter_, config, self._delegate)
             self._stream.addStreamOutput_type_sampleHandlerQueue_error_(
                 self._delegate,
-                SCStreamOutputType.SCStreamOutputTypeScreen,
-                objc.dispatch_queue_create("wsda.scstream", None),
+                sc.SCStreamOutputTypeScreen,
+                None,
                 None,
             )
             self._stream.startCaptureWithCompletionHandler_(lambda error: None)
@@ -517,6 +580,112 @@ class _ScreenCaptureKitRecorder:
         if self._writer is not None:
             self._writer.release()
             self._writer = None
+
+
+def test_window_capture_occlusion(
+    app_name: str = "DB Browser for SQLite",
+    duration: float = 6.0,
+    occlusion_duration: float = 3.0,
+    output_path: Optional[str] = None,
+) -> bool:
+    """
+    Real occlusion test for the ScreenCaptureKit window recorder.
+
+    Records ``app_name`` for ``duration`` seconds. Halfway through, Finder is
+    brought to the front for ``occlusion_duration`` seconds. The test passes
+    only when the captured clip shows no trace of Finder (i.e. window-targeted
+    capture excluded the occluding window).
+    """
+    if output_path is None:
+        output_path = (
+            Path(__file__).resolve().parent
+            / "discovery_output"
+            / f"occlusion_test_{uuid.uuid4().hex[:8]}.mp4"
+        )
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _activate(app: str) -> None:
+        subprocess.run(
+            ["osascript", "-e", f'tell application "{app}" to activate'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    _activate(app_name)
+    time.sleep(0.5)
+
+    recorder = _ScreenCaptureKitRecorder(str(output_path), fps=10, app_name=app_name)
+    recorder.start()
+    if recorder._fallback is not None:
+        recorder.stop()
+        raise RuntimeError(
+            "[OCCLUSION TEST] Window capture fell back to full display; cannot test occlusion"
+        )
+
+    try:
+        lead = (duration - occlusion_duration) / 2.0
+        time.sleep(lead)
+        print("[OCCLUSION TEST] Raising Finder", file=sys.stderr)
+        _activate("Finder")
+        time.sleep(occlusion_duration)
+        print("[OCCLUSION TEST] Restoring target app", file=sys.stderr)
+        _activate(app_name)
+        time.sleep(lead)
+    finally:
+        recorder.stop()
+
+    cap = cv2.VideoCapture(str(output_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"[OCCLUSION TEST] Could not open {output_path}")
+    frames: List[np.ndarray] = []
+    # Ceiling: MAX_TRIM_FRAMES; abort loudly if a corrupt file loops forever.
+    while len(frames) < MAX_TRIM_FRAMES:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    else:
+        print(
+            f"[CIRCUIT BREAKER] occlusion test frame read hit ceiling "
+            f"({MAX_TRIM_FRAMES}); aborting.",
+            file=sys.stderr,
+        )
+    cap.release()
+
+    if len(frames) < 10:
+        raise RuntimeError(
+            f"[OCCLUSION TEST] Too few frames captured ({len(frames)})"
+        )
+
+    # Compare a central content ROI so the window's own title-bar chrome
+    # changing between active/inactive does not false-positive the test.
+    h, w = frames[0].shape[:2]
+    y0, y1 = int(h * 0.12), int(h * 0.92)
+    x0, x1 = int(w * 0.05), int(w * 0.95)
+    baseline = cv2.cvtColor(frames[0][y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    occlusion_start = int(len(frames) * 0.33)
+    occlusion_end = int(len(frames) * 0.66)
+    max_mse = 0.0
+    for i in range(occlusion_start, occlusion_end):
+        gray = cv2.cvtColor(frames[i][y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+        mse = float(np.mean((gray.astype(np.float32) - baseline.astype(np.float32)) ** 2))
+        if mse > max_mse:
+            max_mse = mse
+
+    print(
+        f"[OCCLUSION TEST] captured {len(frames)} frames; max MSE during occlusion = {max_mse:.2f}",
+        file=sys.stderr,
+    )
+    if max_mse > 10.0:
+        print(
+            f"[OCCLUSION TEST] FAIL: occluding window leaked into capture (max MSE {max_mse:.2f})",
+            file=sys.stderr,
+        )
+        return False
+    print("[OCCLUSION TEST] PASS: no occluding window trace", file=sys.stderr)
+    return True
 
 
 class DiscoveryRecipes:
@@ -1390,7 +1559,9 @@ def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
     Pull the SQL query associated with a beat, including ORDER BY and LIMIT.
 
     Prefer an explicit type_block or type_segments action, then fall back to a
-    SELECT statement embedded in the beat narration.
+    SELECT statement embedded in the beat narration only when the beat is a
+    run_query beat. Prose explain/state/concept beats frequently mention SQL
+    keywords and must not be executed as queries.
     """
     candidates: List[str] = []
     action = beat.action or {}
@@ -1404,7 +1575,9 @@ def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
                 for seg in segments
             )
         )
-    candidates.append(beat.text)
+    # Only treat narration as a runnable query for actual run_query/demo beats.
+    if action.get("type") == "run_query":
+        candidates.append(beat.text)
 
     for candidate in candidates:
         query = extract_first_query(candidate)
@@ -1431,25 +1604,79 @@ def _execute_query_ground_truth(db_path: str, query: str) -> Dict[str, Any]:
     return result
 
 
-def _ground_query_result(beat: "ScriptBeat", db_path: Optional[str]) -> None:
+def _load_canonical_grounding(video_id: Optional[str]) -> Dict[str, Any]:
+    """Load expected rows/first row/headers from the canonical reference file."""
+    result: Dict[str, Any] = {}
+    if not video_id:
+        return result
+    ref_path = Path(__file__).resolve().parent / "courses" / "ch4_canonical_reference.md"
+    if not ref_path.exists():
+        return result
+    text = ref_path.read_text(encoding="utf-8")
+    video_num = video_id.replace("video_", "").split("_")[0]
+    pattern = re.compile(
+        rf"## Video\s+{re.escape(video_num)}\b.*?```sql\n(.*?)```",
+        re.DOTALL,
+    )
+    match = pattern.search(text)
+    if not match:
+        return result
+    block = match.group(0)
+    row_match = re.search(r"Expected result:\s*\*\*(\d+)\s+rows?\*\*", block, re.IGNORECASE)
+    if row_match:
+        result["expected_rows"] = int(row_match.group(1))
+    first_match = re.search(r"first row\s+\*\*(.+?)\*\*", block, re.IGNORECASE)
+    if first_match:
+        result["expected_first_row"] = first_match.group(1).strip()
+    headers_match = re.search(r"columns?\s+(.+?)\.", block, re.IGNORECASE)
+    if headers_match:
+        header_text = headers_match.group(1)
+        result["expected_headers"] = [
+            h.strip() for h in re.split(r"[,|]", header_text) if h.strip()
+        ]
+    return result
+
+
+def _ground_query_result(
+    beat: "ScriptBeat",
+    db_path: Optional[str],
+    video_id: Optional[str] = None,
+) -> bool:
     """
     Compare a beat's SQL result to the actual sqlite3 result.
 
-    The VLM's result-pane summary is expected under beat.observed_state[
-    "query_result"]. If it disagrees with sqlite3, a grounding error is logged.
-    Either way, the sqlite3 result is stored as the authoritative ground truth.
+    Returns True only when:
+      - sqlite3 executes the beat's SQL without error.
+      - The VLM-reported row count and columns match sqlite3 (when available).
+      - Any row-count expectation declared in the beat text matches sqlite3.
+      - Canonical reference expectations (rows, first row, headers) match.
+
+    Any mismatch or sqlite3 error is a FAIL. The sqlite3 result is stored as
+    the authoritative ground truth, but GROUNDING OK is never printed on failure.
     """
     query = _extract_sql_query(beat)
     if not query or not db_path or not Path(db_path).exists():
-        return
+        return False
 
     vlm_result = (beat.observed_state or {}).get("query_result") or {}
     ground = _execute_query_ground_truth(db_path, query)
 
-    vlm_count = vlm_result.get("row_count")
+    if beat.observed_state is None:
+        beat.observed_state = {}
+    beat.observed_state["query_result"] = ground
+
+    if ground.get("error"):
+        print(
+            f"[GROUNDING FAIL] sqlite3 error for beat {beat.beat_id}: {ground['error']}",
+            file=sys.stderr,
+        )
+        return False
+
     ground_count = ground.get("row_count")
-    vlm_columns = list(vlm_result.get("columns") or [])
     ground_columns = list(ground.get("columns") or [])
+
+    vlm_count = vlm_result.get("row_count")
+    vlm_columns = list(vlm_result.get("columns") or [])
 
     count_mismatch = False
     try:
@@ -1467,19 +1694,56 @@ def _ground_query_result(beat: "ScriptBeat", db_path: Optional[str]) -> None:
 
     if count_mismatch or column_mismatch:
         print(
-            f"[GROUNDING ERROR] sqlite3={ground_count} rows, VLM={vlm_count} rows "
+            f"[GROUNDING FAIL] sqlite3={ground_count} rows, VLM={vlm_count} rows "
             f"(columns sqlite3={ground_columns}, VLM={vlm_columns})",
             file=sys.stderr,
         )
-    else:
+        return False
+
+    # Assert manifest-declared expectations from the beat narration.
+    expected = _extract_expected_row_count(beat.text)
+    if expected is not None and expected != ground_count:
         print(
-            f"[GROUNDING OK] sqlite3={ground_count} rows, columns={ground_columns}",
+            f"[GROUNDING FAIL] beat expects {expected} rows, sqlite3 returned {ground_count}",
             file=sys.stderr,
         )
+        return False
 
-    if beat.observed_state is None:
-        beat.observed_state = {}
-    beat.observed_state["query_result"] = ground
+    # C9: assert canonical reference expectations (rows, first row, headers).
+    canonical = _load_canonical_grounding(video_id)
+    if canonical.get("expected_rows") is not None:
+        if ground_count != canonical["expected_rows"]:
+            print(
+                f"[GROUNDING FAIL] canonical reference expects {canonical['expected_rows']} rows, "
+                f"sqlite3 returned {ground_count}",
+                file=sys.stderr,
+            )
+            return False
+    if canonical.get("expected_first_row") and ground.get("first_rows"):
+        first_row = ground["first_rows"][0]
+        first_row_str = " ".join(str(c) for c in first_row[:3])
+        expected_first = canonical["expected_first_row"]
+        if expected_first.lower() not in first_row_str.lower():
+            print(
+                f"[GROUNDING FAIL] canonical first row mismatch: expected {expected_first!r}, "
+                f"sqlite3 returned {first_row!r}",
+                file=sys.stderr,
+            )
+            return False
+    if canonical.get("expected_headers") and ground_columns:
+        if [c.strip() for c in ground_columns] != [c.strip() for c in canonical["expected_headers"]]:
+            print(
+                f"[GROUNDING FAIL] canonical header mismatch: expected {canonical['expected_headers']!r}, "
+                f"sqlite3 returned {ground_columns!r}",
+                file=sys.stderr,
+            )
+            return False
+
+    print(
+        f"[GROUNDING OK] sqlite3={ground_count} rows, columns={ground_columns}",
+        file=sys.stderr,
+    )
+    return True
 
 
 def _extract_expected_row_count(text: str) -> Optional[int]:
@@ -1614,7 +1878,8 @@ def _call_vision_model(
     ]
 
     started = time.time()
-    response = client.messages.create(
+    response = tracked_create(
+        client,
         model=MODEL,
         max_tokens=1024,
         messages=messages,
@@ -1673,12 +1938,14 @@ class EndStateDiscovery:
         db_path: Optional[str] = None,
         opening_state_query: Optional[str] = None,
         profile: Optional[EnvironmentProfile] = None,
+        video_id: Optional[str] = None,
     ):
         self.objective = objective
         self.application = application
         self.db_path = Path(db_path) if db_path else None
         self.opening_state_query = opening_state_query
         self.profile = profile or self._default_profile_for_app(application)
+        self.video_id = video_id
         self.client = anthropic.Anthropic()
         self.output_dir = Path(__file__).resolve().parent / "discovery_output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1735,6 +2002,7 @@ class EndStateDiscovery:
         last_target: Optional[Dict[str, Any]] = None
         prev_video_path: Optional[str] = None
 
+        # Ceiling: one iteration per action (bounded by len(actions)).
         for step_idx, step in enumerate(actions):
             attempt = step_idx + 1
             try:
@@ -1816,6 +2084,7 @@ class EndStateDiscovery:
             recorder.start()
             try:
                 action_succeeded = False
+                # Ceiling: primary + fallback_targets (bounded by len(targets_to_try)).
                 for try_idx, try_target in enumerate(targets_to_try):
                     action["point"] = {
                         "x": try_target["x"] + try_target["w"] // 2,
@@ -2137,6 +2406,7 @@ class EndStateDiscovery:
                 or ("box" in desc and "filter" in self.objective.lower())
             )
 
+        # Ceiling: max_attempts (default 10) exploration steps.
         for attempt in range(1, max_attempts + 1):
             if total_cost >= cost_ceiling_usd:
                 print(
@@ -2421,6 +2691,11 @@ class EndStateDiscovery:
             return self._make_result(success=False, reason=msg)
 
         self._auto_fit_columns()
+
+        stage_assertion = self._assert_stage_resources()
+        if not stage_assertion["ok"]:
+            print(f"Error: {stage_assertion['reason']}", file=sys.stderr)
+            return self._make_result(success=False, reason=stage_assertion["reason"])
 
         result = self._execute_action_script(
             actions=actions,
@@ -2767,6 +3042,13 @@ class EndStateDiscovery:
 
         self._auto_fit_columns()
 
+        # Stage-prep resource assertion: the correct database is open and the
+        # expected seed table has the expected row count before any beat runs.
+        stage_assertion = self._assert_stage_resources()
+        if not stage_assertion["ok"]:
+            print(f"Error: {stage_assertion['reason']}", file=sys.stderr)
+            return self._make_result(success=False, reason=stage_assertion["reason"])
+
         agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir), profile=self.profile)
         frontmost_log_path = self.output_dir / f"frontmost_{run_id}.log"
         if frontmost_log_path.exists():
@@ -2779,6 +3061,16 @@ class EndStateDiscovery:
             opening_state_history=opening_state_history,
             new_query=new_query,
         )
+
+        # C10: snapshot the editor state after stage prep so beat-scoped retries
+        # never re-compose beats that already passed.
+        last_good_editor = opening_state_history or ""
+        try:
+            current_editor = agent._read_editor_content(focus=False) or ""
+            if current_editor.strip():
+                last_good_editor = current_editor
+        except Exception:
+            pass
 
         # Continuity-by-design: if the first typing demo is a monolithic type_block,
         # rewrite it to append the new query to the pasted history instead of
@@ -2812,6 +3104,7 @@ class EndStateDiscovery:
         previous_observed_state: Optional[Dict[str, Any]] = None
         executed_demo_count = 0
 
+        # Ceiling: one pass per beat (bounded by len(beats)).
         for idx, beat in enumerate(beats):
             action = beat.action
             if not action:
@@ -2876,10 +3169,25 @@ class EndStateDiscovery:
             clip_path = self.output_dir / f"{run_id}_{beat.beat_id}.mp4"
             beat_failed = False
 
-            for retry in range(2):
+            # Ceiling: MAX_BEAT_RETRIES (default WSDA_MAX_ATTEMPTS=3) per-beat retries.
+            for retry in range(MAX_BEAT_RETRIES):
                 beat_ok = False
                 if retry > 0 and not skipped:
-                    self._reset_editor_for_retry(agent, self.opening_state_history)
+                    # C10 beat-scoped retry: restore the last known-good editor
+                    # state without re-composing prior passed beats.
+                    if last_good_editor:
+                        print(
+                            f"  [BEAT RETRY] restoring last good editor state "
+                            f"({len(last_good_editor)} chars) for {beat.beat_id}",
+                            file=sys.stderr,
+                        )
+                        was_recording = agent.recording
+                        agent.recording = False
+                        agent._clear_editor_accessibility()
+                        agent._set_editor_text_accessibility(last_good_editor)
+                        agent.recording = was_recording
+                    else:
+                        self._reset_editor_for_retry(agent, self.opening_state_history)
 
                 recorder: Any = ScreenRecorder(str(clip_path), fps=10)
                 if self.profile and self.profile.app_name:
@@ -2914,7 +3222,18 @@ class EndStateDiscovery:
                             if action.get("type") == "type_segments"
                             else None
                         )
-                        for attempt in range(3):
+                        # C9: typing actions must not accumulate across internal
+                        # attempts because each attempt appends to the live buffer.
+                        # Rely on the outer retry loop, which resets the editor and
+                        # starts a fresh clip, instead of re-typing inside the same
+                        # recording.
+                        is_typing_action = action.get("type") in (
+                            "type_segments", "type_block", "append_block"
+                        )
+                        # Ceiling: 1 internal attempt for typing (handled by outer beat
+                        # retry) or 3 attempts for other action types.
+                        max_attempts = 1 if is_typing_action else 3
+                        for attempt in range(max_attempts):
                             if agent.execute_beat(action, fallback_text=beat_fallback):
                                 beat_ok = True
                                 break
@@ -2974,6 +3293,19 @@ class EndStateDiscovery:
                         if beat_ok and beat.kind == "demo":
                             executed_demo_count += 1
 
+                            # Persist the verified cumulative editor content so the
+                            # final byte-for-byte canonical match sees the full block,
+                            # not just the last segment.
+                            if action.get("type") in ("type_segments", "type_block", "append_block"):
+                                composed = agent._last_composed_text or ""
+                                if not composed and action.get("type") in ("type_block", "append_block"):
+                                    composed = action.get("text") or action.get("detail") or ""
+                                if composed:
+                                    if beat.observed_state is None:
+                                        beat.observed_state = {}
+                                    beat.observed_state["editor_content"] = composed
+                                    last_good_editor = composed
+
                             # Stage prep after a successful action.
                             if action.get("type") == "run_query":
                                 agent.scroll_result_pane_top()
@@ -2996,6 +3328,7 @@ class EndStateDiscovery:
                                     if beat.observed_state is None:
                                         beat.observed_state = {}
                                     beat.observed_state["editor_content"] = intended
+                                    last_good_editor = intended
 
                             # Keep recorder running while the UI settles so the clip
                             # captures the settled end state rather than cutting off
@@ -3012,6 +3345,7 @@ class EndStateDiscovery:
                             # should not trigger an execution.
                             sql_for_grounding = _extract_sql_query(beat)
                             if sql_for_grounding:
+                                grounding_ok = False
                                 try:
                                     agent.run_query()
                                     pane_summary = agent.summarize_result_pane()
@@ -3019,12 +3353,20 @@ class EndStateDiscovery:
                                         beat.observed_state = {}
                                     beat.observed_state["query_result"] = pane_summary
                                     db_path_str = str(self.db_path) if self.db_path else None
-                                    _ground_query_result(beat, db_path_str)
+                                    grounding_ok = _ground_query_result(
+                                        beat, db_path_str, video_id=self.video_id
+                                    )
                                 except Exception as exc:
                                     print(
-                                        f"Warning: SQL grounding failed for {beat.beat_id}: {exc}",
+                                        f"[GROUNDING FAIL] SQL grounding failed for {beat.beat_id}: {exc}",
                                         file=sys.stderr,
                                     )
+                                if not grounding_ok:
+                                    failed_reason = (
+                                        f"[GROUNDING] {beat.beat_id} failed SQL result grounding"
+                                    )
+                                    beat_failed = True
+                                    break
                     else:
                         beat_ok = True
                 finally:
@@ -3128,6 +3470,13 @@ class EndStateDiscovery:
             agent.dismiss_transient_ui()
         except Exception as exc:
             print(f"Warning: end-state tidy check failed: {exc}", file=sys.stderr)
+
+        # C10: authoritative editor read-back for canonical comparison.
+        final_editor_content = ""
+        try:
+            final_editor_content = agent._read_editor_content(focus=False) or ""
+        except Exception as exc:
+            print(f"Warning: could not read final editor content: {exc}", file=sys.stderr)
 
         # Capture and lock the final end state.
         try:
@@ -3239,7 +3588,12 @@ class EndStateDiscovery:
         )
 
         print(f"End state discovered via vision agent in {len(beats)} beats: {self.objective}")
-        return self._make_result(success=True, locked_state=screen_state, recipe=True)
+        return self._make_result(
+            success=True,
+            locked_state=screen_state,
+            recipe=True,
+            final_editor_content=final_editor_content,
+        )
 
     def _intended_state_description(self, action: Dict[str, Any]) -> str:
         """Convert a demo action into a precise intended end-state description."""
@@ -3376,6 +3730,8 @@ class EndStateDiscovery:
         start = time.time()
         prev_gray: Optional[np.ndarray] = None
         stable_frames = 0
+        # Ceiling: timeout_seconds (default 4s) / interval_seconds (default 0.4s)
+        # ~= 10 iterations.
         while time.time() - start < timeout_seconds:
             if frontmost_log_path is not None:
                 _log_frontmost(frontmost_log_path)
@@ -3397,12 +3753,14 @@ class EndStateDiscovery:
             time.sleep(interval_seconds)
 
     def _trim_clip_to_motion(self, clip_path: Path) -> None:
-        """Trim dead air from a recorded beat clip, keeping the motion window.
+        """Trim static head/tail from a recorded beat clip, keeping the action window.
 
-        Samples the clip at 2 fps in grayscale, computes mean absolute frame
-        differences, and re-encodes the segment from the first to last motion
-        frame with padding. If no motion is detected, a short middle slice is
-        kept so the clip is never empty or 0 s. The original file is replaced.
+        C9: conservative reference-based trim. Each frame is compared to the
+        clip's first frame (to find when content leaves the static opening) and
+        to the clip's last frame (to find when content last differed from the
+        static closing). The full content-change window is preserved plus a
+        small pad. This removes pre-focus and post-stability dead air without
+        truncating the progressive line-paste composition the narration tracks.
         """
         clip_path = Path(clip_path)
         if not clip_path.exists():
@@ -3417,48 +3775,75 @@ class EndStateDiscovery:
         fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         original_duration = total_frames / fps if fps > 0 else 0.0
-        if original_duration <= 0 or total_frames <= 0:
+        if original_duration <= MIN_CLIP_DURATION_SECONDS or total_frames <= 0:
             cap.release()
-            logger.warning("Trim skipped: empty clip: %s", clip_path)
+            logger.info("Trim skipped: clip too short: %s", clip_path.name)
             return
 
         sample_interval = max(1, int(round(fps / 2.0)))  # ~2 fps sampling
-        prev_gray: Optional[np.ndarray] = None
-        motion_frames: List[int] = []
-
+        samples: List[Tuple[int, np.ndarray]] = []
         frame_idx = 0
-        while True:
+        # Ceiling: MAX_TRIM_FRAMES; abort loudly if decode runs away.
+        while frame_idx < MAX_TRIM_FRAMES:
             ok, frame = cap.read()
             if not ok:
                 break
-            if frame_idx % sample_interval != 0:
-                frame_idx += 1
-                continue
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.resize(gray, (320, 180), interpolation=cv2.INTER_AREA)
-            if prev_gray is not None:
-                diff = float(np.mean(np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32))))
-                if diff >= MOTION_DIFF_THRESHOLD:
-                    motion_frames.append(frame_idx)
-            prev_gray = gray
+            if frame_idx % sample_interval == 0:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.resize(gray, (320, 180), interpolation=cv2.INTER_AREA)
+                samples.append((frame_idx, gray))
             frame_idx += 1
-
+        else:
+            print(
+                f"[CIRCUIT BREAKER] _trim_clip_to_motion hit frame ceiling "
+                f"({MAX_TRIM_FRAMES}); stopping trim.",
+                file=sys.stderr,
+            )
         cap.release()
 
-        if motion_frames:
-            first_frame = motion_frames[0]
-            last_frame = motion_frames[-1]
-            start_sec = max(0.0, (first_frame / fps) - MOTION_PAD_SECONDS)
-            end_sec = min(original_duration, (last_frame / fps) + MOTION_PAD_SECONDS)
-        else:
-            # No motion: keep a slice from the middle of the clip.
-            mid = original_duration / 2.0
-            start_sec = max(0.0, mid - (NO_MOTION_KEEP_SECONDS / 2.0))
-            end_sec = min(original_duration, mid + (NO_MOTION_KEEP_SECONDS / 2.0))
+        if len(samples) < 2:
+            logger.info("Trim skipped: not enough samples: %s", clip_path.name)
+            return
 
+        def _mean_diff(a: np.ndarray, b: np.ndarray) -> float:
+            return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))
+
+        head_ref = samples[0][1]
+        tail_ref = samples[-1][1]
+
+        # Find the first frame that departs from the static opening and the
+        # last frame that departs from the static closing. The window between
+        # them (plus pad) is the action we want to keep.
+        first_change_idx: Optional[int] = None
+        last_change_idx: Optional[int] = None
+        for idx, (_frame_idx, gray) in enumerate(samples):
+            if first_change_idx is None and _mean_diff(gray, head_ref) >= MOTION_DIFF_THRESHOLD:
+                first_change_idx = idx
+            if _mean_diff(gray, tail_ref) >= MOTION_DIFF_THRESHOLD:
+                last_change_idx = idx
+
+        if first_change_idx is None or last_change_idx is None:
+            # No detectable content change: keep a short middle slice.
+            keep_samples = max(
+                1, int(round(NO_MOTION_KEEP_SECONDS * fps / sample_interval))
+            )
+            half = keep_samples // 2
+            mid_sample = len(samples) // 2
+            first_change_idx = max(0, mid_sample - half)
+            last_change_idx = min(len(samples) - 1, mid_sample + half)
+
+        pad_samples = max(1, int(round(MOTION_PAD_SECONDS * fps / sample_interval)))
+        first_sample = max(0, first_change_idx - pad_samples)
+        last_sample = min(len(samples) - 1, last_change_idx + pad_samples)
+
+        start_frame = samples[first_sample][0]
+        end_frame = samples[last_sample][0]
+        start_sec = start_frame / fps
+        # Add one sample interval to the end to include the sampled frame itself.
+        end_sec = min(original_duration, (end_frame / fps) + (sample_interval / fps))
         duration = end_sec - start_sec
+
         if duration < MIN_CLIP_DURATION_SECONDS:
-            # Extend the window toward the end, capped by original duration.
             end_sec = min(original_duration, start_sec + MIN_CLIP_DURATION_SECONDS)
             duration = end_sec - start_sec
             if duration < MIN_CLIP_DURATION_SECONDS and start_sec > 0:
@@ -3473,11 +3858,25 @@ class EndStateDiscovery:
         try:
             subprocess.run(
                 [
-                    "ffmpeg", "-y", "-ss", str(start_sec), "-i", str(clip_path),
-                    "-t", str(duration), "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart", str(temp_path),
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    str(start_sec),
+                    "-i",
+                    str(clip_path),
+                    "-t",
+                    str(duration),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(temp_path),
                 ],
-                check=True, capture_output=True, timeout=120,
+                check=True,
+                capture_output=True,
+                timeout=120,
             )
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
@@ -3495,7 +3894,11 @@ class EndStateDiscovery:
         shutil.move(str(temp_path), str(clip_path))
         logger.info(
             "Trimmed %s: original=%.2fs -> trimmed=%.2fs (start=%.2f, duration=%.2f)",
-            clip_path.name, original_duration, duration, start_sec, duration,
+            clip_path.name,
+            original_duration,
+            duration,
+            start_sec,
+            duration,
         )
 
     def _launch_app(self, db_path: Path) -> None:
@@ -3576,10 +3979,11 @@ class EndStateDiscovery:
             }
         ]
 
+        # Ceiling: 4 vision-turn auto-fit attempts.
         for _ in range(4):
             try:
-                response = self.client.messages.create(
-                    model=MODEL, max_tokens=512, messages=messages
+                response = tracked_create(
+                    self.client, model=MODEL, max_tokens=512, messages=messages
                 )
             except Exception as exc:
                 print(
@@ -3652,10 +4056,11 @@ class EndStateDiscovery:
         ]
 
         acted = False
+        # Ceiling: 3 vision-turn truncation auto-fit attempts.
         for _ in range(3):
             try:
-                response = self.client.messages.create(
-                    model=MODEL, max_tokens=512, messages=messages
+                response = tracked_create(
+                    self.client, model=MODEL, max_tokens=512, messages=messages
                 )
             except Exception as exc:
                 print(f"Warning: truncation-check API call failed: {exc}", file=sys.stderr)
@@ -3721,9 +4126,12 @@ class EndStateDiscovery:
                 ],
             }
         ]
+        # Ceiling: max_retries + 1 (default 3) results-grid verification calls.
         for attempt in range(max_retries + 1):
             try:
-                response = self.client.messages.create(model=MODEL, max_tokens=32, messages=messages)
+                response = tracked_create(
+                    self.client, model=MODEL, max_tokens=32, messages=messages
+                )
             except Exception as exc:
                 print(f"Warning: results-grid verification API call failed: {exc}", file=sys.stderr)
                 return False
@@ -3775,12 +4183,60 @@ class EndStateDiscovery:
         with open(self.telemetry_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(log) + "\n")
 
+    def _assert_stage_resources(self) -> Dict[str, Any]:
+        """
+        Stage-prep resource assertion.
+
+        Before any beat executes, confirm:
+          - DB Browser for SQLite is the frontmost process.
+          - The declared database file is open (file exists and app is running).
+          - SELECT COUNT(*) FROM Customer returns exactly 60.
+
+        Returns {"ok": True} on success or {"ok": False, "reason": str} on failure.
+        """
+        app_name = self.profile.app_name
+        frontmost = _frontmost_app_name()
+        if frontmost != app_name:
+            return {
+                "ok": False,
+                "reason": f"[STAGE PREP] frontmost app is {frontmost!r}, expected {app_name!r}",
+            }
+
+        db_path = self.db_path
+        if not db_path or not db_path.exists():
+            return {
+                "ok": False,
+                "reason": f"[STAGE PREP] database not found: {db_path}",
+            }
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM Customer")
+            count = cursor.fetchone()[0]
+            conn.close()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": f"[STAGE PREP] probe query failed: {exc}",
+            }
+
+        if count != 60:
+            return {
+                "ok": False,
+                "reason": f"[STAGE PREP] Customer row count is {count}, expected 60",
+            }
+
+        print("[STAGE PREP] DB open and Customer count = 60", file=sys.stderr)
+        return {"ok": True}
+
     def _make_result(
         self,
         success: bool,
         reason: str = "",
         locked_state: Optional[ScreenState] = None,
         recipe: bool = False,
+        final_editor_content: Optional[str] = None,
     ) -> DiscoveryResult:
         attempts = len(self.attempt_logs)
         if recipe:
@@ -3807,4 +4263,5 @@ class EndStateDiscovery:
             mean_cost_usd=round(mean, 6),
             std_cost_usd=round(std, 6),
             attempt_logs=self.attempt_logs,
+            final_editor_content=final_editor_content,
         )

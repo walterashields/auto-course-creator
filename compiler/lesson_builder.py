@@ -40,6 +40,7 @@ from .narrator import (
 )
 from .schemas import ActionEdge, DiscoveryResult, ExecutionGraph, NarrationBeat, ScreenState
 from .sql_formatter import format_sql_query
+from .cost_tracker import get_tracker, tracked_create
 
 MODEL = os.environ.get("NARRATOR_MODEL", "claude-sonnet-5")
 
@@ -268,7 +269,7 @@ class LessonBuilder:
             "close": "We are ready to apply this pattern in the next video.",
         }
         completion = completions.get(kind, "This completes the thought.")
-        # Loop with a safety cap to avoid infinite growth.
+        # Ceiling: 20 completion-append iterations.
         for _ in range(20):
             if len(candidate.split()) >= min_words:
                 break
@@ -349,7 +350,8 @@ class LessonBuilder:
             "Rewritten beat:"
         ).format(min_words=min_words, original=beat.text.strip(), current=current)
         try:
-            response = self.client.messages.create(
+            response = tracked_create(
+                self.client,
                 model=MODEL,
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],
@@ -445,6 +447,228 @@ class LessonBuilder:
                 return cur.fetchone() is not None
         except Exception:
             return False
+
+    @staticmethod
+    def _load_canonical_reference() -> Dict[str, Any]:
+        """Load the canonical SQL reference for chapter-4 videos."""
+        path = Path(__file__).resolve().parent / "courses" / "ch4_canonical_reference.md"
+        if not path.exists():
+            return {}
+        text = path.read_text(encoding="utf-8")
+        # Parse video blocks and grounding table.
+        reference: Dict[str, Any] = {"videos": {}}
+        video_pattern = re.compile(
+            r"## Video\s+(\d+)\s+—\s+(.+?)\nObjective:\s*(.+?)\n+```sql\n(.*?)```",
+            re.DOTALL,
+        )
+        for match in video_pattern.finditer(text):
+            video_num = match.group(1)
+            objective = match.group(3).strip()
+            sql = match.group(4).strip()
+            reference["videos"][video_num] = {
+                "title": match.group(2).strip(),
+                "objective": objective,
+                "sql": sql,
+            }
+        return reference
+
+    @staticmethod
+    def _assert_canonical_format(text: str) -> List[str]:
+        """
+        Check ``text`` against the C9 Editor Format Contract.
+
+        Returns a list of violation strings. An empty list means the text follows
+        the contract.
+
+        Contract:
+          - Content begins at line 1 (no leading blank lines).
+          - Optional history appears first; every history line starts with '--'.
+          - Exactly one blank line separates history from the current block.
+          - Current block starts with a /* ... */ comment header.
+          - Comment header is immediately followed by the query (no blank line).
+          - SELECT list fields are indented exactly 2 spaces.
+          - No tabs, no trailing whitespace, no literal escape sequences.
+          - One uncommented statement per block, terminated with ';'.
+        """
+        violations: List[str] = []
+        if not text:
+            return violations
+
+        lines = text.split("\n")
+
+        # 1. Zero leading blank lines.
+        if lines and lines[0].strip() == "":
+            violations.append("leading blank line(s) before content")
+
+        # 2. No tabs anywhere.
+        if "\t" in text:
+            violations.append("tab character found")
+
+        # 3. No trailing whitespace.
+        for i, line in enumerate(lines, start=1):
+            if line != line.rstrip():
+                violations.append(f"trailing whitespace on line {i}")
+
+        # 4. No literal escape sequences as visible text.
+        if re.search(r"(?<!\\)\\[tnr]", text):
+            violations.append("literal escape sequence (\\t, \\n, \\r) visible in text")
+
+        # Split into history and current block.
+        history_end = -1
+        comment_start = -1
+        comment_end = -1
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("--"):
+                history_end = i
+            elif stripped.startswith("/*"):
+                comment_start = i
+                break
+            elif stripped:
+                # Non-history, non-comment content before /* is invalid.
+                violations.append(f"line {i + 1} is not part of history or comment block: {line!r}")
+                break
+
+        history_lines = lines[: history_end + 1] if history_end >= 0 else []
+        rest_lines = lines[history_end + 1 :] if history_end >= 0 else lines
+
+        # 5. History format: every line starts with '--' and one blank line before current block.
+        if history_lines:
+            for i, line in enumerate(history_lines, start=1):
+                stripped = line.strip()
+                if stripped and not stripped.startswith("--"):
+                    violations.append(f"history line {i} is not commented with '--': {line!r}")
+            # After history, there must be exactly one blank line before the current block.
+            blank_count = 0
+            for line in rest_lines:
+                if line.strip() == "":
+                    blank_count += 1
+                else:
+                    break
+            if blank_count != 1:
+                violations.append(
+                    f"expected exactly one blank line between history and current block, found {blank_count}"
+                )
+            current_block_lines = rest_lines[blank_count:]
+        else:
+            current_block_lines = rest_lines
+
+        # 6. Current block: /* ... */ comment immediately followed by query.
+        if current_block_lines:
+            if not current_block_lines[0].strip().startswith("/*"):
+                violations.append("current block must start with a /* ... */ comment header")
+            else:
+                # Find the matching */.
+                for i, line in enumerate(current_block_lines):
+                    if line.strip().startswith("*/"):
+                        comment_end = i
+                        break
+                if comment_end < 0:
+                    violations.append("current block comment header is not closed with */")
+                elif comment_end + 1 < len(current_block_lines):
+                    next_line = current_block_lines[comment_end + 1]
+                    if next_line.strip() == "":
+                        violations.append("blank line between comment block and query")
+
+        # 7. Field indentation exactly 2 spaces inside SELECT clauses of the current block.
+        in_select = False
+        for i, line in enumerate(current_block_lines, start=1):
+            stripped = line.strip()
+            if re.search(r"^\bSELECT\b", stripped, re.IGNORECASE):
+                in_select = True
+                continue
+            if in_select and re.search(r"^\bFROM\b", stripped, re.IGNORECASE):
+                in_select = False
+                continue
+            if in_select and stripped and not stripped.startswith("--"):
+                leading = line[: len(line) - len(line.lstrip())]
+                if leading != "  ":
+                    violations.append(f"field on line {i} not indented exactly 2 spaces: {line!r}")
+
+        # 8. One uncommented statement per block, terminated with ';'.
+        uncommented = [
+            (i, line)
+            for i, line in enumerate(current_block_lines, start=1)
+            if line.strip()
+            and not line.strip().startswith("--")
+            and not line.strip().startswith("/*")
+            and not line.strip().startswith("*/")
+        ]
+        if uncommented:
+            last_idx, last_line = uncommented[-1]
+            if not last_line.rstrip().endswith(";"):
+                violations.append(f"last query line (line {last_idx}) is not terminated with ';'")
+            statements = [line for _, line in uncommented if line.rstrip().endswith(";")]
+            if len(statements) > 1:
+                violations.append("more than one statement in the current block")
+
+        return violations
+
+    def _assert_canonical_grounding(
+        self,
+        video_id: str,
+        query: str,
+        db_path: Optional[str],
+    ) -> List[str]:
+        """
+        Assert that running ``query`` against ``db_path`` matches the canonical
+        reference expectations for ``video_id``.
+
+        Returns a list of failure messages; empty list means grounding passed.
+        """
+        errors: List[str] = []
+        reference = self._load_canonical_reference()
+        video_ref = reference.get("videos", {}).get(video_id.lstrip("video_").split("_")[0])
+        if not video_ref:
+            return errors
+
+        if not db_path or not Path(db_path).exists():
+            errors.append(f"cannot ground {video_id}: database not found")
+            return errors
+
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(query)
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description] if cur.description else []
+                actual_row_count = len(rows)
+                actual_first_row = list(rows[0]) if rows else []
+        except Exception as exc:
+            errors.append(f"grounding query failed for {video_id}: {exc}")
+            return errors
+
+        # Parse expected values from the reference markdown.
+        ref_text = video_ref.get("objective", "") + "\n" + video_ref.get("sql", "")
+        row_match = re.search(r"Expected result:\s*\*\*(\d+)\s+rows?\*\*", ref_text, re.IGNORECASE)
+        expected_rows = int(row_match.group(1)) if row_match else None
+        first_row_match = re.search(r"first row\s+\*\*(.+?)\*\*", ref_text, re.IGNORECASE)
+        expected_first_row = first_row_match.group(1).strip() if first_row_match else None
+        headers_match = re.search(r"columns?\s+(.+?)\.", ref_text, re.IGNORECASE)
+        expected_headers = None
+        if headers_match:
+            header_text = headers_match.group(1)
+            expected_headers = [h.strip() for h in re.split(r"[,|]", header_text) if h.strip()]
+
+        if expected_rows is not None and actual_row_count != expected_rows:
+            errors.append(
+                f"{video_id} row count mismatch: expected {expected_rows}, got {actual_row_count}"
+            )
+
+        if expected_first_row and actual_first_row:
+            first_row_str = " ".join(str(c) for c in actual_first_row[:3])
+            if expected_first_row.lower() not in first_row_str.lower():
+                errors.append(
+                    f"{video_id} first row mismatch: expected {expected_first_row!r}, got {actual_first_row!r}"
+                )
+
+        if expected_headers and columns:
+            if [c.strip() for c in columns] != [c.strip() for c in expected_headers]:
+                errors.append(
+                    f"{video_id} header mismatch: expected {expected_headers!r}, got {columns!r}"
+                )
+
+        return errors
 
     @staticmethod
     def _column_exists(db_path: Optional[str], table: str, column: str) -> bool:
@@ -899,6 +1123,7 @@ class LessonBuilder:
                 ", which confirms the operation succeeded",
                 ", verifying the outcome matches our goal",
             ]
+            # Ceiling: pads grow by ~3 words each iteration; wc starts >=0, so <=4 iterations.
             while wc < 10:
                 text = text + pads[(wc // 3) % len(pads)]
                 wc = len(text.split())
@@ -1356,13 +1581,14 @@ class LessonBuilder:
                 ", which confirms the operation succeeded",
                 ", verifying the outcome matches our goal",
             ]
+            # Ceiling: pads grow by ~3 words each iteration; wc starts >=0, so <=5 iterations.
             while wc < 15:
                 text = text + pads[(wc // 3) % len(pads)]
                 wc = len(text.split())
             return text + "."
 
         def _full_block(comment: str, query: str) -> str:
-            return f"{comment}\n\n{query}"
+            return f"{comment}\n{query}"
 
         def _segment_action(text: str) -> Dict[str, Any]:
             return {
@@ -1384,7 +1610,7 @@ class LessonBuilder:
 
         if video_id == "video_1_1":
             comment = self._make_comment_block("Customer contact list for management")
-            select_clause = "\n\nSELECT\n    FirstName,\n    LastName,\n    Email"
+            select_clause = "\nSELECT\n  FirstName,\n  LastName,\n  Email"
             from_clause = "\nFROM Customer;"
             beats = [
                 ScriptBeat(
@@ -1507,10 +1733,10 @@ class LessonBuilder:
         elif video_id == "video_1_2":
             comment = self._make_comment_block("Readable customer contact headers")
             select_clause = (
-                "\n\nSELECT\n"
-                "    FirstName AS \"First Name\",\n"
-                "    LastName AS \"Last Name\",\n"
-                "    Email AS \"Email Address\""
+                "\nSELECT\n"
+                "  FirstName AS \"First Name\",\n"
+                "  LastName AS \"Last Name\",\n"
+                "  Email AS \"Email Address\""
             )
             from_clause = "\nFROM Customer;"
             beats = [
@@ -1632,10 +1858,10 @@ class LessonBuilder:
         elif video_id == "video_1_3":
             comment = self._make_comment_block("Customer contact list sorted by last name")
             select_clause = (
-                "\n\nSELECT\n"
-                "    FirstName AS \"First Name\",\n"
-                "    LastName AS \"Last Name\",\n"
-                "    Email AS \"Email Address\""
+                "\nSELECT\n"
+                "  FirstName AS \"First Name\",\n"
+                "  LastName AS \"Last Name\",\n"
+                "  Email AS \"Email Address\""
             )
             from_clause = "\nFROM Customer"
             order_clause = "\nORDER BY LastName;"
@@ -1765,10 +1991,10 @@ class LessonBuilder:
         elif video_id == "video_1_4":
             comment = self._make_comment_block("Preview of customer contacts")
             select_clause = (
-                "\n\nSELECT\n"
-                "    FirstName AS \"First Name\",\n"
-                "    LastName AS \"Last Name\",\n"
-                "    Email AS \"Email Address\""
+                "\nSELECT\n"
+                "  FirstName AS \"First Name\",\n"
+                "  LastName AS \"Last Name\",\n"
+                "  Email AS \"Email Address\""
             )
             from_clause = "\nFROM Customer"
             order_clause = "\nORDER BY LastName"
@@ -1902,10 +2128,10 @@ class LessonBuilder:
         elif video_id == "video_1_5":
             comment = self._make_comment_block("Clean, documented customer contact preview")
             select_clause = (
-                "\n\nSELECT\n"
-                "    FirstName AS \"First Name\",\n"
-                "    LastName AS \"Last Name\",\n"
-                "    Email AS \"Email Address\""
+                "\nSELECT\n"
+                "  FirstName AS \"First Name\",\n"
+                "  LastName AS \"Last Name\",\n"
+                "  Email AS \"Email Address\""
             )
             from_clause = "\nFROM Customer"
             order_clause = "\nORDER BY LastName"
@@ -2044,9 +2270,9 @@ class LessonBuilder:
             # Unknown SQL demo: fall back to a minimal deterministic script.
             query = (
                 "SELECT\n"
-                "    FirstName,\n"
-                "    LastName,\n"
-                "    Email\n"
+                "  FirstName,\n"
+                "  LastName,\n"
+                "  Email\n"
                 "FROM Customer;"
             )
             full_block = _full_block(
@@ -2404,9 +2630,11 @@ class LessonBuilder:
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
                 return []
+            # Ceiling: max_attempts (default 1) LLM script-generation attempts.
             for attempt in range(max_attempts):
                 prompt = self._build_script_prompt(video, fix_errors=fix_errors, env_map=env_map)
-                response = self.client.messages.create(
+                response = tracked_create(
+                    self.client,
                     model=MODEL,
                     max_tokens=2048,
                     messages=[{"role": "user", "content": prompt}],
@@ -2779,6 +3007,56 @@ Return ONLY a JSON array of beats like:
                 if not any(w in lowered for w in action_words):
                     warnings.append(f"{beat.beat_id} (demo) does not describe an action.")
 
+        # C9 canonical format contract: any typed SQL block must follow the tight
+        # editor standard. Segmented beats compose one cumulative block across
+        # consecutive type_segments demo beats, so validate the concatenation,
+        # not each segment in isolation.
+        segment_buffer: List[str] = []
+
+        def _flush_segment_buffer() -> None:
+            if not segment_buffer:
+                return
+            cumulative = "".join(segment_buffer)
+            if cumulative:
+                violations = self._assert_canonical_format(cumulative)
+                for violation in violations:
+                    errors.append(
+                        f"{buffer_beat_id} violates canonical format: {violation}"
+                    )
+            segment_buffer.clear()
+
+        buffer_beat_id = ""
+        for beat in beats:
+            if beat.kind == "demo" and beat.action:
+                action_type = beat.action.get("type")
+                if action_type == "type_segments":
+                    segments = beat.action.get("segments") or []
+                    segment_text = "".join(
+                        (s.get("text", "") if isinstance(s, dict) else str(s))
+                        for s in segments
+                    )
+                    if segment_text:
+                        if not segment_buffer:
+                            buffer_beat_id = beat.beat_id
+                        segment_buffer.append(segment_text)
+                    continue
+
+            # Any non-accumulating beat flushes the pending segmented block.
+            _flush_segment_buffer()
+
+            if beat.kind == "demo" and beat.action:
+                action_type = beat.action.get("type")
+                if action_type in ("type_block", "append_block"):
+                    sql_text = beat.action.get("text") or beat.action.get("detail") or ""
+                    if sql_text:
+                        violations = self._assert_canonical_format(sql_text)
+                        for violation in violations:
+                            errors.append(
+                                f"{beat.beat_id} violates canonical format: {violation}"
+                            )
+
+        _flush_segment_buffer()
+
         return not errors, errors, warnings
     # ------------------------------------------------------------------
     # Action derivation
@@ -3123,7 +3401,8 @@ Return ONLY a JSON array of beats like:
             f"- Summary: {observed.get('summary')}\n"
         )
         try:
-            response = self.client.messages.create(
+            response = tracked_create(
+                self.client,
                 model=MODEL,
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],

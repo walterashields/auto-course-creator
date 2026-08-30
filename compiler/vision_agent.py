@@ -31,6 +31,7 @@ from PIL import Image
 
 from .schemas import EnvironmentProfile
 from .frame_analysis import detect_error_signature
+from .cost_tracker import CostTracker, get_tracker, tracked_create
 
 TARGET_LONG_EDGE = 1568
 DEFAULT_MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
@@ -68,6 +69,7 @@ def _default_profile() -> EnvironmentProfile:
             "min_area_ratio": 0.02,
             "text_hint": "red error band in the status region containing the text 'syntax error'",
         },
+        whitespace_policy="exact",
     )
 
 
@@ -112,6 +114,8 @@ class VisionAgent:
         self.last_api_image: Optional[Image.Image] = None
         self.recording = False
         self._last_executed_statement: str = ""
+        self._last_composed_text: Optional[str] = None
+        self._last_assessment_text: str = ""
 
     # ------------------------------------------------------------------
     # Core screenshot / scaling helpers
@@ -119,7 +123,7 @@ class VisionAgent:
 
     def screenshot(self) -> str:
         """Capture the screen, resize for the API, and return base64 PNG."""
-        raw_img = pyautogui.screenshot()
+        raw_img = self._capture_screen()
         self.last_raw_image = raw_img
         raw_w, raw_h = raw_img.size
 
@@ -138,6 +142,42 @@ class VisionAgent:
         buf = io.BytesIO()
         api_img.save(buf, format="PNG")
         return base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+
+    @staticmethod
+    def _capture_screen() -> Image.Image:
+        """
+        Capture the full screen using the macOS ``screencapture`` CLI.
+
+        Using the native ``screencapture -x`` utility avoids the macOS private
+        window-picker permission dialog that ``pyautogui.screenshot()`` can
+        trigger on macOS 14+. Falls back to pyautogui only when screencapture is
+        unavailable.
+        """
+        import shutil
+        import tempfile
+
+        if shutil.which("screencapture"):
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                subprocess.run(
+                    ["screencapture", "-x", tmp_path],
+                    check=True,
+                    capture_output=True,
+                    timeout=10,
+                )
+                return Image.open(tmp_path).convert("RGB")
+            except Exception as exc:
+                print(
+                    f"Warning: screencapture failed ({exc}); falling back to pyautogui",
+                    file=sys.stderr,
+                )
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+        return pyautogui.screenshot()
 
     def save_screenshot(self, name: str) -> Optional[str]:
         """Save the last raw screenshot to disk if an output directory is set."""
@@ -192,6 +232,7 @@ class VisionAgent:
         the beat. Recovery never clicks elsewhere on screen.
         """
         target = self.profile.focus_target
+        # Ceiling: max_attempts (default 3) focus-recovery attempts.
         for attempt in range(1, max_attempts + 1):
             frontmost = self._frontmost_app_name()
             if frontmost == target:
@@ -247,7 +288,8 @@ class VisionAgent:
         ]
 
         started = time.time()
-        response = self.client.messages.create(
+        response = tracked_create(
+            self.client,
             model=self.model,
             max_tokens=max_tokens,
             messages=messages,
@@ -297,6 +339,169 @@ class VisionAgent:
             except json.JSONDecodeError:
                 continue
         return None
+
+    # ------------------------------------------------------------------
+    # Objective-anchored visual assessment
+    # ------------------------------------------------------------------
+
+    def assess_screen_state(
+        self,
+        objective: str,
+        intended_state: str,
+    ) -> Dict[str, Any]:
+        """
+        Ask the VLM to assess the screen against the current beat objective.
+
+        Returns a dict with:
+          - objective, intended_state
+          - description: what the VLM sees
+          - serves_objective: bool
+          - anomaly: free-text description if NO
+          - anomaly_class: input corruption | wrong app state | foreign UI | environment | none
+          - corrective_action: optional action dict to execute
+        """
+        prompt = (
+            f"The current objective is: {objective}\n"
+            f"The intended screen state is: {intended_state}\n\n"
+            "Look at the screenshot and answer these three questions:\n"
+            "a) Describe precisely what is on screen.\n"
+            "b) Does what you see serve the objective? Reply exactly YES or NO with specifics.\n"
+            "c) If NO: what is the anomaly? What class is it "
+            "(input corruption / wrong app state / foreign UI / environment)? "
+            "What single action corrects it?\n\n"
+            "Return ONLY a JSON object with this exact shape:\n"
+            '{\n'
+            '  "description": "precise description of what is on screen",\n'
+            '  "serves_objective": true|false,\n'
+            '  "anomaly": "short anomaly description or empty string",\n'
+            '  "anomaly_class": "input corruption|wrong app state|foreign UI|environment|none",\n'
+            '  "corrective_action": {"action": "click|type|key|wait", ...} or null\n'
+            '}\n\n'
+            "If the objective is already served, set serves_objective to true and "
+            "anomaly_class to \"none\"."
+        )
+        result = self._call_vlm(prompt, expect_json=True, max_tokens=512)
+        action = result.action or {}
+        if not isinstance(action, dict):
+            action = {}
+        serves = bool(action.get("serves_objective", True))
+        return {
+            "objective": objective,
+            "intended_state": intended_state,
+            "description": str(action.get("description", result.text)).strip(),
+            "serves_objective": serves,
+            "anomaly": str(action.get("anomaly", "")).strip(),
+            "anomaly_class": str(action.get("anomaly_class", "none")).strip().lower(),
+            "corrective_action": action.get("corrective_action"),
+        }
+
+    def _log_assessment(self, assessment: Dict[str, Any], action_taken: str = "") -> None:
+        """Persist an assessment to the run log (stderr, which is teed to run.log)."""
+        verdict = "YES" if assessment.get("serves_objective") else "NO"
+        summary = (
+            f"verdict={verdict}; objective={assessment.get('objective', '')[:100]}; "
+            f"description={assessment.get('description', '')[:200]}"
+        )
+        self._last_assessment_text = summary
+        print(
+            f"[ASSESS] objective={assessment.get('objective', '')[:100]}",
+            file=sys.stderr,
+        )
+        print(
+            f"[ASSESS] intended_state={assessment.get('intended_state', '')[:100]}",
+            file=sys.stderr,
+        )
+        print(f"[ASSESS] verdict={verdict}", file=sys.stderr)
+        print(
+            f"[ASSESS] description={assessment.get('description', '')[:200]}",
+            file=sys.stderr,
+        )
+        if assessment.get("anomaly"):
+            print(
+                f"[ASSESS] anomaly={assessment.get('anomaly')} "
+                f"class={assessment.get('anomaly_class')}",
+                file=sys.stderr,
+            )
+        print(f"[ASSESS] action_taken={action_taken}", file=sys.stderr)
+
+    def _cheap_checks_ok(
+        self,
+        intended_text: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Fast deterministic checks before/after an action.
+
+        Returns (ok, reason). Checks frontmost app, optional editor content match,
+        and the profile's pixel error signature.
+        """
+        target = self.profile.focus_target
+        frontmost = self._frontmost_app_name()
+        if frontmost != target:
+            return False, f"frontmost app is {frontmost!r}, expected {target!r}"
+
+        if intended_text is not None:
+            actual = self._read_editor_content(focus=False) or ""
+            if not self._editor_texts_match(intended_text, actual):
+                return False, "editor content does not match intended text"
+
+        if self._result_pane_shows_error():
+            return False, "error signature visible on screen"
+
+        return True, ""
+
+    def _assess_and_maybe_repair(
+        self,
+        objective: str,
+        intended_state: str,
+        intended_text: Optional[str] = None,
+        max_attempts: int = 2,
+    ) -> bool:
+        """
+        Run cheap checks; if any fail, immediately run the VLM assessment.
+
+        If the VLM confirms an anomaly and returns a corrective action, execute
+        it and re-assess. Returns True only when the screen serves the objective.
+        """
+        ok, reason = self._cheap_checks_ok(intended_text)
+        if ok:
+            # Still run the VLM assessment at the boundary for authoritative verification.
+            assessment = self.assess_screen_state(objective, intended_state)
+            if assessment.get("serves_objective"):
+                self._log_assessment(assessment, action_taken="cheap checks passed; VLM confirms")
+                return True
+            # VLM says NO despite cheap checks passing; trust the VLM.
+        else:
+            print(f"[ASSESS] cheap check failed: {reason}", file=sys.stderr)
+            assessment = self.assess_screen_state(objective, intended_state)
+
+        self._log_assessment(assessment, action_taken="initial assessment")
+
+        # Ceiling: max_attempts (default 2) VLM assessment/repair cycles.
+        for attempt in range(max_attempts):
+            corrective = assessment.get("corrective_action")
+            if not corrective or not isinstance(corrective, dict):
+                print("[ASSESS] no corrective action; halting beat", file=sys.stderr)
+                return False
+
+            print(
+                f"[ASSESS] attempt {attempt + 1}/{max_attempts}: executing corrective action",
+                file=sys.stderr,
+            )
+            if not self.execute_beat(corrective):
+                print("[ASSESS] corrective action failed", file=sys.stderr)
+                return False
+
+            # Re-run cheap checks after the corrective action.
+            ok, reason = self._cheap_checks_ok(intended_text)
+            if not ok:
+                print(f"[ASSESS] cheap check still failed after correction: {reason}", file=sys.stderr)
+
+            assessment = self.assess_screen_state(objective, intended_state)
+            self._log_assessment(assessment, action_taken=f"corrective attempt {attempt + 1}")
+            if assessment.get("serves_objective"):
+                return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Public action methods
@@ -373,15 +578,14 @@ class VisionAgent:
         return True
 
     def _dismiss_character_viewer(self) -> None:
-        """Dismiss the macOS Character Viewer / Dictation dialog if it opened."""
-        for _ in range(5):
+        """Dismiss the macOS Character Viewer / Dictation dialog if it opened.
+
+        Only Escape and AppleScript are used; Return is avoided because it would
+        insert a newline into the SQL editor and trigger auto-indent.
+        """
+        for _ in range(3):
             pyautogui.press("esc")
             time.sleep(0.1)
-        # Press Return to dismiss Dictation, then Escape again.
-        pyautogui.press("return")
-        time.sleep(0.1)
-        pyautogui.press("esc")
-        time.sleep(0.1)
         # Try to close any open Character Viewer window via AppleScript.
         try:
             subprocess.run(
@@ -413,22 +617,174 @@ class VisionAgent:
             pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
             pyautogui.click(fx, fy)
             time.sleep(0.3)
+        # Hard guarantee: use accessibility to focus the actual SQL editor text
+        # area so keystrokes land in the right control even if the VLM click
+        # hit a nearby label or splitter.
+        self._ensure_editor_focused_accessibility()
+
+    def _ensure_editor_focused_accessibility(self) -> bool:
+        """
+        Set keyboard focus to the top-most text area in the target window.
+
+        DB Browser exposes the SQL editor as an AXTextArea, but the VLM click
+        can land on a label or splitter and leave focus elsewhere. This helper
+        finds the highest text area (the editor) and sets AXFocused to true.
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        tell window 1
+            set textAreas to every text area
+            if length of textAreas is 0 then return false
+            set topTA to item 1 of textAreas
+            set minY to item 2 of (position of topTA)
+            repeat with ta in textAreas
+                set y to item 2 of (position of ta)
+                if y < minY then
+                    set minY to y
+                    set topTA to ta
+                end if
+            end repeat
+            set value of attribute "AXFocused" of topTA to true
+            return true
+        end tell
+    end tell
+end tell
+"""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                return True
+        except Exception as exc:
+            print(
+                f"  [FOCUS] accessibility focus helper failed: {exc}",
+                file=sys.stderr,
+            )
+        return False
+
+    def _clear_editor_accessibility(self) -> bool:
+        """
+        Clear the editor by setting the top AXTextArea value to empty.
+
+        This avoids ``cmd+a``/``delete`` keystrokes, which are banned during
+        recording. It is used for stage-prep only, not for mid-composition
+        repair.
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        tell window 1
+            set textAreas to every text area
+            if length of textAreas is 0 then return false
+            set topTA to item 1 of textAreas
+            set minY to item 2 of (position of topTA)
+            repeat with ta in textAreas
+                set y to item 2 of (position of ta)
+                if y < minY then
+                    set minY to y
+                    set topTA to ta
+                end if
+            end repeat
+            set value of topTA to ""
+            set value of attribute "AXFocused" of topTA to true
+            return true
+        end tell
+    end tell
+end tell
+"""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                print("  [CLEAR] editor cleared via accessibility", file=sys.stderr)
+                return True
+        except Exception as exc:
+            print(
+                f"  [CLEAR] accessibility clear failed: {exc}",
+                file=sys.stderr,
+            )
+        return False
+
+    def _set_editor_text_accessibility(self, text: str) -> bool:
+        """
+        Set the top AXTextArea value to ``text`` without using the keyboard.
+
+        This is the restoration path for beat-scoped retries: it puts the editor
+        back to the last known-good content without re-composing the passed beats.
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        # Escape double quotes for AppleScript.
+        safe_text = text.replace('"', '\\"')
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        tell window 1
+            set textAreas to every text area
+            if length of textAreas is 0 then return false
+            set topTA to item 1 of textAreas
+            set minY to item 2 of (position of topTA)
+            repeat with ta in textAreas
+                set y to item 2 of (position of ta)
+                if y < minY then
+                    set minY to y
+                    set topTA to ta
+                end if
+            end repeat
+            set value of topTA to "{safe_text}"
+            set value of attribute "AXFocused" of topTA to true
+            return true
+        end tell
+    end tell
+end tell
+"""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                print(
+                    f"  [RESTORE] editor set to {len(text)} chars via accessibility",
+                    file=sys.stderr,
+                )
+                return True
+        except Exception as exc:
+            print(
+                f"  [RESTORE] accessibility set failed: {exc}",
+                file=sys.stderr,
+            )
+        return False
 
     def _clear_editor(self) -> None:
         """
-        Focus the SQL editor, select all, and delete any existing text.
+        Focus the SQL editor and delete any existing text.
 
-        During recording, full clears are banned. Instead, move the cursor to
+        During recording, keystroke-based clears are banned. We use accessibility
+        to set the editor value to empty for stage prep, then move the cursor to
         the end of the document so the next input appends.
         """
         if self.recording:
             print(
-                "  [TYPE BLOCK] recording active; appending instead of clearing",
+                "  [TYPE BLOCK] recording active; clearing via accessibility",
                 file=sys.stderr,
             )
             self._ensure_frontmost()
             self._dismiss_character_viewer()
             self._focus_editor()
+            self._clear_editor_accessibility()
             self.press_key("cmd+end")
             time.sleep(0.1)
             return
@@ -437,6 +793,9 @@ class VisionAgent:
         self._dismiss_character_viewer()
         self._focus_editor()
         self.press_key("cmd+a")
+        self.press_key("delete")
+        # DB Browser sometimes leaves a single trailing blank line after the
+        # first delete; a second delete ensures the editor is truly empty.
         self.press_key("delete")
         time.sleep(0.2)
 
@@ -486,13 +845,99 @@ class VisionAgent:
         except Exception:
             return ""
 
+    @staticmethod
+    def _release_all_modifiers() -> None:
+        """
+        Explicitly release every modifier key pyautogui knows about.
+
+        This kills the modifier-release race that opens the macOS Character
+        Viewer when a Space or other keystroke lands while Cmd/Ctrl are still
+        held from a preceding hotkey.
+        """
+        for key in ("command", "ctrl", "shift", "option", "alt", "control"):
+            try:
+                pyautogui.keyUp(key)
+            except Exception:
+                pass
+        time.sleep(0.15)
+
+    def _safe_hotkey(self, *keys: str, post_delay: float = 0.15) -> None:
+        """
+        Press a hotkey chord, release all modifiers explicitly, then pause.
+
+        ``keys`` are pyautogui key names (e.g. ``"command"``, ``"v"``). The
+        chord is pressed in order and released in reverse order, then every
+        modifier is released defensively and ``post_delay`` is slept.
+        """
+        self._ensure_frontmost()
+        # Press modifiers first, then the base key.
+        for key in keys:
+            pyautogui.keyDown(key)
+        for key in reversed(keys):
+            pyautogui.keyUp(key)
+        self._release_all_modifiers()
+        if post_delay > 0:
+            time.sleep(post_delay)
+
+    def _paste_line(
+        self,
+        line: str,
+        pace: Tuple[float, float] = (0.4, 0.8),
+        add_newline: bool = True,
+    ) -> None:
+        """
+        Paste exactly one line (optionally plus its newline) into the editor.
+
+        The only keystrokes used are the sanctioned ``cmd+v`` paste. After the
+        paste we wait a progressive cadence so the composition is visibly
+        line-by-line, then dismiss the Character Viewer defensively.
+
+        The clipboard is intentionally left alone after the paste. Restoring the
+        original clipboard inside this helper races the asynchronous paste and
+        has been observed to paste stale content (e.g. a single 'v' or a prior
+        query keyword) instead of the intended line.
+        """
+        text = line + ("\n" if add_newline else "")
+        self._copy_to_clipboard(text)
+        time.sleep(0.05)
+        self._safe_hotkey("command", "v", post_delay=0.05)
+        # Progressive cadence: the narration names each clause as its lines appear.
+        delay = 0.4 + (0.4 * (hash(line) % 1000) / 1000.0)
+        delay = max(pace[0], min(pace[1], delay))
+        time.sleep(delay)
+        self._dismiss_character_viewer()
+
+    def _read_current_line(self) -> str:
+        """
+        Return the text of the line the cursor is currently on.
+
+        Uses the focused-element value. After a line-paste the buffer ends with a
+        newline and the cursor sits on the following empty line, so we return the
+        last non-empty line (the one we just composed).
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        value = self._read_focused_element_value(process_name)
+        if value is None:
+            return ""
+        value = value.replace("\r\n", "\n").replace("\r", "\n")
+        lines = value.split("\n")
+        # The cursor may sit on one or more trailing empty lines after a paste;
+        # the line we just composed is the last non-empty line.
+        while lines and lines[-1] == "" and len(lines) > 1:
+            lines.pop()
+        return lines[-1] if lines else ""
+
     def _paste_text(self, text: str) -> None:
-        """Select all editor text and paste from the clipboard."""
+        """Select all editor text and paste from the clipboard.
+
+        This is only allowed outside of recording; during recording the
+        sanctioned line-paste composition path must be used.
+        """
+        if self.recording:
+            raise RuntimeError("Paste is forbidden while recording; use line-by-line typing")
         print("  [PASTE] selecting editor text and pasting from clipboard", file=sys.stderr)
         self._ensure_frontmost()
         self._dismiss_character_viewer()
-        # Ensure the editor is focused and fully selected so the paste replaces
-        # rather than appends to existing text.
         self._focus_editor()
         self.press_key("cmd+a")
         time.sleep(0.1)
@@ -500,8 +945,7 @@ class VisionAgent:
         try:
             self._copy_to_clipboard(text)
             time.sleep(0.1)
-            pyautogui.hotkey("command", "v")
-            time.sleep(0.4)
+            self._safe_hotkey("command", "v", post_delay=0.4)
         finally:
             try:
                 self._copy_to_clipboard(original_clipboard)
@@ -521,21 +965,15 @@ class VisionAgent:
         """
         Append text at the end of the editor without clearing existing content.
 
-        The cursor is moved to the end of the document via select-all + right
-        arrow (a reliable cross-editor chord), then the new text is pasted at
-        the end.  A newline is inserted automatically when the editor already
-        contains non-whitespace content and the new text does not begin with
-        whitespace, so distinct blocks (e.g. comment blocks) stay on separate
-        lines. Returns the effective text that was pasted (may include the
-        leading newline).
+        This non-recording helper uses select-all + End to reach the end of the
+        document and pastes the new text. During recording, use
+        ``_type_text_line_by_line`` instead.
         """
+        if self.recording:
+            raise RuntimeError("Append-paste is forbidden while recording; use line-by-line typing")
         print("  [APPEND] appending text at end of buffer", file=sys.stderr)
         self._ensure_frontmost()
         self._dismiss_character_viewer()
-        # Ensure the editor is focused, read the existing content (without
-        # re-clicking, which would move the insertion point), then move the
-        # cursor to the end of the document so the paste appends rather than
-        # landing mid-document.
         self._focus_editor()
         prior = self._read_editor_content(focus=False) or ""
         text_to_append = self._ensure_leading_separator(prior, text)
@@ -550,8 +988,7 @@ class VisionAgent:
         try:
             self._copy_to_clipboard(text_to_append)
             time.sleep(0.1)
-            pyautogui.hotkey("command", "v")
-            time.sleep(0.4)
+            self._safe_hotkey("command", "v", post_delay=0.4)
         finally:
             try:
                 self._copy_to_clipboard(original_clipboard)
@@ -563,6 +1000,48 @@ class VisionAgent:
     def _normalize_editor_text(text: str) -> str:
         """Collapse whitespace, strip, and lowercase for read-back comparison."""
         return re.sub(r"\s+", " ", text).strip().lower()
+
+    @staticmethod
+    def _canonical_normalize(text: str) -> str:
+        """
+        Normalize editor text for canonical comparison.
+
+        - rstrip each line
+        - drop trailing blank lines
+        - drop a single trailing newline
+        """
+        if text is None:
+            text = ""
+        lines = [line.rstrip() for line in text.split("\n")]
+        while lines and lines[-1] == "":
+            lines.pop()
+        return "\n".join(lines)
+
+    def _canonical_compare(self, expected: str, actual: str) -> bool:
+        """Compare two editor buffers using the canonical normalization."""
+        return self._canonical_normalize(expected) == self._canonical_normalize(actual)
+
+    @staticmethod
+    def _strip_trailing_newline(text: str) -> str:
+        """Remove a single trailing newline for exact-comparison convenience."""
+        if text.endswith("\n"):
+            return text[:-1]
+        return text
+
+    def _editor_texts_match(self, expected: str, actual: str) -> bool:
+        """
+        Exact full-buffer comparison for editor read-back.
+
+        When the profile declares whitespace_policy="exact", the editor content
+        must equal the intended text byte-for-byte, except for an optional single
+        trailing newline. Normalized comparison is used only for diagnostics.
+        """
+        policy = getattr(self.profile, "whitespace_policy", "exact")
+        if policy == "exact":
+            return self._strip_trailing_newline(expected) == self._strip_trailing_newline(actual)
+        expected_norm = self._normalize_editor_text(expected)
+        actual_norm = self._normalize_editor_text(actual)
+        return expected_norm == actual_norm
 
     @staticmethod
     def _read_focused_element_value(process_name: str) -> Optional[str]:
@@ -590,6 +1069,48 @@ end tell
             print(f"  [READ-BACK] accessibility read failed: {exc}", file=sys.stderr)
         return None
 
+    def _read_editor_text_area_value(self, process_name: str) -> Optional[str]:
+        """
+        Read the full value of the top-most AXTextArea in the target window.
+
+        DB Browser's SQL editor exposes its content through the AXValue of the
+        editor text area, but the focused-element value can be incomplete while
+        typing is in progress. The top-most text area is the SQL editor; the
+        lower one is the results pane.
+        """
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        tell window 1
+            set textAreas to every text area
+            if length of textAreas is 0 then return ""
+            set topTA to item 1 of textAreas
+            set minY to item 2 of (position of topTA)
+            repeat with ta in textAreas
+                set y to item 2 of (position of ta)
+                if y < minY then
+                    set minY to y
+                    set topTA to ta
+                end if
+            end repeat
+            return value of topTA
+        end tell
+    end tell
+end tell
+"""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return result.stdout
+        except Exception as exc:
+            print(f"  [READ-BACK] text-area read failed: {exc}", file=sys.stderr)
+        return None
+
     def _read_editor_content_vlm(self) -> str:
         """Fallback VLM transcription of the editor content."""
         editor = self.profile.landmarks.get("editor", "the editable text area")
@@ -605,9 +1126,10 @@ end tell
         """
         Return the EXACT full text currently in the editor.
 
-        First tries macOS accessibility (value of the focused UI element), which
-        is fast, exact, and immune to clipboard pollution. Falls back to VLM
-        transcription if accessibility fails.
+        Uses the SQL editor text area's AXValue via accessibility. The focused
+        element is only used as a fallback because its value can be partial
+        while keystrokes are still being processed. Falls back to VLM
+        transcription if accessibility cannot return the full buffer.
 
         Args:
             focus: When False, skip the editor focus click. Callers that have
@@ -618,14 +1140,18 @@ end tell
         if focus:
             self._focus_editor()
         process_name = self.profile.focus_target or self.profile.app_name
+        # DB Browser's focused element value reliably contains the full editor
+        # buffer; the top AXTextArea value is often just a placeholder newline.
         content = self._read_focused_element_value(process_name)
-        if content is not None:
+        if content is None or content.strip() == "":
+            content = self._read_editor_text_area_value(process_name)
+        if content is not None and content.strip() != "":
             # Normalize line endings.
             content = content.replace("\r\n", "\n").replace("\r", "\n")
             print(f"  [READ-BACK] accessibility read {len(content)} chars", file=sys.stderr)
             return content
-        print("  [READ-BACK] accessibility failed; falling back to VLM", file=sys.stderr)
-        return self._read_editor_content_vlm()
+        print("  [READ-BACK] editor appears empty", file=sys.stderr)
+        return ""
 
     def _verify_editor_layout(self, intended: str, actual: str) -> bool:
         """
@@ -729,21 +1255,152 @@ end tell
             "{", "}", "|", ":", "\"", "<", ">", "?",
         }
 
+    def _leading_whitespace(self, s: str) -> str:
+        """Return the leading whitespace of ``s``."""
+        return s[: len(s) - len(s.lstrip())]
+
+    def _type_line(self, intended_line: str, interval: float = 0.05) -> bool:
+        """
+        Deprecated: progressive line-paste composition is now the only
+        recording-time entry path. This wrapper is kept for callers that have
+        not been migrated; it delegates to the line-paste path.
+        """
+        return self._paste_line(intended_line) is not None
+
+    def _repair_line(self, intended_line: str) -> bool:
+        """
+        Replace the current line with ``intended_line`` using line-paste.
+
+        This is the line-level repair path: it never wipes the buffer and never
+        uses select-all. It selects the text of the current line and pastes the
+        intended line plus newline.
+        """
+        print(f"  [REPAIR] re-pasting current line as {intended_line!r}", file=sys.stderr)
+        self._ensure_frontmost()
+        self._dismiss_character_viewer()
+        # Move to the start of the current line and select to the end.
+        self.press_key("home")
+        pyautogui.keyDown("shift")
+        pyautogui.keyDown("end")
+        pyautogui.keyUp("end")
+        pyautogui.keyUp("shift")
+        self._release_all_modifiers()
+        time.sleep(0.1)
+        self._paste_line(intended_line)
+        return True
+
+    def _type_text_line_by_line(
+        self,
+        text: str,
+        base_expected: str = "",
+        max_attempts: int = 2,
+    ) -> bool:
+        """
+        Compose a multi-line block by pasting one line at a time.
+
+        Each line is pasted with its newline using the sanctioned ``cmd+v``
+        paste. After every line we read the full editor buffer via accessibility
+        and compare it to the cumulative expected text; this verifies the just-
+        pasted line in context. If a line is corrupted, we re-paste only that
+        line. After the full block we run a final normalized full-buffer
+        verification. The whole composition is retried at most ``max_attempts``
+        times; after that the caller must abort (C10 composition ceiling).
+        """
+        if not text:
+            return True
+
+        lines = text.split("\n")
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                print(
+                    f"  [LINE PASTE] composition attempt {attempt}/{max_attempts} "
+                    "after mismatch; clearing block and recomposing",
+                    file=sys.stderr,
+                )
+                # Clear without select-all/paste; accessibility is the only
+                # sanctioned way to reset the block mid-composition.
+                was_recording = self.recording
+                self.recording = False
+                self._clear_editor_accessibility()
+                self.recording = was_recording
+                # Re-paste the base so the retry starts from the same state.
+                if base_expected.strip():
+                    self._type_text_line_by_line(base_expected, base_expected="", max_attempts=1)
+
+            if base_expected.strip():
+                # When appending to existing content, the cursor must be at the end
+                # of the buffer. A focus click can leave it in the middle, which
+                # would insert the new segment mid-document and corrupt the SQL.
+                self._safe_hotkey("command", "end", post_delay=0.1)
+
+            expected = base_expected
+            for idx, line in enumerate(lines):
+                self._paste_line(line, add_newline=(idx < len(lines) - 1))
+                expected = expected + line + ("\n" if idx < len(lines) - 1 else "")
+                if line == "":
+                    # Blank separator lines carry no content to verify; the full-buffer
+                    # check at the end ensures the separator landed correctly.
+                    continue
+                # Per-line read-back: the just-pasted line should now be the current line.
+                current = self._read_current_line()
+                if current != line:
+                    print(
+                        f"  [LINE PASTE] mismatch at line {idx + 1}; intended={line!r} read={current!r}",
+                        file=sys.stderr,
+                    )
+                    # The cursor is on the empty line after the defective one;
+                    # move up and replace only that line.
+                    pyautogui.press("up")
+                    self._release_all_modifiers()
+                    time.sleep(0.05)
+                    if not self._repair_line(line):
+                        break
+                    current = self._read_current_line()
+                    if current != line:
+                        print("  [LINE PASTE] repair failed; aborting attempt", file=sys.stderr)
+                        break
+
+            # Final full-buffer normalized verification (C10 canonical compare).
+            read_back = self._read_editor_content(focus=False) or ""
+            if self._canonical_compare(expected, read_back):
+                print(
+                    f"  [LINE PASTE] full-buffer canonical verification OK "
+                    f"(attempt {attempt}/{max_attempts})",
+                    file=sys.stderr,
+                )
+                return True
+
+            print(
+                f"  [LINE PASTE] full-buffer canonical mismatch on attempt {attempt}",
+                file=sys.stderr,
+            )
+
+        print(
+            f"  [LINE PASTE] composition failed after {max_attempts} attempts",
+            file=sys.stderr,
+        )
+        return False
+
     def _type_segment_cadence(self, text: str) -> str:
         """
         Enter ``text`` as a single segment at the current cursor position.
 
-        Character-level typing proved unreliable in DB Browser for SQLite (shifted
-        characters mangled, keystrokes leaked to other apps on focus loss). Each
-        segment is therefore pasted deterministically from the clipboard, keeping
-        the segment bound to its narration beat while guaranteeing the exact text
-        appears. Newlines inside the segment are preserved by the paste.
-
-        Returns the effective text that was appended (may include a leading
-        newline separator).
+        During recording this pastes the segment line-by-line so the clip shows
+        progressive composition and per-line read-back can catch corruption.
+        Outside of recording it falls back to paste for speed.
         """
         self._ensure_frontmost()
         print(f"  [SEGMENT] entering {len(text)} characters", file=sys.stderr)
+        if self.recording:
+            prior = self._read_editor_content(focus=False) or ""
+            if prior and not prior.endswith("\n") and not text.startswith("\n"):
+                # Use line-paste for the separator too; never press Return directly.
+                self._paste_line("")
+                prior += "\n"
+            if self._type_text_line_by_line(text, base_expected=prior):
+                self._dismiss_character_viewer()
+                return text
+            return ""
         effective = self._append_text(text)
         time.sleep(0.3)
         self._dismiss_character_viewer()
@@ -757,38 +1414,57 @@ end tell
         self.press_key("cmd+z")
         time.sleep(0.2)
 
-    def _editor_texts_match(self, expected: str, actual: str) -> bool:
-        """
-        Strict full-buffer comparison for VLM read-back of the SQL editor.
-
-        Lenient suffix checks are banned: the VLM must return the entire editable
-        content, not just the visible tail.
-        """
-        expected_norm = self._normalize_editor_text(expected)
-        actual_norm = self._normalize_editor_text(actual)
-        return expected_norm == actual_norm
-
     def _verify_buffer_exact(self, intended: str, label: str = "") -> bool:
         """
         Full-buffer read-back and diff after a mutation.
 
-        Fails loudly if the normalized editor content does not match the
-        intended content exactly.
+        Compares the editor content to the intended text using the canonical
+        normalization (rstrip lines, drop trailing blanks/newline). On mismatch,
+        prints the first line that differs so line-level repair can target it.
         """
         read_back = self._read_editor_content()
-        if self._editor_texts_match(intended, read_back):
+        if self._canonical_compare(intended, read_back):
             print(f"  [{label}] read-back OK", file=sys.stderr)
             return True
         print(f"  [{label}] read-back mismatch", file=sys.stderr)
+        intended_lines = self._canonical_normalize(intended).split("\n")
+        actual_lines = self._canonical_normalize(read_back).split("\n")
+        for i, (a, b) in enumerate(zip(intended_lines, actual_lines)):
+            if a != b:
+                print(
+                    f"  [{label}] first diff at line {i + 1}",
+                    file=sys.stderr,
+                )
+                print(f"  [{label}] intended: {a!r}", file=sys.stderr)
+                print(f"  [{label}] actual:   {b!r}", file=sys.stderr)
+                break
+        else:
+            if len(intended_lines) != len(actual_lines):
+                print(
+                    f"  [{label}] line count differs: intended={len(intended_lines)} actual={len(actual_lines)}",
+                    file=sys.stderr,
+                )
         print(
-            f"  [{label}] intended: {self._normalize_editor_text(intended)!r}",
+            f"  [{label}] normalized intended: {self._normalize_editor_text(intended)!r}",
             file=sys.stderr,
         )
         print(
-            f"  [{label}] actual:   {self._normalize_editor_text(read_back)!r}",
+            f"  [{label}] normalized actual:   {self._normalize_editor_text(read_back)!r}",
             file=sys.stderr,
         )
         return False
+
+    def _first_mismatched_line(self, intended: str, actual: str) -> Optional[Tuple[int, str, str]]:
+        """Return (1-based index, intended_line, actual_line) for the first diff, or None."""
+        intended_lines = self._strip_trailing_newline(intended).split("\n")
+        actual_lines = self._strip_trailing_newline(actual).split("\n")
+        for i, (a, b) in enumerate(zip(intended_lines, actual_lines)):
+            if a != b:
+                return i + 1, a, b
+        if len(intended_lines) != len(actual_lines):
+            shorter = min(len(intended_lines), len(actual_lines))
+            return shorter + 1, "", ""
+        return None
 
     def type_segments(
         self,
@@ -798,23 +1474,16 @@ end tell
         """
         Type a list of segments into the editor, verifying after each one.
 
-        Each segment dict has:
-          - text: the text to type
-          - narration (optional): the narration line for the segment
-
-        On a segment mismatch the segment is undone and retyped (up to 2 tries).
-        After 2 segment failures, the failed segment is pasted in place; the
-        editor is NEVER fully cleared during recording.
+        During recording each segment is entered with real keystrokes using the
+        per-line typing path; paste and select-all are never used. Outside of
+        recording the fast paste path is used.
         """
         if not segments:
             return True
 
         self._ensure_frontmost()
-        # Capture any content already in the editor (e.g. commented history from
-        # stage-prep) so segmented typing appends rather than replacing it.
         initial = self._read_editor_content() or ""
-        # Build the fallback cumulative block using the same separator logic so
-        # the nuclear paste fallback matches what the editor will actually hold.
+
         def _build_cumulative(base: str, segs: List[Any]) -> str:
             out = base
             for s in segs:
@@ -825,22 +1494,53 @@ end tell
             return out
 
         full_text = _build_cumulative(initial, segments)
-        # Use the caller-provided intended block if available; this guarantees the
-        # fallback pastes the real target text even if the live editor is corrupted.
         intended_fallback = fallback_text if fallback_text is not None else full_text
-        # Move the cursor to the end of the document before appending.
+
+        if self.recording:
+            # Recording path: append each segment line-by-line to the existing buffer.
+            # Re-typing the cumulative block would re-type prior segments and corrupt
+            # the editor (e.g., duplicate comment blocks). Per-line read-back verifies
+            # each new line in context; the full-buffer check at the end of each
+            # segment verifies the cumulative result.
+            # DB Browser's AXValue often appends a trailing newline that is not part
+            # of the authored content, so strip it before building the canonical
+            # expected cumulative text.
+            expected_sofar = self._strip_trailing_newline(initial)
+            # Ceiling: one iteration per segment (bounded by len(segments)).
+            for seg_idx, segment in enumerate(segments):
+                text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
+                if not text:
+                    continue
+                if expected_sofar.strip() and text and not text[0].isspace():
+                    text = "\n" + text
+                print(
+                    f"  [SEGMENTS] recording segment {seg_idx + 1}/{len(segments)} "
+                    f"({len(text)} chars)",
+                    file=sys.stderr,
+                )
+                if not self._type_text_line_by_line(text, base_expected=expected_sofar):
+                    print(
+                        f"  [SEGMENTS] segment {seg_idx + 1} failed line-paste composition",
+                        file=sys.stderr,
+                    )
+                    return False
+                expected_sofar += text
+            self._last_composed_text = expected_sofar
+            print("  [SEGMENTS] all recording segments typed and verified", file=sys.stderr)
+            return True
+
+        # Non-recording path: fast paste with retry fallback.
         pyautogui.keyDown("command")
         pyautogui.keyDown("end")
         pyautogui.keyUp("end")
         pyautogui.keyUp("command")
         time.sleep(0.1)
         expected_sofar = initial
+        # Ceiling: one iteration per segment (bounded by len(segments)).
         for seg_idx, segment in enumerate(segments):
             text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
             if not text:
                 continue
-            # Predict the separator the append will insert so expected_sofar
-            # matches the editor content after paste.
             if expected_sofar.strip() and text and not text[0].isspace():
                 text = "\n" + text
             print(
@@ -848,6 +1548,7 @@ end tell
                 file=sys.stderr,
             )
             segment_ok = False
+            # Ceiling: 2 paste/verify attempts per segment.
             for attempt in range(1, 3):
                 self._ensure_frontmost()
                 self._type_segment_cadence(text)
@@ -858,7 +1559,6 @@ end tell
                     f"  [SEGMENTS] segment {seg_idx + 1} mismatch, retry {attempt}/2",
                     file=sys.stderr,
                 )
-                # Undo the bad segment and retype it.
                 self._undo_segment(text)
 
             if not segment_ok:
@@ -866,42 +1566,52 @@ end tell
                     f"  [SEGMENTS] segment {seg_idx + 1} failed twice; pasting segment in place",
                     file=sys.stderr,
                 )
-                # Paste only the failed segment at the current cursor; never clear.
                 self._append_text(text)
                 if self._verify_buffer_exact(expected_sofar + text, "SEGMENTS"):
                     segment_ok = True
                 else:
-                    # Nuclear fallback only when not recording: paste full intended block.
-                    if not self.recording:
-                        self._clear_editor()
-                        self._paste_text(intended_fallback)
-                        if self._verify_buffer_exact(intended_fallback, "SEGMENTS"):
-                            print("  [SEGMENTS] paste fallback OK", file=sys.stderr)
-                            return True
+                    self._clear_editor()
+                    self._paste_text(intended_fallback)
+                    if self._verify_buffer_exact(intended_fallback, "SEGMENTS"):
+                        self._last_composed_text = intended_fallback
+                        print("  [SEGMENTS] paste fallback OK", file=sys.stderr)
+                        return True
                     print("  [SEGMENTS] in-place repair FAILED", file=sys.stderr)
                     return False
 
             expected_sofar = expected_sofar + text
 
+        self._last_composed_text = expected_sofar
         print("  [SEGMENTS] all segments typed and verified", file=sys.stderr)
         return True
 
     def type_block(self, text: str) -> bool:
         """
-        Paste a multi-line SQL block into the active editor with full-buffer
+        Enter a multi-line SQL block into the active editor with full-buffer
         read-back verification.
 
-        ``text`` is the FULL block: comment header and query together. During
-        recording the block is appended at the end of the editor rather than
-        replacing existing content. The VLM reads back the entire editor content
-        and it must match the intended text exactly.
+        During recording the block is typed one line at a time with per-line
+        read-back so lost leading characters are caught immediately. Paste and
+        select-all are never used while recording. Outside of recording the fast
+        paste path is used.
         """
         if not text:
             return True
 
         self._clear_editor()
-        self._paste_text(text)
 
+        if self.recording:
+            prior = self._read_editor_content(focus=False) or ""
+            if self._type_text_line_by_line(text, base_expected=prior):
+                print("  [TYPE BLOCK] line-by-line OK", file=sys.stderr)
+                self.press_key("esc")
+                print("  [TYPE BLOCK] dismissed autocomplete", file=sys.stderr)
+                return True
+            print("  [TYPE BLOCK] line-by-line typing FAILED", file=sys.stderr)
+            return False
+
+        self._paste_text(text)
+        # Ceiling: 2 paste/verify attempts for a type_block.
         for attempt in range(1, 3):
             if self._verify_buffer_exact(text, "TYPE BLOCK"):
                 print("  [TYPE BLOCK] line-adjacency OK", file=sys.stderr)
@@ -920,18 +1630,26 @@ end tell
 
     def paste_history_block(self, text: str) -> bool:
         """
-        Paste a long commented SQL history into the editor with full read-back.
+        Compose a commented SQL history into the editor with full read-back.
 
-        Full-buffer verification is now required after every mutation, including
-        history pastes. During recording the editor is not cleared; the history
-        is appended at the end.
+        Full-buffer verification is required after every mutation, including
+        history pastes. During recording the history is composed line-by-line
+        using the sanctioned paste path; outside of recording the fast full-buffer
+        paste path is used.
         """
         if not text:
             return True
         self._ensure_frontmost()
-        print("  [PASTE HISTORY] pasting commented history", file=sys.stderr)
-        self._clear_editor()
-        self._paste_text(text)
+        print("  [PASTE HISTORY] composing commented history", file=sys.stderr)
+        if self.recording:
+            # Do not clear; history is appended to whatever is already staged.
+            prior = self._read_editor_content(focus=False) or ""
+            if not self._type_text_line_by_line(text, base_expected=prior):
+                print("  [PASTE HISTORY] line-paste composition FAILED", file=sys.stderr)
+                return False
+        else:
+            self._clear_editor()
+            self._paste_text(text)
         # Scroll to the top so the VLM can read the full history if needed.
         self.press_key("cmd+home")
         time.sleep(0.2)
@@ -948,22 +1666,25 @@ end tell
         """
         Append a SQL block at the end of the editor without clearing existing text.
 
-        Used for continuity-by-design: the commented history is already in the
-        editor, and this method pastes only the new query below it. The read-back
-        must match the full intended editor content exactly. A newline separator
-        is inserted automatically when the prior content does not end with
-        whitespace and the new block does not begin with whitespace.
+        During recording the block is typed line-by-line. Outside of recording it
+        is pasted for speed.
         """
         if not text:
             return True
 
-        # The caller is responsible for tracking the full intended buffer if it
-        # includes prior history; we verify the new text appears at the end.
         prior = self._read_editor_content() or ""
         text_to_append = self._ensure_leading_separator(prior, text)
         intended = prior + text_to_append
-        self._append_text(text_to_append)
 
+        if self.recording:
+            if self._type_text_line_by_line(text_to_append, base_expected=prior):
+                self.press_key("esc")
+                return True
+            print("  [APPEND] line-by-line typing FAILED", file=sys.stderr)
+            return False
+
+        self._append_text(text_to_append)
+        # Ceiling: 2 paste/verify attempts for an append_block.
         for attempt in range(1, 3):
             if self._verify_buffer_exact(intended, "APPEND"):
                 self.press_key("esc")
@@ -972,7 +1693,6 @@ end tell
                 f"  [APPEND] retry {attempt}/2",
                 file=sys.stderr,
             )
-            # Re-read prior in case it changed, then re-append.
             prior = self._read_editor_content() or ""
             text_to_append = self._ensure_leading_separator(prior, text)
             intended = prior + text_to_append
@@ -982,9 +1702,41 @@ end tell
         return False
 
     def prepare_sql_editor(self) -> bool:
-        """Ensure the SQL editor is empty and focused before a typing beat."""
-        print("  [STAGE PREP] SQL editor cleared", file=sys.stderr)
-        self._clear_editor()
+        """
+        Ensure the SQL editor is empty and focused before a typing beat.
+
+        This is the only stage in the pipeline where wiping the buffer is
+        permitted. We force the non-recording clear path (focus + select-all +
+        delete) because it runs before recording starts, then verify emptiness
+        via accessibility. If content persists, we fall back to an accessibility
+        value clear once. A persistent failure is reported so the caller can
+        decide to abort or relaunch the application.
+        """
+        print("  [STAGE PREP] ensuring SQL editor is empty", file=sys.stderr)
+        was_recording = self.recording
+        self.recording = False
+        try:
+            self._clear_editor()
+            content = self._read_editor_content(focus=False)
+            if content.strip():
+                print(
+                    f"  [STAGE PREP] editor still contains {len(content)} chars; "
+                    "trying accessibility clear",
+                    file=sys.stderr,
+                )
+                self._focus_editor()
+                self._clear_editor_accessibility()
+                content = self._read_editor_content(focus=False)
+        finally:
+            self.recording = was_recording
+
+        if content.strip():
+            print(
+                f"  [STAGE PREP] FAILED to clear editor; {len(content)} chars remain",
+                file=sys.stderr,
+            )
+            return False
+        print("  [STAGE PREP] SQL editor verified empty", file=sys.stderr)
         return True
 
     def scroll_result_pane_top(self) -> bool:
@@ -1133,7 +1885,6 @@ end tell
         signature = getattr(self.profile, "error_signature", None)
         if not signature:
             return False
-        # Use the most recent raw screenshot if available; otherwise capture one.
         raw = self.last_raw_image
         if raw is None:
             self.screenshot()
@@ -1146,14 +1897,114 @@ end tell
             print("  [RUN QUERY] pixel error signature detected", file=sys.stderr)
         return result
 
+    def _read_status_error_text(self) -> str:
+        """
+        Read the error text currently shown in the status/error region.
+
+        First tries the accessibility value of the focused UI element, then falls
+        back to a VLM transcription of the declared error_signature region.
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        content = self._read_focused_element_value(process_name)
+        if content:
+            return content
+        signature = getattr(self.profile, "error_signature", None) or {}
+        region = signature.get("status_region")
+        if not region:
+            return ""
+        raw = self.last_raw_image
+        if raw is None:
+            self.screenshot()
+            raw = self.last_raw_image
+        if raw is None:
+            return ""
+        w, h = raw.size
+        x = int(round(region.get("x", 0.0) * w))
+        y = int(round(region.get("y", 0.0) * h))
+        rw = int(round(region.get("w", 1.0) * w))
+        rh = int(round(region.get("h", 1.0) * h))
+        crop = raw.crop((x, y, x + rw, y + rh))
+        prompt = (
+            "Transcribe the text in this status/error region. "
+            "Return ONLY the visible text, no explanation."
+        )
+        buf = io.BytesIO()
+        crop.save(buf, format="PNG")
+        b64 = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        try:
+            result = tracked_create(
+                self.client,
+                model=self.model,
+                max_tokens=256,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+            )
+            return " ".join(block.text for block in result.content if block.type == "text").strip()
+        except Exception as exc:
+            print(f"  [ERROR READ] VLM read failed: {exc}", file=sys.stderr)
+            return ""
+
+    @staticmethod
+    def _classify_error(error_text: str) -> str:
+        """Classify an error message as environment, schema, or transcription."""
+        lowered = error_text.lower()
+        if any(term in lowered for term in ("no such column", "no such table", "syntax error", "unrecognized token")):
+            return "schema"
+        if any(term in lowered for term in ("database", "disk", "i/o", "locked", "busy", "readonly")):
+            return "environment"
+        return "transcription"
+
     def _repair_editor_and_rerun(self, current_statement: str) -> bool:
-        """Re-paste only the current statement and run the query again."""
+        """
+        Repair the buffer after a query error and re-run.
+
+        Reads the actual error text, classifies it, and uses line-level repair for
+        schema/transcription errors. Environment errors halt. The buffer is never
+        wiped while recording.
+        """
         print("  [RUN QUERY] repairing buffer and re-running", file=sys.stderr)
-        self._clear_editor()
-        self._paste_text(current_statement)
-        if not self._verify_buffer_exact(current_statement, "REPAIR"):
+        error_text = self._read_status_error_text()
+        category = self._classify_error(error_text)
+        print(f"  [RUN QUERY] error text ({category}): {error_text[:200]!r}", file=sys.stderr)
+
+        if category == "environment":
+            print("  [RUN QUERY] environment error; halting", file=sys.stderr)
             return False
-        return self.run_query()
+
+        # Schema/transcription: locate the offending line and retype only that line.
+        editor_content = self._read_editor_content() or ""
+        intended_lines = self._strip_trailing_newline(current_statement).split("\n")
+        actual_lines = self._strip_trailing_newline(editor_content).split("\n")
+        bad_line_no = None
+        for i, (a, b) in enumerate(zip(intended_lines, actual_lines)):
+            if a != b:
+                bad_line_no = i + 1
+                break
+        if bad_line_no is None and len(intended_lines) != len(actual_lines):
+            bad_line_no = min(len(intended_lines), len(actual_lines)) + 1
+        if bad_line_no is None:
+            bad_line_no = len(intended_lines)
+
+        # Navigate to the defective line and retype it.
+        self.press_key("ctrl+home")
+        for _ in range(bad_line_no - 1):
+            pyautogui.press("down")
+            time.sleep(0.02)
+        intended_line = intended_lines[bad_line_no - 1]
+        if not self._repair_line(intended_line):
+            return False
+        read_back = self._read_editor_content() or ""
+        if not self._editor_texts_match(current_statement, read_back):
+            print("  [RUN QUERY] line-level repair did not restore buffer", file=sys.stderr)
+            return False
+        return self.run_query(current_statement=current_statement)
 
     def _results_visible(self) -> bool:
         """Ask the VLM whether the result pane shows query output."""
@@ -1289,10 +2140,14 @@ end tell
     def press_key(self, key: str) -> bool:
         """Press a single key or key chord (e.g., 'Return', 'cmd+a')."""
         key = key.strip()
+        normalized = key.lower()
+        # Recording hygiene: select-all and full-buffer paste are forbidden while
+        # recording. The sanctioned line-paste composition path uses _safe_hotkey
+        # directly, not press_key.
+        if self.recording and normalized in ("cmd+a", "command+a", "cmd+v", "command+v"):
+            raise RuntimeError(f"{key!r} is forbidden while recording")
         print(f"  Pressing key: {key!r}", file=sys.stderr)
 
-        # Normalize common names to pyautogui conventions.
-        normalized = key.lower()
         if normalized in ("return", "enter"):
             pyautogui.press("return")
         elif normalized == "esc":
@@ -1323,7 +2178,10 @@ end tell
         else:
             pyautogui.press(key.lower())
 
-        time.sleep(0.5)
+        # Defensive modifier release: prevents the Character Viewer race where a
+        # subsequent Space lands while Cmd/Ctrl are still held.
+        self._release_all_modifiers()
+        time.sleep(0.35)
         return True
 
     def verify_state(self, expected_description: str) -> bool:
@@ -1475,6 +2333,49 @@ end tell
         result = self._call_vlm(prompt, expect_json=True)
         return result.action
 
+    def _derive_beat_objective(self, beat_dict: Dict[str, Any]) -> Tuple[str, str]:
+        """
+        Derive an objective and intended-state description from a beat dict.
+
+        Callers may supply ``objective`` and ``intended_state`` directly; otherwise
+        we fall back to action-type defaults so the assessment is never hardcoded
+        to a specific app.
+        """
+        action_type = beat_dict.get("action_type") or beat_dict.get("type")
+        detail = beat_dict.get("action_detail") or beat_dict.get("detail") or ""
+        text = beat_dict.get("text") or ""
+        app_name = self.profile.app_name
+        editor = self.profile.landmarks.get("editor", "the editor")
+        result_pane = self.profile.landmarks.get("result_pane", "the result pane")
+
+        objective = beat_dict.get("objective") or detail or f"Execute {action_type}"
+        intended_state = beat_dict.get("intended_state") or ""
+
+        if not intended_state:
+            if action_type in ("type_block", "append_block"):
+                intended_state = (
+                    f"{app_name} is frontmost, the {editor} is focused, "
+                    "and the intended SQL block appears exactly as authored with no corruption."
+                )
+            elif action_type == "type_segments":
+                intended_state = (
+                    f"{app_name} is frontmost, the {editor} is focused, "
+                    "and the cumulative SQL block appears exactly as authored."
+                )
+            elif action_type == "run_query":
+                intended_state = (
+                    f"{app_name} is frontmost, the query has been executed, "
+                    f"and {result_pane} shows a populated result grid or row count with no error signature."
+                )
+            elif action_type == "click":
+                intended_state = (
+                    f"{app_name} is frontmost and {detail or 'the target element'} is selected/active."
+                )
+            else:
+                intended_state = f"{app_name} is frontmost and the action completed successfully."
+
+        return objective, intended_state
+
     def execute_beat(
         self,
         beat_dict: Dict[str, Any],
@@ -1488,6 +2389,8 @@ end tell
           - action_detail: human description or text to type/press
           - target (optional for type): element to click before typing
           - actions (for "sequence"): list of sub-beat dicts
+          - objective (optional): current beat objective for VLM assessment
+          - intended_state (optional): expected screen state for VLM assessment
 
         ``fallback_text`` is passed through to segmented typing so that a failed
         segment can recover by pasting the intended cumulative block instead of
@@ -1495,6 +2398,7 @@ end tell
         """
         action_type = beat_dict.get("action_type") or beat_dict.get("type")
         detail = beat_dict.get("action_detail") or beat_dict.get("detail") or ""
+        objective, intended_state = self._derive_beat_objective(beat_dict)
 
         if action_type == "wait":
             duration = beat_dict.get("duration", 1.5)
@@ -1502,7 +2406,9 @@ end tell
             return True
 
         if action_type == "click":
-            return self.find_and_click(detail, detail)
+            if not self.find_and_click(detail, detail):
+                return False
+            return self._assess_and_maybe_repair(objective, intended_state)
 
         if action_type == "type":
             target = beat_dict.get("target")
@@ -1515,12 +2421,18 @@ end tell
                     target_label = str(target)
                 if not self.find_and_click(f"Focus the {target_label}", target_label):
                     return False
-            return self.type_text(detail)
+            if not self.type_text(detail):
+                return False
+            return self._assess_and_maybe_repair(objective, intended_state)
 
         if action_type == "type_block":
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
             self._last_executed_statement = text
-            return self.type_block(text)
+            if not self.type_block(text):
+                return False
+            return self._assess_and_maybe_repair(
+                objective, intended_state, intended_text=text
+            )
 
         if action_type == "type_segments":
             segments = beat_dict.get("segments") or []
@@ -1528,16 +2440,36 @@ end tell
                 (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
             )
             self._last_executed_statement = full
-            return self.type_segments(segments, fallback_text=fallback_text)
+            # type_segments appends to the existing editor buffer, so the intended
+            # cumulative content is the prior buffer plus this beat's segments.
+            # We read the buffer once before typing and fall back to the composed
+            # text reported by type_segments, which reflects the actual verified
+            # buffer content (the pre-read can otherwise capture the result pane or
+            # another control if focus is not yet in the editor).
+            prior_editor = self._strip_trailing_newline(self._read_editor_content() or "")
+            segment_with_separator = self._ensure_leading_separator(prior_editor, full)
+            cumulative_intended = prior_editor + segment_with_separator
+            if not self.type_segments(segments, fallback_text=fallback_text):
+                return False
+            cumulative_intended = self._last_composed_text or cumulative_intended
+            return self._assess_and_maybe_repair(
+                objective, intended_state, intended_text=cumulative_intended
+            )
 
         if action_type == "append_block":
             text = beat_dict.get("text") or beat_dict.get("detail") or ""
             self._last_executed_statement = text
-            return self.append_block(text)
+            if not self.append_block(text):
+                return False
+            return self._assess_and_maybe_repair(
+                objective, intended_state, intended_text=text
+            )
 
         if action_type == "run_query":
             statement = beat_dict.get("statement") or self._last_executed_statement
-            return self.run_query(current_statement=statement)
+            if not self.run_query(current_statement=statement):
+                return False
+            return self._assess_and_maybe_repair(objective, intended_state)
 
         if action_type == "summarize_result_pane":
             # This action does not move the UI; it only populates observed_state.
@@ -1546,7 +2478,9 @@ end tell
             return True
 
         if action_type == "key":
-            return self.press_key(detail)
+            if not self.press_key(detail):
+                return False
+            return self._assess_and_maybe_repair(objective, intended_state)
 
         if action_type == "verify":
             return self.verify_state(detail)
@@ -1748,6 +2682,7 @@ end tell
             "Do not add any other text."
         )
 
+        # Ceiling: ceil(len(frame_paths) / batch_size) batches (batch_size=5).
         for i in range(0, len(frame_paths), batch_size):
             batch = frame_paths[i : i + batch_size]
             content: List[Dict[str, Any]] = []
@@ -1772,7 +2707,8 @@ end tell
             content.append({"type": "text", "text": prompt})
 
             try:
-                response = self.client.messages.create(
+                response = tracked_create(
+                    self.client,
                     model=self.model,
                     max_tokens=256,
                     messages=[{"role": "user", "content": content}],

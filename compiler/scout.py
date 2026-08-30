@@ -27,6 +27,7 @@ from PIL import Image
 
 from .discovery import _capture_screenshot
 from .schemas import EnvironmentProfile
+from .cost_tracker import tracked_create
 
 MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
 
@@ -144,7 +145,8 @@ def _vision_scout(client: anthropic.Anthropic, profile: EnvironmentProfile) -> D
         "}\n\n"
         "Use null for unknown values. Do not add any other text."
     )
-    response = client.messages.create(
+    response = tracked_create(
+        client,
         model=MODEL,
         max_tokens=512,
         messages=[
@@ -250,6 +252,7 @@ def _db_browser_profile(db_path: str) -> EnvironmentProfile:
             "min_area_ratio": 0.02,
             "text_hint": "red error band in the status region containing the text 'syntax error'",
         },
+        whitespace_policy="exact",
     )
 
 

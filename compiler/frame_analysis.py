@@ -227,30 +227,47 @@ def _strip_markdown_syntax(text: str) -> str:
 
 
 def word_count_from_reference(reference_md_path: Path) -> int:
-    """Return word count of narration text parsed from a reference markdown file."""
+    """Return word count of narration text parsed from a reference markdown file.
+
+    Supports the table formats produced by the renderer:
+      - | Beat | Kind | Words | Text |
+      - | Beat | Time | Type | Target | Words | Text |
+    Sums the numeric Words column when present; otherwise counts words in the
+    Text column. Escaped pipes (\\|) inside narration text are handled.
+    """
     if not reference_md_path.exists():
         return 0
     text = reference_md_path.read_text(encoding="utf-8")
-    text = _strip_markdown_syntax(text)
     words = 0
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("|") and line.endswith("|"):
-            # Table rows: extract cells and skip header rows.
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            # Heuristic: if a cell contains "Text", it's a header.
-            if "Text" in cells:
+        if not line.startswith("|") or not line.endswith("|"):
+            continue
+        # Restore escaped pipes so they do not break the cell split.
+        safe = line.replace("\\|", "\x00")
+        cells = [c.strip().replace("\x00", "|") for c in safe.strip("|").split("|")]
+        # Skip header rows and markdown separator rows.
+        if not cells or cells[0] in ("Beat", "------") or all(c.replace("-", "") == "" for c in cells):
+            continue
+        # If a numeric Words column exists, use it (formats put Words before Text).
+        if len(cells) >= 4:
+            # Try the cell immediately before the Text column.
+            candidate = cells[-2] if cells[-1] == "Text" else ""
+            if candidate and candidate.replace("Text", "").strip().isdigit():
+                words += int(candidate)
                 continue
-            # Find the Text column; typically the last column before closing.
-            if len(cells) >= 2:
-                narration = cells[-1]
-                # Skip rows that are pure metadata.
-                if narration and not narration.startswith("Beat"):
-                    words += len(narration.split())
-        else:
-            # Non-table lines count as narration if they look like sentences.
-            if re.search(r"[.!?]$", line):
-                words += len(line.split())
+            # Renderer format: | Beat | Kind | Words | Text |
+            if len(cells) == 4 and cells[2].replace("Words", "").strip().isdigit():
+                words += int(cells[2])
+                continue
+            # Long format: | Beat | Time | Type | Target | Words | Text |
+            if len(cells) == 6 and cells[4].replace("Words", "").strip().isdigit():
+                words += int(cells[4])
+                continue
+        # Fallback: count words in the Text/last column.
+        narration = cells[-1]
+        if narration and narration not in ("Text", "Words"):
+            words += len(narration.split())
     return words
 
 

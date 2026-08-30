@@ -119,6 +119,7 @@ class TTSGenerator:
         temp_dir = Path(temp_dir) if temp_dir else Path(tempfile.gettempdir()) / "wsda_tts"
         temp_dir.mkdir(exist_ok=True)
 
+        # Ceiling: bounded by the number of narration beats.
         for i, beat in enumerate(graph.narration_beats):
             text = self.normalize(beat.text)
             beat.tts_text = text  # Store normalized text back on beat
@@ -206,6 +207,7 @@ class TTSGenerator:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}"
 
         max_attempts = 3
+        # Ceiling: fixed 3 network retry attempts.
         for attempt in range(1, max_attempts + 1):
             if os.path.exists(output_path):
                 os.unlink(output_path)

@@ -8,6 +8,7 @@ CourseManifest and VideoManifest schemas plus the multi-video pipeline.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import logging
 import os
@@ -17,14 +18,16 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
 from .discovery import EndStateDiscovery
 from .frame_analysis import (
     compute_video_metrics,
+    count_error_signature_frames,
     format_gate_table,
+    frozen_share_percent,
     reconcile_summary,
     run_acceptance_gates,
 )
@@ -32,10 +35,54 @@ from .graph_store import GraphStore
 from .lesson_builder import LessonBuilder
 from .narrator import ScriptBeat
 from .renderer import GraphRenderer
-from .schemas import EnvironmentProfile
+from .schemas import DiscoveryResult, EnvironmentProfile
 from .scout import scout_environment
 from .tts import TTSGenerator
 from .vision_agent import VisionAgent
+from .cost_tracker import CostExhaustedError, get_tracker, reset_tracker
+
+
+# ---------------------------------------------------------------------------
+# Loop ceilings (documented for attempt reports)
+# ---------------------------------------------------------------------------
+
+_LOOP_CEILINGS: List[Dict[str, Any]] = [
+    {"file": "compiler/curriculum.py", "line": 551, "loop": "_resolve_controlling_terminal process walk", "ceiling": "PID <= 1"},
+    {"file": "compiler/curriculum.py", "line": 1170, "loop": "run_course seed-DB loop", "ceiling": "len(ordered_videos)"},
+    {"file": "compiler/curriculum.py", "line": 1220, "loop": "run_course video pipeline", "ceiling": "len(ordered_videos)"},
+    {"file": "compiler/curriculum.py", "line": 1586, "loop": "main --only-video iteration", "ceiling": "args.max_iterations (default 10)"},
+    {"file": "compiler/curriculum_designer.py", "line": 616, "loop": "CurriculumDesigner.design validation/fix", "ceiling": "2"},
+    {"file": "compiler/curriculum_designer.py", "line": 763, "loop": "_generate_design LLM retries", "ceiling": "3"},
+    {"file": "compiler/curriculum_designer.py", "line": 849, "loop": "_enrich_design LLM retries", "ceiling": "3"},
+    {"file": "compiler/discovery.py", "line": 227, "loop": "ScreenRecorder._capture_loop", "ceiling": "MAX_SCREEN_RECORDER_FRAMES (~3h @ 10fps)"},
+    {"file": "compiler/discovery.py", "line": 414, "loop": "_ScreenCaptureKitRecorder._writer_loop", "ceiling": "MAX_SC_RECORDER_SAMPLES (~3h @ 10fps)"},
+    {"file": "compiler/discovery.py", "line": 1972, "loop": "_execute_action_script recipe steps", "ceiling": "len(actions)"},
+    {"file": "compiler/discovery.py", "line": 2053, "loop": "_execute_action_script target fallback", "ceiling": "len(targets_to_try)"},
+    {"file": "compiler/discovery.py", "line": 2374, "loop": "EndStateDiscovery.discover vision loop", "ceiling": "max_attempts (default 10)"},
+    {"file": "compiler/discovery.py", "line": 2523, "loop": "_looks_like_text_input type forcing", "ceiling": "len(type_values)"},
+    {"file": "compiler/discovery.py", "line": 3061, "loop": "_execute_beats_with_agent beat loop", "ceiling": "len(beats)"},
+    {"file": "compiler/discovery.py", "line": 3173, "loop": "_execute_beats_with_agent per-beat retries", "ceiling": "MAX_BEAT_RETRIES = WSDA_MAX_ATTEMPTS (default 3)"},
+    {"file": "compiler/discovery.py", "line": 3172, "loop": "_execute_beats_with_agent inner action attempts", "ceiling": "1 for typing, 3 otherwise"},
+    {"file": "compiler/discovery.py", "line": 3655, "loop": "_wait_for_visual_stability", "ceiling": "timeout_seconds (default 4.0s)"},
+    {"file": "compiler/discovery.py", "line": 3787, "loop": "_trim_clip_to_motion frame decode", "ceiling": "MAX_TRIM_FRAMES (1_000_000)"},
+    {"file": "compiler/discovery.py", "line": 3895, "loop": "_auto_fit_columns", "ceiling": "4"},
+    {"file": "compiler/discovery.py", "line": 3971, "loop": "_auto_fit_if_truncated", "ceiling": "3"},
+    {"file": "compiler/discovery.py", "line": 4040, "loop": "_results_grid_visible", "ceiling": "max_retries + 1 (default 3)"},
+    {"file": "compiler/lesson_builder.py", "line": 272, "loop": "_complete_beat_text padding", "ceiling": "20"},
+    {"file": "compiler/lesson_builder.py", "line": 1124, "loop": "validation word padding", "ceiling": "wc < 10"},
+    {"file": "compiler/lesson_builder.py", "line": 1581, "loop": "SQL validation word padding", "ceiling": "wc < 15"},
+    {"file": "compiler/lesson_builder.py", "line": 2629, "loop": "generate_script LLM retries", "ceiling": "max_attempts (default 1)"},
+    {"file": "compiler/renderer.py", "line": 696, "loop": "_build_frames", "ceiling": "len(beats)"},
+    {"file": "compiler/tts.py", "line": 209, "loop": "_synthesize_with_curl", "ceiling": "3"},
+    {"file": "compiler/vision_agent.py", "line": 234, "loop": "_ensure_frontmost", "ceiling": "max_attempts (default 3)"},
+    {"file": "compiler/vision_agent.py", "line": 471, "loop": "_assess_and_maybe_repair", "ceiling": "max_attempts (default 2)"},
+    {"file": "compiler/vision_agent.py", "line": 1410, "loop": "type_segments segment loop", "ceiling": "len(segments)"},
+    {"file": "compiler/vision_agent.py", "line": 1450, "loop": "type_segments non-recording retry", "ceiling": "2"},
+    {"file": "compiler/vision_agent.py", "line": 1512, "loop": "type_block retry", "ceiling": "2"},
+    {"file": "compiler/vision_agent.py", "line": 1584, "loop": "append_block retry", "ceiling": "2"},
+    {"file": "compiler/vision_agent.py", "line": 2198, "loop": "is_end_state_already_present line parse", "ceiling": "len(lines)"},
+    {"file": "compiler/vision_agent.py", "line": 2580, "loop": "verify_app_visible_in_frames batches", "ceiling": "len(frame_paths) in batches of 5"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +520,52 @@ def _derive_sql_history(
     history = "\n\n".join(history_parts) if history_parts else None
     new_query = _full_sql_from_video(video)
     return history, new_query
+
+
+def _expected_editor_content_for_video(
+    manifest: CourseManifest,
+    video_id: str,
+) -> Optional[str]:
+    """
+    Return the SQL text that should appear in the editor for ``video_id``.
+
+    For videos with prerequisites, the expected editor content is the commented
+    continuity history (one blank line before the current block) followed by the
+    current video's full cumulative query. For the first video it is just the
+    current block. This mirrors what the discovery harness pastes before typing.
+    """
+    video = next((v for v in manifest.videos if v.video_id == video_id), None)
+    if video is None:
+        return None
+    history, new_query = _derive_sql_history(manifest, video)
+    if not new_query:
+        return None
+    if history:
+        return f"{history}\n\n{new_query}"
+    return new_query
+
+
+def _extract_final_editor_content(
+    script_beats: List[ScriptBeat],
+) -> Optional[str]:
+    """Return the last verified editor content from the script beats, if any."""
+    for beat in reversed(script_beats):
+        observed = beat.observed_state or {}
+        content = observed.get("editor_content")
+        if content:
+            return str(content)
+        action = beat.action or {}
+        if action.get("type") in ("type_block", "append_block", "type_segments"):
+            text = action.get("text") or ""
+            if action.get("type") == "type_segments":
+                segments = action.get("segments") or []
+                text = "".join(
+                    s.get("text", "") if isinstance(s, dict) else str(s)
+                    for s in segments
+                )
+            if text:
+                return text
+    return None
 
 
 def _resolve_controlling_terminal() -> str:
@@ -1014,6 +1107,8 @@ def run_course(
     output_dir: str = "output/courses",
     min_reliability: float = 0.8,
     output_mode: Literal["auto", "hybrid", "raw"] = "auto",
+    only_video: Optional[str] = None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Run the full compiler pipeline for every video in the manifest.
@@ -1027,8 +1122,17 @@ def run_course(
       - "hybrid": raw MP4, highlights JSON, TTS audio, and reference script.
       - "raw": raw MP4 + reference script only.
 
+    ``only_video`` restricts the run to a single video_id for iteration discipline.
+
+    ``dry_run`` skips VLM/screen recording and exercises the attempt-report path.
+
     Returns a summary dict with per-video outputs and aggregate duration.
     """
+    reset_tracker()
+
+    if dry_run:
+        return _dry_run_video(manifest, output_dir=output_dir, only_video=only_video)
+
     course_output_dir = Path(output_dir) / manifest.course_id
     course_output_dir.mkdir(parents=True, exist_ok=True)
     discovery_output_dir = Path(__file__).resolve().parent / "discovery_output"
@@ -1043,6 +1147,13 @@ def run_course(
 
     # Resolve video order early for hygiene assertion and seed-DB checks.
     ordered_videos = _video_order(manifest)
+
+    # C9 iteration discipline: optionally restrict to a single video.
+    if only_video:
+        ordered_videos = [v for v in ordered_videos if v.video_id == only_video]
+        if not ordered_videos:
+            raise ValueError(f"Video {only_video!r} not found in manifest")
+        print(f"[ITERATION] restricted run to {only_video}", file=sys.stderr)
 
     # Recording-hygiene assertion: DND/Focus state and overlay-window check.
     # We use a default profile here because the first video's profile is not
@@ -1105,255 +1216,318 @@ def run_course(
     total_duration = 0.0
 
     for idx, video in enumerate(ordered_videos, start=1):
-        print(f"Video {idx}/{len(ordered_videos)}: {video.title} ... ", end="", flush=True)
-
-        graph_id = f"{manifest.course_id}_{video.video_id}"
-        db_path = video.exercise_artifact.get("db_path")
-
-        # Phase 1b: scout the environment so the script only asserts observed facts.
-        profile: Optional[EnvironmentProfile] = None
-        if db_path and video.application:
-            try:
-                profile = scout_environment(
-                    db_path=str(db_path),
-                    application=video.application,
-                    video_id=video.video_id,
-                    output_dir=discovery_output_dir,
-                    planned_queries=video.planned_queries,
-                )
-            except Exception as exc:
-                print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
-        if profile is None:
-            profile = EnvironmentProfile(
-                application=video.application,
-                app_name=video.application,
-                focus_target=video.application,
-            )
-
-        # Phase 2: generate or load the narration script.
-        if video.script_beats:
-            script_beats = [_dict_to_script_beat(b) for b in video.script_beats]
-            # Normalize legacy recipe/coordinate actions to the vision-agent format.
-            script_beats = lesson_builder._validate_script_beats(script_beats, video)
-        else:
-            script_beats = lesson_builder.generate_script(
-                video, env_map=profile.model_dump()
-            )
-
-        # C4.1: enforce sentence integrity on every script, whether generated or loaded.
-        lesson_builder._enforce_sentence_integrity(script_beats)
-        # C6: budget narration to the planned action duration so scripts fit the demo.
-        lesson_builder._enforce_word_limits(script_beats, video)
-        video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
-
-        if not script_beats:
-            print("FAILED (script generation)")
-            raise RuntimeError(f"Script generation failed for {video.video_id}")
-
-        # Phase 2b: quality gate — only hard failures stop the pipeline.
-        ok, errors, warnings = lesson_builder.validate_script(script_beats, video)
-        for warning in warnings:
-            print(f"  Warning: {warning}", file=sys.stderr)
-        if not ok:
-            print("FAILED (script quality gate)")
-            for err in errors:
-                print(f"  - {err}", file=sys.stderr)
-            raise RuntimeError(f"Script quality gate failed for {video.video_id}")
-
-        # Phase 3: execute the script beats via the vision agent and record clips.
-        opening_state_query = _derive_opening_state_query(manifest, video)
-        opening_state_history, new_query = _derive_sql_history(manifest, video)
-        if opening_state_history:
-            print(
-                f"  [CONTINUITY] {video.video_id}: pasted history length "
-                f"{len(opening_state_history)} chars, new query length {len(new_query or '')} chars",
-                file=sys.stderr,
-            )
-        discovery = EndStateDiscovery(
-            objective=video.discovery_objective,
-            application=video.application,
-            db_path=db_path,
-            opening_state_query=opening_state_query,
-            profile=profile,
-        )
-        discovery_result = lesson_builder.execute_script(
-            beats=script_beats,
-            discovery=discovery,
-            db_path=db_path,
-            opening_state_query=opening_state_query,
-            opening_state_history=opening_state_history,
-            new_query=new_query,
-        )
-
-        if not discovery_result.success:
-            print("FAILED (script execution did not reach objective)")
-            raise RuntimeError(
-                f"Script execution failed for {video.video_id}: {video.discovery_objective}"
-            )
-
-        if discovery_result.reliability_score < min_reliability:
-            print(
-                f"FAILED (reliability {discovery_result.reliability_score:.2f} < {min_reliability:.2f})"
-            )
-            raise RuntimeError(
-                f"Discovery reliability too low for {video.video_id}: "
-                f"{discovery_result.reliability_score:.2f}"
-            )
-
-        # Phase 4b: per-video adaptation log (continuity-aware rendering).
-        adapt_log_path = course_output_dir / f"{graph_id}_adaptation.jsonl"
-        with open(adapt_log_path, "w", encoding="utf-8") as adapt_f:
-            for beat in script_beats:
-                observed = beat.observed_state or {}
-                adapt_f.write(
-                    json.dumps(
-                        {
-                            "video_id": video.video_id,
-                            "beat_id": beat.beat_id,
-                            "kind": beat.kind,
-                            "text": beat.text,
-                            "opening_state_strategy": observed.get("opening_state_strategy"),
-                            "opening_state_log": observed.get("opening_state_log"),
-                            "observed_state_summary": observed.get("summary"),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-
-        # Phase 5: build the ExecutionGraph from script beats and recorded clips.
-        graph = lesson_builder.build_graph(
-            video=video,
-            beats=script_beats,
-            discovery_result=discovery_result,
-        )
-        graph.graph_id = graph_id
-        graph_store.save(graph)
-
-        # Phase 5b: quality gates before rendering.
-        gate_errors = _run_quality_gates(script_beats, discovery_result, video)
-        if gate_errors:
-            print("FAILED (render quality gates)")
-            for err in gate_errors:
-                print(f"  - {err}", file=sys.stderr)
-            raise RuntimeError(f"Render quality gates failed for {video.video_id}")
-
-        # Phase 6: Render from the script beats.
-        output_path = str(course_output_dir / f"{graph_id}.mp4")
-        render_result = renderer.render_from_script(
-            video_manifest=video,
-            script_beats=script_beats,
-            output_path=output_path,
-            output_mode=output_mode,
-            graph=graph,
-        )
-        if render_result is None:
-            print("FAILED (render from script)")
-            raise RuntimeError(f"Render from script failed for {video.video_id}")
-
-        if render_result.get("needs_reshoot"):
-            print("FAILED (recording deficit >4s/beat; re-record before TTS)")
-            print(
-                f"  timing_report: {render_result.get('timing_report_path')}",
-                file=sys.stderr,
-            )
-            raise RuntimeError(
-                f"Recording deficit for {video.video_id}; see timing_report.json"
-            )
-
-        # Post-render hard gates: whatever files the renderer claimed to produce
-        # must actually exist on disk.
-        video_path = render_result.get("video_path")
-        if not video_path or not Path(video_path).exists():
-            print("FAILED (rendered video file missing)")
-            raise RuntimeError(f"Rendered video missing for {video.video_id}")
-
-        audio_path = render_result.get("audio_path")
-        if audio_path and not Path(audio_path).exists():
-            print("FAILED (TTS audio file missing)")
-            raise RuntimeError(f"TTS audio missing for {video.video_id}")
-
-        final_path = render_result.get("final_path")
-        if final_path and not Path(final_path).exists():
-            print("FAILED (muxed final MP4 missing)")
-            raise RuntimeError(f"Muxed final MP4 missing for {video.video_id}")
-
-        if not final_path:
-            final_path = video_path
-
-        # Post-render guard: final frame of the silent MP4 should match the
-        # locked end-state screenshot. A mismatch means the renderer did not end
-        # on the discovered objective state.
-        _verify_final_frame_matches_locked_state(video_path, discovery_result)
-
-        # Whole-video off-application frame gate: sample the silent/raw MP4 and
-        # fail if any frame does not show the target application.
         try:
-            _verify_video_frames_show_app(video_path, profile=profile, interval=5.0)
-        except RuntimeError as exc:
-            print(f"FAILED (whole-video off-app frame gate): {exc}", file=sys.stderr)
-            raise
+            print(f"Video {idx}/{len(ordered_videos)}: {video.title} ... ", end="", flush=True)
 
-        # Part B acceptance gates + A4 reconciliation.
-        final_path_obj = Path(final_path)
-        audio_path_obj = (
-            Path(audio_path) if audio_path and Path(audio_path).exists() else None
-        )
-        reference_path_obj = Path(render_result.get("script_path") or "")
-        computed_metrics = compute_video_metrics(
-            final_path_obj, audio_path_obj, reference_path_obj, profile
-        )
-        renderer_summary = {
-            "duration_seconds": render_result.get("duration", 0.0),
-            "audio_duration_seconds": _media_duration(audio_path) if audio_path else 0.0,
-            "word_count": sum(len(b.text.split()) for b in script_beats),
-            "frozen_pct": 0.0,
-            "error_frames": 0,
-        }
-        discrepancies = reconcile_summary(renderer_summary, computed_metrics)
-        if discrepancies:
-            print(
-                f"FAILED (summary reconciliation): {discrepancies}",
-                file=sys.stderr,
+            graph_id = f"{manifest.course_id}_{video.video_id}"
+            db_path = video.exercise_artifact.get("db_path")
+
+            # Phase 1b: scout the environment so the script only asserts observed facts.
+            profile: Optional[EnvironmentProfile] = None
+            if db_path and video.application:
+                try:
+                    profile = scout_environment(
+                        db_path=str(db_path),
+                        application=video.application,
+                        video_id=video.video_id,
+                        output_dir=discovery_output_dir,
+                        planned_queries=video.planned_queries,
+                    )
+                except Exception as exc:
+                    print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
+            if profile is None:
+                profile = EnvironmentProfile(
+                    application=video.application,
+                    app_name=video.application,
+                    focus_target=video.application,
+                )
+
+            # Phase 2: generate or load the narration script.
+            if video.script_beats:
+                script_beats = [_dict_to_script_beat(b) for b in video.script_beats]
+                # Normalize legacy recipe/coordinate actions to the vision-agent format.
+                script_beats = lesson_builder._validate_script_beats(script_beats, video)
+            else:
+                script_beats = lesson_builder.generate_script(
+                    video, env_map=profile.model_dump()
+                )
+
+            # C4.1: enforce sentence integrity on every script, whether generated or loaded.
+            lesson_builder._enforce_sentence_integrity(script_beats)
+            # C6: budget narration to the planned action duration so scripts fit the demo.
+            lesson_builder._enforce_word_limits(script_beats, video)
+            video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
+
+            if not script_beats:
+                print("FAILED (script generation)")
+                raise RuntimeError(f"Script generation failed for {video.video_id}")
+
+            # Phase 2b: quality gate — only hard failures stop the pipeline.
+            ok, errors, warnings = lesson_builder.validate_script(script_beats, video)
+            for warning in warnings:
+                print(f"  Warning: {warning}", file=sys.stderr)
+            if not ok:
+                print("FAILED (script quality gate)")
+                for err in errors:
+                    print(f"  - {err}", file=sys.stderr)
+                raise RuntimeError(f"Script quality gate failed for {video.video_id}")
+
+            # Phase 3: execute the script beats via the vision agent and record clips.
+            opening_state_query = _derive_opening_state_query(manifest, video)
+            opening_state_history, new_query = _derive_sql_history(manifest, video)
+            if opening_state_history:
+                print(
+                    f"  [CONTINUITY] {video.video_id}: pasted history length "
+                    f"{len(opening_state_history)} chars, new query length {len(new_query or '')} chars",
+                    file=sys.stderr,
+                )
+            discovery = EndStateDiscovery(
+                objective=video.discovery_objective,
+                application=video.application,
+                db_path=db_path,
+                opening_state_query=opening_state_query,
+                profile=profile,
             )
-            raise RuntimeError(f"Summary reconciliation failed: {discrepancies}")
-
-        gate_result = run_acceptance_gates(
-            final_path_obj, audio_path_obj, reference_path_obj, profile
-        )
-        print(f"[GATES] {video.video_id}", file=sys.stderr)
-        print(format_gate_table(gate_result), file=sys.stderr)
-        if not gate_result["passed"]:
-            raise RuntimeError(
-                f"Acceptance gates failed for {video.video_id}"
+            discovery_result = lesson_builder.execute_script(
+                beats=script_beats,
+                discovery=discovery,
+                db_path=db_path,
+                opening_state_query=opening_state_query,
+                opening_state_history=opening_state_history,
+                new_query=new_query,
             )
 
-        duration = computed_metrics["duration_seconds"]
-        logging.info(
-            "Completed video %s (%s): duration=%.3fs final=%s",
-            video.video_id,
-            video.title,
-            duration,
-            final_path,
-        )
-        video_outputs.append(
-            {
-                "video_id": video.video_id,
-                "final_path": final_path,
-                "raw_path": render_result.get("video_path"),
-                "audio_path": render_result.get("audio_path"),
-                "reference_path": render_result.get("script_path"),
-                "duration": round(duration, 3),
-                "graph_id": graph_id,
-                "metrics": computed_metrics,
-                "gates": gate_result["gates"],
+            if not discovery_result.success:
+                print("FAILED (script execution did not reach objective)")
+                raise RuntimeError(
+                    f"Script execution failed for {video.video_id}: {video.discovery_objective}"
+                )
+
+            if discovery_result.reliability_score < min_reliability:
+                print(
+                    f"FAILED (reliability {discovery_result.reliability_score:.2f} < {min_reliability:.2f})"
+                )
+                raise RuntimeError(
+                    f"Discovery reliability too low for {video.video_id}: "
+                    f"{discovery_result.reliability_score:.2f}"
+                )
+
+            # C10: canonical editor-content gate.
+            canonical_ok, canonical_reason, _ = _canonical_match_editor_content(
+                manifest, video.video_id, discovery_result.final_editor_content
+            )
+            if not canonical_ok:
+                raise RuntimeError(
+                    f"Canonical editor content mismatch for {video.video_id}: {canonical_reason}"
+                )
+
+            # Phase 4b: per-video adaptation log (continuity-aware rendering).
+            adapt_log_path = course_output_dir / f"{graph_id}_adaptation.jsonl"
+            with open(adapt_log_path, "w", encoding="utf-8") as adapt_f:
+                for beat in script_beats:
+                    observed = beat.observed_state or {}
+                    adapt_f.write(
+                        json.dumps(
+                            {
+                                "video_id": video.video_id,
+                                "beat_id": beat.beat_id,
+                                "kind": beat.kind,
+                                "text": beat.text,
+                                "opening_state_strategy": observed.get("opening_state_strategy"),
+                                "opening_state_log": observed.get("opening_state_log"),
+                                "observed_state_summary": observed.get("summary"),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+
+            # Phase 5: build the ExecutionGraph from script beats and recorded clips.
+            graph = lesson_builder.build_graph(
+                video=video,
+                beats=script_beats,
+                discovery_result=discovery_result,
+            )
+            graph.graph_id = graph_id
+            graph_store.save(graph)
+
+            # Phase 5b: quality gates before rendering.
+            gate_errors = _run_quality_gates(script_beats, discovery_result, video)
+            if gate_errors:
+                print("FAILED (render quality gates)")
+                for err in gate_errors:
+                    print(f"  - {err}", file=sys.stderr)
+                raise RuntimeError(f"Render quality gates failed for {video.video_id}")
+
+            # Phase 6: Render from the script beats.
+            output_path = str(course_output_dir / f"{graph_id}.mp4")
+            render_result = renderer.render_from_script(
+                video_manifest=video,
+                script_beats=script_beats,
+                output_path=output_path,
+                output_mode=output_mode,
+                graph=graph,
+            )
+            if render_result is None:
+                print("FAILED (render from script)")
+                raise RuntimeError(f"Render from script failed for {video.video_id}")
+
+            if render_result.get("needs_reshoot"):
+                print("FAILED (recording deficit >4s/beat; re-record before TTS)")
+                print(
+                    f"  timing_report: {render_result.get('timing_report_path')}",
+                    file=sys.stderr,
+                )
+                raise RuntimeError(
+                    f"Recording deficit for {video.video_id}; see timing_report.json"
+                )
+
+            # Post-render hard gates: whatever files the renderer claimed to produce
+            # must actually exist on disk.
+            video_path = render_result.get("video_path")
+            if not video_path or not Path(video_path).exists():
+                print("FAILED (rendered video file missing)")
+                raise RuntimeError(f"Rendered video missing for {video.video_id}")
+
+            audio_path = render_result.get("audio_path")
+            if audio_path and not Path(audio_path).exists():
+                print("FAILED (TTS audio file missing)")
+                raise RuntimeError(f"TTS audio missing for {video.video_id}")
+
+            final_path = render_result.get("final_path")
+            if final_path and not Path(final_path).exists():
+                print("FAILED (muxed final MP4 missing)")
+                raise RuntimeError(f"Muxed final MP4 missing for {video.video_id}")
+
+            if not final_path:
+                final_path = video_path
+
+            # Post-render guard: final frame of the silent MP4 should match the
+            # locked end-state screenshot. A mismatch means the renderer did not end
+            # on the discovered objective state.
+            _verify_final_frame_matches_locked_state(video_path, discovery_result)
+
+            # Whole-video off-application frame gate: sample the silent/raw MP4 and
+            # fail if any frame does not show the target application.
+            try:
+                _verify_video_frames_show_app(video_path, profile=profile, interval=5.0)
+            except RuntimeError as exc:
+                print(f"FAILED (whole-video off-app frame gate): {exc}", file=sys.stderr)
+                raise
+
+            # Part B acceptance gates + A4 reconciliation.
+            final_path_obj = Path(final_path)
+            audio_path_obj = (
+                Path(audio_path) if audio_path and Path(audio_path).exists() else None
+            )
+            reference_path_obj = Path(render_result.get("script_path") or "")
+
+            # C10: canonical grounding gate — the rendered query must produce the
+            # canonical result set for this video.
+            if new_query:
+                grounding_errors = lesson_builder._assert_canonical_grounding(
+                    video.video_id, new_query, db_path
+                )
+                if grounding_errors:
+                    raise RuntimeError(
+                        f"Canonical grounding failed for {video.video_id}: "
+                        f"{'; '.join(grounding_errors)}"
+                    )
+
+            # C10: zero error-signature frames in the rendered output.
+            error_frame_count = count_error_signature_frames(final_path_obj, profile)
+            if error_frame_count > 0:
+                raise RuntimeError(
+                    f"Rendered video contains {error_frame_count} error-signature frame(s) "
+                    f"for {video.video_id}"
+                )
+
+            computed_metrics = compute_video_metrics(
+                final_path_obj, audio_path_obj, reference_path_obj, profile
+            )
+            renderer_summary = {
+                "duration_seconds": render_result.get("duration", 0.0),
+                "audio_duration_seconds": _media_duration(audio_path) if audio_path else 0.0,
+                "word_count": sum(len(b.text.split()) for b in script_beats),
+                "frozen_pct": frozen_share_percent(final_path_obj),
+                "error_frames": count_error_signature_frames(final_path_obj, profile),
             }
-        )
+            discrepancies = reconcile_summary(renderer_summary, computed_metrics)
+            if discrepancies:
+                print(
+                    f"FAILED (summary reconciliation): {discrepancies}",
+                    file=sys.stderr,
+                )
+                raise RuntimeError(f"Summary reconciliation failed: {discrepancies}")
 
-        video.estimated_duration_seconds = int(round(duration))
-        total_duration += duration
+            gate_result = run_acceptance_gates(
+                final_path_obj, audio_path_obj, reference_path_obj, profile
+            )
+            print(f"[GATES] {video.video_id}", file=sys.stderr)
+            print(format_gate_table(gate_result), file=sys.stderr)
+            if not gate_result["passed"]:
+                raise RuntimeError(
+                    f"Acceptance gates failed for {video.video_id}"
+                )
 
-        print(f"done ({duration:.1f}s)")
+            duration = computed_metrics["duration_seconds"]
+            logging.info(
+                "Completed video %s (%s): duration=%.3fs final=%s",
+                video.video_id,
+                video.title,
+                duration,
+                final_path,
+            )
+            editor_content = _extract_final_editor_content(script_beats)
+            video_outputs.append(
+                {
+                    "video_id": video.video_id,
+                    "final_path": final_path,
+                    "raw_path": render_result.get("video_path"),
+                    "audio_path": render_result.get("audio_path"),
+                    "reference_path": render_result.get("script_path"),
+                    "duration": round(duration, 3),
+                    "graph_id": graph_id,
+                    "metrics": computed_metrics,
+                    "gates": gate_result["gates"],
+                    "editor_content": editor_content,
+                }
+            )
+
+            video.estimated_duration_seconds = int(round(duration))
+            total_duration += duration
+
+            print(f"done ({duration:.1f}s)")
+
+        except Exception as exc:
+            expected = _expected_editor_content_for_video(manifest, video.video_id)
+            actual: Optional[str] = None
+            screenshot_paths: List[str] = []
+            attempts = 0
+            reliability = 0.0
+            vlm_assessment = str(exc)
+            local_discovery_result = locals().get("discovery_result")
+            if local_discovery_result is not None:
+                actual = getattr(local_discovery_result, "final_editor_content", None)
+                attempts = getattr(local_discovery_result, "attempts", 0)
+                reliability = getattr(local_discovery_result, "reliability_score", 0.0)
+                locked_state = getattr(local_discovery_result, "locked_state", None)
+                if locked_state:
+                    path = getattr(locked_state, "screenshot_path", None)
+                    if path:
+                        screenshot_paths.append(str(path))
+            _write_attempt_report(
+                manifest=manifest,
+                video_id=video.video_id,
+                error=str(exc),
+                expected_editor_content=expected,
+                actual_editor_content=actual,
+                vlm_assessment=vlm_assessment,
+                screenshot_paths=screenshot_paths,
+                attempts=attempts,
+                reliability_score=reliability,
+            )
+            raise
 
         # Close the application so the next video starts from a fresh state.
         _close_application(profile.app_name)
@@ -1374,6 +1548,149 @@ def run_course(
         "total_duration_seconds": round(total_duration, 3),
         "video_outputs": video_outputs,
     }
+
+
+def _canonical_normalize_editor_content(text: Optional[str]) -> str:
+    """
+    Normalize editor text for canonical comparison.
+
+    - rstrip each line
+    - drop trailing blank lines
+    - drop a single trailing newline
+    """
+    if text is None:
+        text = ""
+    lines = [line.rstrip() for line in text.split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _canonical_match_editor_content(
+    manifest: CourseManifest,
+    video_id: str,
+    editor_content: Optional[str],
+) -> Tuple[bool, str, Optional[str]]:
+    """
+    Compare editor content to the manifest-derived expected text using canonical
+    normalization. Returns (ok, reason, unified_diff_or_none).
+    """
+    expected = _expected_editor_content_for_video(manifest, video_id)
+    if expected is None:
+        return False, "no canonical reference for video", None
+    if editor_content is None:
+        return False, "no editor content captured", None
+    expected_norm = _canonical_normalize_editor_content(expected)
+    actual_norm = _canonical_normalize_editor_content(editor_content)
+    if expected_norm == actual_norm:
+        return True, "canonical match", None
+    diff = "\n".join(
+        difflib.unified_diff(
+            expected_norm.split("\n"),
+            actual_norm.split("\n"),
+            fromfile="expected",
+            tofile="actual",
+            lineterm="",
+        )
+    )
+    print(f"[CANONICAL] mismatch for {video_id}:\n{diff}", file=sys.stderr)
+    return False, "canonical mismatch", diff
+
+
+def _write_attempt_report(
+    manifest: CourseManifest,
+    video_id: str,
+    error: str,
+    expected_editor_content: Optional[str],
+    actual_editor_content: Optional[str],
+    vlm_assessment: Optional[str],
+    screenshot_paths: List[str],
+    attempts: int = 0,
+    reliability_score: float = 0.0,
+    output_path: Optional[str] = None,
+) -> Path:
+    """Write the C10 attempt report to output/attempt_report.json."""
+    report_path = Path(output_path or "output/attempt_report.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    _, _, diff = _canonical_match_editor_content(
+        manifest, video_id, actual_editor_content
+    )
+    if diff is None:
+        diff = ""
+    report = {
+        "success": False,
+        "course_id": manifest.course_id,
+        "video_id": video_id,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "error": error,
+        "expected_editor_content": expected_editor_content,
+        "actual_editor_content": actual_editor_content,
+        "diff": diff,
+        "vlm_assessment": vlm_assessment or "",
+        "cost_summary": get_tracker().summary(),
+        "screenshot_paths": screenshot_paths,
+        "loop_ceilings": _LOOP_CEILINGS,
+        "attempts": attempts,
+        "reliability_score": reliability_score,
+    }
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(f"[ATTEMPT REPORT] wrote {report_path}", file=sys.stderr)
+    return report_path
+
+
+def _dry_run_video(
+    manifest: CourseManifest,
+    output_dir: str = "output/courses",
+    only_video: Optional[str] = None,
+) -> dict:
+    """
+    Dry-run path: deterministic script, forced canonical mismatch, report, no API calls.
+
+    Exercises the attempt-report path without VLM calls or screen recording.
+    Always raises RuntimeError after writing the report so the CLI exits non-zero.
+    """
+    tracker = get_tracker()
+    tracker.budget_usd = min(tracker.budget_usd, 0.5)
+    print(
+        f"[DRY RUN] budget capped at ${tracker.budget_usd:.2f}; no API calls will be made",
+        file=sys.stderr,
+    )
+
+    ordered_videos = _video_order(manifest)
+    if only_video:
+        ordered_videos = [v for v in ordered_videos if v.video_id == only_video]
+    if not ordered_videos:
+        raise ValueError(f"Video {only_video!r} not found in manifest")
+
+    video = ordered_videos[0]
+    lesson_builder = LessonBuilder()
+    script_beats = lesson_builder.generate_script(video, env_map={})
+    if not script_beats:
+        raise RuntimeError(f"Script generation failed for {video.video_id}")
+
+    expected = _expected_editor_content_for_video(manifest, video.video_id)
+    actual = _extract_final_editor_content(script_beats) or ""
+    # Force a canonical mismatch so the report path is exercised.
+    actual = f"{actual}\n-- dry-run forced mismatch".strip()
+
+    error = f"[DRY RUN] forced canonical mismatch for {video.video_id}"
+    print(error, file=sys.stderr)
+
+    _write_attempt_report(
+        manifest=manifest,
+        video_id=video.video_id,
+        error=error,
+        expected_editor_content=expected,
+        actual_editor_content=actual,
+        vlm_assessment=(
+            "[DRY RUN] no VLM assessment; deterministic script path exercised "
+            "without API calls."
+        ),
+        screenshot_paths=[],
+        attempts=1,
+        reliability_score=0.0,
+    )
+    raise RuntimeError(error)
 
 
 # ---------------------------------------------------------------------------
@@ -1409,7 +1726,37 @@ def main() -> int:
         default="sql_essential_training_ch4",
         help="Course manifest to build (default: sql_essential_training_ch4)",
     )
+    parser.add_argument(
+        "--only-video",
+        default=None,
+        help="Iterate on a single video_id until it passes gates once and matches the canonical reference.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=10,
+        help="Maximum single-video iteration attempts (default: 10)",
+    )
+    parser.add_argument(
+        "--then-full-course",
+        action="store_true",
+        help="After single-video iteration succeeds, render the full course to output/course_ch4_v5/.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Dry run: deterministic script, forced canonical mismatch, attempt report, "
+            "no API calls. Also enabled by WSDA_DRY_RUN=1."
+        ),
+    )
     args = parser.parse_args()
+
+    dry_run = args.dry_run or os.environ.get("WSDA_DRY_RUN", "").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     if args.course_id == "sql_sorting_fundamentals":
         manifest = create_sql_sorting_fundamentals()
@@ -1425,12 +1772,95 @@ def main() -> int:
     else:
         manifest = existing_manifest
 
+    # C9/C10 iteration discipline: single-video loop with raw gate output per experiment.
+    if args.only_video:
+        consecutive_passes = 0
+        final_single_result: Optional[dict] = None
+        for experiment in range(1, args.max_iterations + 1):
+            print(
+                f"\n[ITERATION] experiment {experiment}/{args.max_iterations} for {args.only_video}",
+                file=sys.stderr,
+            )
+            try:
+                results = run_course(
+                    manifest,
+                    output_dir=args.output_dir,
+                    min_reliability=args.min_reliability,
+                    output_mode=args.output_mode,
+                    only_video=args.only_video,
+                    dry_run=dry_run,
+                )
+            except Exception as exc:
+                print(f"[ITERATION] experiment {experiment} failed: {exc}", file=sys.stderr)
+                consecutive_passes = 0
+                continue
+
+            if not results.get("video_outputs"):
+                print(f"[ITERATION] experiment {experiment} produced no video", file=sys.stderr)
+                consecutive_passes = 0
+                continue
+
+            video_result = results["video_outputs"][0]
+            gate_result = {
+                "passed": all(g.get("passed") for g in video_result.get("gates", [])),
+                "gates": video_result.get("gates", []),
+            }
+            canonical_ok, canonical_reason, _ = _canonical_match_editor_content(
+                manifest, args.only_video, video_result.get("editor_content")
+            )
+
+            print(f"[ITERATION] experiment {experiment} gate result:", file=sys.stderr)
+            print(format_gate_table(gate_result), file=sys.stderr)
+            print(
+                f"[ITERATION] experiment {experiment} canonical match: {canonical_ok} ({canonical_reason})",
+                file=sys.stderr,
+            )
+
+            if gate_result["passed"] and canonical_ok:
+                consecutive_passes += 1
+                final_single_result = results
+                print(
+                    f"[ITERATION] experiment {experiment} PASS ({consecutive_passes}/1)",
+                    file=sys.stderr,
+                )
+                if consecutive_passes >= 1:
+                    print(
+                        f"[ITERATION] {args.only_video} passed with canonical match.",
+                        file=sys.stderr,
+                    )
+                    break
+            else:
+                consecutive_passes = 0
+                print(
+                    f"[ITERATION] experiment {experiment} FAIL; resetting consecutive pass counter.",
+                    file=sys.stderr,
+                )
+        else:
+            print(
+                f"[ITERATION] {args.only_video} did not pass within "
+                f"{args.max_iterations} experiments.",
+                file=sys.stderr,
+            )
+            return 1
+
+        if not args.then_full_course:
+            print(json.dumps(final_single_result, indent=2))
+            return 0
+
+        # Fall through to full-course render.
+        print("[ITERATION] proceeding to full course render.", file=sys.stderr)
+
     try:
+        # C9 full course target directory.
+        output_dir = args.output_dir
+        if args.then_full_course:
+            output_dir = "output/course_ch4_v5"
         results = run_course(
             manifest,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
             min_reliability=args.min_reliability,
             output_mode=args.output_mode,
+            dry_run=dry_run,
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

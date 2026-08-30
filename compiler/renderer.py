@@ -131,6 +131,7 @@ class GraphRenderer:
                 beat_clips = tts.generate_clips(graph, Path(tmpdir))
 
                 # Pass 2: rebuild the timeline from actual audio durations.
+                # Ceiling: bounded by the number of narration beats.
                 cursor = 0.0
                 for beat, _clip_path, clip_duration in beat_clips:
                     minimum = (
@@ -320,7 +321,22 @@ class GraphRenderer:
                 print(f"Warning: TTS pass failed ({exc}); falling back to silent.", file=sys.stderr)
 
         # Silent (raw/hybrid without TTS or TTS failure fallback).
-        frames = self._build_frames_from_beats(script_beats, output_dir)
+        # Use the recorded clip durations as the master timeline so the video
+        # shows the real action pace and avoids long frozen padding caused by
+        # word-count-based timings in silent mode.
+        frame_durations, _debt_by_beat = self._synced_beat_durations(
+            graph, script_beats, audio_durations=None
+        )
+        cursor = 0.0
+        for beat in graph.narration_beats:
+            duration = frame_durations.get(beat.beat_id, MIN_STATE_DURATION)
+            beat.start_time = round(cursor, 3)
+            cursor += duration
+            beat.end_time = round(cursor, 3)
+
+        frames = self._build_frames_from_beats(
+            script_beats, output_dir, durations=frame_durations
+        )
         video_path = str(output_dir / f"{graph_id}_raw.mp4")
         self._assemble_video(frames, video_path)
 
@@ -484,11 +500,7 @@ class GraphRenderer:
             if audio_durations and beat.beat_id in audio_durations:
                 audio_dur = audio_durations[beat.beat_id]
             clip_dur: Optional[float] = None
-            if (
-                beat.kind == "demo"
-                and beat.video_clip_path
-                and Path(beat.video_clip_path).exists()
-            ):
+            if beat.video_clip_path and Path(beat.video_clip_path).exists():
                 clip_dur = self._media_duration(beat.video_clip_path)
 
             if clip_dur is not None:
@@ -520,7 +532,7 @@ class GraphRenderer:
         """Write a JSON report of per-beat timing debt."""
         beat_clip_durations: Dict[str, float] = {}
         for beat in beats:
-            if beat.kind == "demo" and beat.video_clip_path and Path(beat.video_clip_path).exists():
+            if beat.video_clip_path and Path(beat.video_clip_path).exists():
                 try:
                     import subprocess
 
@@ -956,6 +968,7 @@ class GraphRenderer:
         # Group consecutive frames with the same state_id. If any frame in the
         # group has a recorded video clip, prefer it so the action is shown.
         grouped: List[Dict[str, Any]] = []
+        # Ceiling: bounded by the number of assembled frames.
         for frame in frames:
             if grouped and grouped[-1]["state_id"] == frame["state_id"]:
                 grouped[-1]["duration"] += frame["duration"]
@@ -1213,7 +1226,9 @@ class GraphRenderer:
         trim recorded actions either.
         """
         frames: List[Dict[str, Any]] = []
-        demo_beats = [b for b in beats if b.kind == "demo"]
+        clip_beats = [
+            b for b in beats if b.video_clip_path and Path(b.video_clip_path).exists()
+        ]
         current_still: Optional[Path] = None
 
         for i, beat in enumerate(beats):
@@ -1224,57 +1239,38 @@ class GraphRenderer:
                     MIN_EDGE_DURATION if beat.kind == "demo" else MIN_STATE_DURATION
                 )
                 duration = max(len(beat.text.split()) / WORDS_PER_SECOND, minimum)
-                if (
-                    beat.kind == "demo"
-                    and beat.video_clip_path
-                    and Path(beat.video_clip_path).exists()
-                ):
+                if beat.video_clip_path and Path(beat.video_clip_path).exists():
                     clip_dur = self._media_duration(beat.video_clip_path)
                     if clip_dur:
                         duration = max(duration, clip_dur)
 
-            if beat.kind == "demo":
-                if beat.video_clip_path and Path(beat.video_clip_path).exists():
-                    frames.append(
-                        {
-                            "state_id": beat.beat_id,
-                            "media_path": beat.video_clip_path,
-                            "duration": duration,
-                            "media_type": "video",
-                        }
-                    )
-                    current_still = self._extract_last_frame(
-                        beat.video_clip_path,
-                        output_dir / f"{beat.beat_id}_last.png",
-                    )
-                else:
-                    # Missing clip: hold on the previous still or blank.
-                    still = current_still or self._blank_frame(
-                        output_dir / "blank_frame.png"
-                    )
-                    frames.append(
-                        {
-                            "state_id": beat.beat_id,
-                            "media_path": str(still.resolve()),
-                            "duration": duration,
-                            "media_type": "image",
-                        }
-                    )
+            if beat.video_clip_path and Path(beat.video_clip_path).exists():
+                frames.append(
+                    {
+                        "state_id": beat.beat_id,
+                        "media_path": beat.video_clip_path,
+                        "duration": duration,
+                        "media_type": "video",
+                    }
+                )
+                current_still = self._extract_last_frame(
+                    beat.video_clip_path,
+                    output_dir / f"{beat.beat_id}_last.png",
+                )
             else:
-                # Non-demo beat: hold on the nearest demo frame.
-                if current_still is None and demo_beats:
-                    first_demo = demo_beats[0]
-                    if first_demo.video_clip_path:
-                        current_still = self._extract_first_frame(
-                            first_demo.video_clip_path,
-                            output_dir / f"{first_demo.beat_id}_first.png",
-                        )
+                # Missing clip: hold on the nearest recorded frame or blank.
+                if current_still is None and clip_beats:
+                    first_clip = clip_beats[0]
+                    current_still = self._extract_first_frame(
+                        first_clip.video_clip_path,
+                        output_dir / f"{first_clip.beat_id}_first.png",
+                    )
                 still = current_still or self._blank_frame(
                     output_dir / "blank_frame.png"
                 )
                 frames.append(
                     {
-                        "state_id": f"state_{beat.beat_id}",
+                        "state_id": beat.beat_id,
                         "media_path": str(still.resolve()),
                         "duration": duration,
                         "media_type": "image",
