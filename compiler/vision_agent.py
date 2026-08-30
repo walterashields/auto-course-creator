@@ -2588,11 +2588,18 @@ end tell
         print(f"  [EMPHASIS] move to '{description}' at ({lx}, {ly})", file=sys.stderr)
         pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
         time.sleep(0.2)
-        if select and "highlight" in self.profile.action_vocabulary:
+        if select:
+            # C11: drag-select a short region so the recorded clip contains
+            # visible, narrated motion instead of a static cursor hold. This is
+            # genuine emphasis tied to the element, not idle motion.
+            sw, _ = pyautogui.size()
+            end_x = min(lx + 80, sw - 1)
             pyautogui.mouseDown()
             time.sleep(0.1)
-            pyautogui.mouseUp()
+            pyautogui.moveTo(end_x, ly, duration=0.3, tween=pyautogui.easeInOutQuad)
             time.sleep(0.1)
+            pyautogui.mouseUp()
+            time.sleep(0.2)
         return True
 
     def perform_emphasis_actions(self, beat: ScriptBeat) -> bool:
@@ -2638,7 +2645,7 @@ end tell
 
         ok = True
         for description in descriptions[:3]:  # Cap at 3 emphasis actions per beat.
-            if not self.emphasize_element(description, select=False):
+            if not self.emphasize_element(description, select=True):
                 ok = False
             time.sleep(0.3)
         return ok

@@ -3310,9 +3310,12 @@ class EndStateDiscovery:
                             if action.get("type") == "run_query":
                                 agent.scroll_result_pane_top()
                             agent.dismiss_transient_ui()
-                        elif beat_ok and beat.kind in ("state", "explain", "concept"):
-                            # Part E: fill explain/state beats with real cursor motion
-                            # so the clip is not a static hold.
+                        elif beat_ok and beat.kind in (
+                            "opening", "state", "explain", "concept", "validation", "close"
+                        ):
+                            # Part E: fill non-demo beats with real cursor motion so the
+                            # clip is not a static hold. This includes opening/close beats
+                            # which otherwise produce long still-image segments.
                             print(
                                 f"  [EMPHASIS] {beat.beat_id}: performing emphasis actions",
                                 file=sys.stderr,

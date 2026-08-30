@@ -76,6 +76,8 @@ class NarrationBeat(BaseModel):
     end_time: float = 0.0
     # If TTS is used, the rendered audio file path
     audio_path: Optional[str] = None
+    # Path to a recorded motion clip for this beat (state/opening/close/explain)
+    video_clip_path: Optional[str] = None
     # Structured observed UI state summary captured during execution
     observed_state: Optional[dict] = None
     # True when this beat should be merged into the previous beat by the renderer

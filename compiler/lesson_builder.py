@@ -3429,11 +3429,8 @@ Return ONLY a JSON array of beats like:
                 )
                 beat.text = rewritten
                 beat.kind = target_kind  # type: ignore[assignment]
-                # Only drop the recorded clip when converting to a non-demo kind.
-                # Demo beats must keep their clips so the renderer can play the
-                # recorded action and end on the discovered state.
-                if target_kind != "demo":
-                    beat.video_clip_path = None
+                # C11: keep recorded motion clips for all beat kinds so the renderer
+                # can play real cursor movement instead of frozen screenshot holds.
         except Exception as exc:
             print(f"Warning: could not adapt {beat.beat_id}: {exc}", file=sys.stderr)
 
@@ -3776,6 +3773,7 @@ Return ONLY a JSON array of beats like:
                     word_count=len(beat.text.split()),
                     start_time=0.0,
                     end_time=0.0,
+                    video_clip_path=beat.video_clip_path,
                     observed_state=beat.observed_state,
                 )
             )

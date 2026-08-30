@@ -704,28 +704,42 @@ class GraphRenderer:
 
             if beat.attaches_to == "state":
                 state = self._resolve_state(graph, beat.target_id)
-                image_path = Path(state.screenshot_path)
 
-                # If the previous beat is an edge with click coordinates, burn a
-                # highlight onto this state's frame (the frame shown *during* the
-                # state narration).
-                if highlight and i > 0 and beats[i - 1].attaches_to == "edge":
-                    prev_edge = self._resolve_edge(graph, beats[i - 1].target_id)
-                    image_path = self._maybe_highlight(
-                        image_path,
-                        prev_edge.target,
-                        state.state_id,
-                        state.platform_snapshot,
+                # C11: prefer a recorded motion clip for state beats so the renderer
+                # never holds a static screenshot during long narration. Fall back to
+                # the screenshot only when no clip exists.
+                if beat.video_clip_path and Path(beat.video_clip_path).exists():
+                    frames.append(
+                        {
+                            "state_id": state.state_id,
+                            "media_path": beat.video_clip_path,
+                            "duration": duration,
+                            "media_type": "video",
+                        }
                     )
+                else:
+                    image_path = Path(state.screenshot_path)
 
-                frames.append(
-                    {
-                        "state_id": state.state_id,
-                        "media_path": str(image_path.resolve()),
-                        "duration": duration,
-                        "media_type": "image",
-                    }
-                )
+                    # If the previous beat is an edge with click coordinates, burn a
+                    # highlight onto this state's frame (the frame shown *during* the
+                    # state narration).
+                    if highlight and i > 0 and beats[i - 1].attaches_to == "edge":
+                        prev_edge = self._resolve_edge(graph, beats[i - 1].target_id)
+                        image_path = self._maybe_highlight(
+                            image_path,
+                            prev_edge.target,
+                            state.state_id,
+                            state.platform_snapshot,
+                        )
+
+                    frames.append(
+                        {
+                            "state_id": state.state_id,
+                            "media_path": str(image_path.resolve()),
+                            "duration": duration,
+                            "media_type": "image",
+                        }
+                    )
 
             elif beat.attaches_to == "edge":
                 edge = self._resolve_edge(graph, beat.target_id)
