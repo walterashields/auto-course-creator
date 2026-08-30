@@ -3472,8 +3472,12 @@ class EndStateDiscovery:
             print(f"Warning: end-state tidy check failed: {exc}", file=sys.stderr)
 
         # C10: authoritative editor read-back for canonical comparison.
+        # Focus the editor first; the last action (e.g. clicking Execute) may have
+        # moved keyboard focus to a button or the result pane, so a focus-less read
+        # can return a non-editor value such as a button label.
         final_editor_content = ""
         try:
+            agent._focus_editor()
             final_editor_content = agent._read_editor_content(focus=False) or ""
         except Exception as exc:
             print(f"Warning: could not read final editor content: {exc}", file=sys.stderr)
