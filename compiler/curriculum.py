@@ -1259,10 +1259,14 @@ def run_course(
                 except Exception as exc:
                     print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
             if profile is None:
+                # Map canonical application ids to human-facing process/window names.
+                app_name = video.application
+                if video.application == "db_browser_sqlite":
+                    app_name = "DB Browser for SQLite"
                 profile = EnvironmentProfile(
                     application=video.application,
-                    app_name=video.application,
-                    focus_target=video.application,
+                    app_name=app_name,
+                    focus_target=app_name,
                 )
 
             # Phase 2: generate or load the narration script.
