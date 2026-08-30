@@ -2589,15 +2589,16 @@ end tell
         pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
         time.sleep(0.2)
         if select:
-            # C11: drag-select a short region so the recorded clip contains
-            # visible, narrated motion instead of a static cursor hold. This is
-            # genuine emphasis tied to the element, not idle motion.
+            # C11: drag-select across a narrated region so the recorded clip
+            # contains visible, sustained motion instead of a static cursor hold.
+            # A longer drag (up to ~300 px) selects a real line/row and produces
+            # enough frame-to-frame difference to pass the frozen-frame gate.
             sw, _ = pyautogui.size()
-            end_x = min(lx + 80, sw - 1)
+            end_x = min(lx + 300, sw - 1)
             pyautogui.mouseDown()
-            time.sleep(0.1)
-            pyautogui.moveTo(end_x, ly, duration=0.3, tween=pyautogui.easeInOutQuad)
-            time.sleep(0.1)
+            time.sleep(0.05)
+            pyautogui.moveTo(end_x, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+            time.sleep(0.05)
             pyautogui.mouseUp()
             time.sleep(0.2)
         return True

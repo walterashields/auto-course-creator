@@ -3760,14 +3760,16 @@ class EndStateDiscovery:
             time.sleep(interval_seconds)
 
     def _trim_clip_to_motion(self, clip_path: Path) -> None:
-        """Trim static head/tail from a recorded beat clip, keeping the action window.
+        """Trim dead air from a recorded beat clip, keeping motion windows.
 
-        C9: conservative reference-based trim. Each frame is compared to the
-        clip's first frame (to find when content leaves the static opening) and
-        to the clip's last frame (to find when content last differed from the
-        static closing). The full content-change window is preserved plus a
-        small pad. This removes pre-focus and post-stability dead air without
-        truncating the progressive line-paste composition the narration tracks.
+        C11: scene-based trim. Consecutive sampled frames are compared and
+        frames with meaningful visual change are clustered into motion events.
+        Around each event we keep a short narrated window (before/after) and
+        drop the static middle. This removes the long static gaps created by
+        accessibility read-backs, VLM assessments, and stability waits while
+        preserving every visible action (line paste, drag-select emphasis,
+        query execution). If no motion is detected, fall back to a short middle
+        slice so the beat still has a frame to display.
         """
         clip_path = Path(clip_path)
         if not clip_path.exists():
@@ -3812,54 +3814,112 @@ class EndStateDiscovery:
             logger.info("Trim skipped: not enough samples: %s", clip_path.name)
             return
 
-        def _mean_diff(a: np.ndarray, b: np.ndarray) -> float:
+        def _mse(a: np.ndarray, b: np.ndarray) -> float:
+            return float(np.mean((a.astype(np.float32) - b.astype(np.float32)) ** 2))
+
+        def _mad(a: np.ndarray, b: np.ndarray) -> float:
             return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))
 
-        head_ref = samples[0][1]
-        tail_ref = samples[-1][1]
+        # Two-threshold motion detection:
+        #  - ALL_MOTION_THRESHOLD (low) detects continuous small motion so we can
+        #    keep genuinely moving clips (spinners, long cursor drags) whole.
+        #  - STRONG_MOTION_THRESHOLD (the Part B frozen-frame gate) detects the
+        #    content-change events we want to preserve; static gaps around them
+        #    are dropped so the final clip has no frozen holds.
+        ALL_MOTION_THRESHOLD = 1.5
+        STRONG_MOTION_THRESHOLD = 0.5
+        KEEP_BEFORE_SECONDS = 0.35
+        KEEP_AFTER_SECONDS = 0.35
+        EVENT_GAP_SECONDS = 0.5
 
-        # Find the first frame that departs from the static opening and the
-        # last frame that departs from the static closing. The window between
-        # them (plus pad) is the action we want to keep.
-        first_change_idx: Optional[int] = None
-        last_change_idx: Optional[int] = None
-        for idx, (_frame_idx, gray) in enumerate(samples):
-            if first_change_idx is None and _mean_diff(gray, head_ref) >= MOTION_DIFF_THRESHOLD:
-                first_change_idx = idx
-            if _mean_diff(gray, tail_ref) >= MOTION_DIFF_THRESHOLD:
-                last_change_idx = idx
+        all_change_times: List[float] = []
+        strong_change_times: List[float] = []
+        for idx in range(1, len(samples)):
+            prev_gray = samples[idx - 1][1]
+            curr_gray = samples[idx][1]
+            mse = _mse(curr_gray, prev_gray)
+            t = samples[idx][0] / fps
+            if mse >= ALL_MOTION_THRESHOLD:
+                all_change_times.append(t)
+            if mse >= STRONG_MOTION_THRESHOLD:
+                strong_change_times.append(t)
 
-        if first_change_idx is None or last_change_idx is None:
-            # No detectable content change: keep a short middle slice.
-            keep_samples = max(
-                1, int(round(NO_MOTION_KEEP_SECONDS * fps / sample_interval))
+        segments: List[Tuple[float, float]] = []
+        # If motion is effectively continuous across the clip, keep it whole so
+        # genuine sustained motion is not truncated.
+        if all_change_times:
+            motion_span = all_change_times[-1] - all_change_times[0]
+            motion_ratio = len(all_change_times) / (len(samples) - 1)
+            if (
+                motion_span / max(original_duration, 0.001) >= 0.60
+                and motion_ratio >= 0.65
+            ):
+                segments = [(0.0, original_duration)]
+
+        if not segments and strong_change_times:
+            # Cluster strong change times into discrete motion events.
+            event_start = strong_change_times[0]
+            event_end = strong_change_times[0]
+            for t in strong_change_times[1:]:
+                if t - event_end <= EVENT_GAP_SECONDS:
+                    event_end = t
+                else:
+                    segments.append(
+                        (
+                            max(0.0, event_start - KEEP_BEFORE_SECONDS),
+                            min(original_duration, event_end + KEEP_AFTER_SECONDS),
+                        )
+                    )
+                    event_start = t
+                    event_end = t
+            segments.append(
+                (
+                    max(0.0, event_start - KEEP_BEFORE_SECONDS),
+                    min(original_duration, event_end + KEEP_AFTER_SECONDS),
+                )
             )
-            half = keep_samples // 2
-            mid_sample = len(samples) // 2
-            first_change_idx = max(0, mid_sample - half)
-            last_change_idx = min(len(samples) - 1, mid_sample + half)
 
-        pad_samples = max(1, int(round(MOTION_PAD_SECONDS * fps / sample_interval)))
-        first_sample = max(0, first_change_idx - pad_samples)
-        last_sample = min(len(samples) - 1, last_change_idx + pad_samples)
+            # Merge overlapping/adjacent segments.
+            segments.sort(key=lambda x: x[0])
+            merged: List[Tuple[float, float]] = []
+            for seg in segments:
+                if not merged or seg[0] > merged[-1][1] + 0.05:
+                    merged.append(list(seg))  # type: ignore[arg-type]
+                else:
+                    merged[-1][1] = max(merged[-1][1], seg[1])
+            segments = [(s, e) for s, e in merged]
 
-        start_frame = samples[first_sample][0]
-        end_frame = samples[last_sample][0]
-        start_sec = start_frame / fps
-        # Add one sample interval to the end to include the sampled frame itself.
-        end_sec = min(original_duration, (end_frame / fps) + (sample_interval / fps))
-        duration = end_sec - start_sec
+        if not segments:
+            # No detectable content change: keep a short middle slice.
+            mid = original_duration / 2.0
+            half = NO_MOTION_KEEP_SECONDS / 2.0
+            segments = [
+                (max(0.0, mid - half), min(original_duration, mid + half))
+            ]
 
-        if duration < MIN_CLIP_DURATION_SECONDS:
-            end_sec = min(original_duration, start_sec + MIN_CLIP_DURATION_SECONDS)
-            duration = end_sec - start_sec
-            if duration < MIN_CLIP_DURATION_SECONDS and start_sec > 0:
-                start_sec = max(0.0, end_sec - MIN_CLIP_DURATION_SECONDS)
-                duration = end_sec - start_sec
+        total_kept = sum(e - s for s, e in segments)
+        if total_kept < MIN_CLIP_DURATION_SECONDS:
+            # Pad the last segment forward (or the first backward) to reach the
+            # minimum without adding unrelated content.
+            if segments:
+                s, e = segments[-1]
+                pad = MIN_CLIP_DURATION_SECONDS - total_kept
+                new_e = min(original_duration, e + pad)
+                added = new_e - e
+                segments[-1] = (s, new_e)
+                if added < pad and len(segments) > 1:
+                    s0, e0 = segments[0]
+                    segments[0] = (max(0.0, s0 - (pad - added)), e0)
 
-        if duration <= 0:
-            logger.warning("Trim skipped: computed duration <= 0 for %s", clip_path)
+        if not segments:
+            logger.warning("Trim skipped: no segments to keep for %s", clip_path.name)
             return
+
+        # Build an FFmpeg select expression that keeps the chosen time ranges.
+        parts = []
+        for s, e in segments:
+            parts.append(f"between(t,{s:.6f},{e:.6f})")
+        select_expr = "+".join(parts)
 
         temp_path = clip_path.with_suffix(".trimmed.mp4")
         try:
@@ -3867,12 +3927,10 @@ class EndStateDiscovery:
                 [
                     "ffmpeg",
                     "-y",
-                    "-ss",
-                    str(start_sec),
                     "-i",
                     str(clip_path),
-                    "-t",
-                    str(duration),
+                    "-vf",
+                    f"select='{select_expr}',setpts=N/FRAME_RATE/TB",
                     "-c:v",
                     "libx264",
                     "-pix_fmt",
@@ -3900,12 +3958,11 @@ class EndStateDiscovery:
 
         shutil.move(str(temp_path), str(clip_path))
         logger.info(
-            "Trimmed %s: original=%.2fs -> trimmed=%.2fs (start=%.2f, duration=%.2f)",
+            "Trimmed %s: original=%.2fs -> trimmed=%.2fs (%d motion segments)",
             clip_path.name,
             original_duration,
-            duration,
-            start_sec,
-            duration,
+            total_kept,
+            len(segments),
         )
 
     def _launch_app(self, db_path: Path) -> None:
