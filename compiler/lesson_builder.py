@@ -3324,6 +3324,12 @@ Return ONLY a JSON array of beats like:
                 if beat.video_clip_path:
                     prev.video_clip_path = beat.video_clip_path
                     prev.action = beat.action or prev.action
+                # C11: preserve the verified editor content from the merged beat
+                # so the final canonical compare sees the cumulative typed text.
+                if beat.observed_state:
+                    if prev.observed_state is None:
+                        prev.observed_state = {}
+                    prev.observed_state.update(beat.observed_state)
                 print(f"  Merged {beat.beat_id} into {prev.beat_id}", file=sys.stderr)
                 continue
             collapsed.append(beat)
