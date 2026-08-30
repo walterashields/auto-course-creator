@@ -328,7 +328,9 @@ def reconcile_summary(
     """
     if tolerances is None:
         tolerances = {
-            "duration_seconds": 0.5,
+            # Looped clip padding can shift the final muxed duration by a few
+            # seconds relative to the renderer's planned sum.
+            "duration_seconds": 3.0,
             "audio_duration_seconds": 0.5,
             "word_count": 5,
             "frozen_pct": 1.0,

@@ -4,21 +4,21 @@
   "application": "db_browser_sqlite",
   "end_state": {
     "state_id": "state_005",
-    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_62f8d9932980.png",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_45f88d04383e.png",
     "timestamp": 0.0,
     "application": "db_browser_sqlite",
     "platform_snapshot": {
       "api_width_px": 1568,
       "api_height_px": 1019,
       "scale_to_logical": 0.9375,
-      "screenshot_sha256": "741be1d537f4fd133bf44d5f8e993cf29b911b0493843bf3e91574f4e6239b5d",
-      "run_duration_seconds": 413.385
+      "screenshot_sha256": "5f928085201bc77444689785947f9094525b0775c86fbc1cb038167898e4f61e",
+      "run_duration_seconds": 392.427
     },
     "visual_summary": "Open the Execute SQL tab, type the commented query SELECT FirstName, LastName, Email FROM Customer, run it with F5, and show the result pane with the contact list"
   },
   "start_state": {
     "state_id": "state_000",
-    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_75645e4c_start.png",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_29b7ec02_start.png",
     "timestamp": 0.0,
     "application": "db_browser_sqlite",
     "platform_snapshot": {},
@@ -27,7 +27,7 @@
   "states": [
     {
       "state_id": "state_001",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_75645e4c_state_001.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_29b7ec02_state_001.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -35,7 +35,7 @@
     },
     {
       "state_id": "state_002",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_75645e4c_state_002.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_29b7ec02_state_002.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -43,7 +43,7 @@
     },
     {
       "state_id": "state_003",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_75645e4c_state_003.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_29b7ec02_state_003.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -51,7 +51,7 @@
     },
     {
       "state_id": "state_004",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_75645e4c_state_004.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_29b7ec02_state_004.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -67,7 +67,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/092d9ea36edc_beat_007.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/6af2fec03a76_beat_005.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -81,7 +81,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/092d9ea36edc_beat_006.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/6af2fec03a76_beat_006.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -95,7 +95,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/092d9ea36edc_beat_007.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/6af2fec03a76_beat_007.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -109,7 +109,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/092d9ea36edc_beat_008.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/6af2fec03a76_beat_008.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -164,7 +164,7 @@
           "tabs": 3,
           "buttons": 9
         },
-        "summary": "DB Browser for SQLite is open on the Execute SQL tab with an empty query editor and no results displayed.",
+        "summary": "The Execute SQL tab is active with an empty query editor and no results displayed yet.",
         "opening_state_strategy": "established",
         "opening_state_log": "[OPENING STATE] established: opening state describes an empty editor; editor cleared"
       },
@@ -187,9 +187,9 @@
       "beat_id": "beat_004",
       "attaches_to": "state",
       "target_id": "state_000",
-      "text": "Right now the editor is empty and the result pane below it is blank. When we finish, the editor will hold a comment block followed by a formatted SELECT statement, and the result pane will show the customer contact list.",
+      "text": "Right now the editor is empty and the result pane below it is blank. When we finish, the editor will hold a comment block followed by a formatted SELECT statement, and the result pane will show the customer contact list. We type a comment header that records who created the query, when it was written, and what problem it solves. We type the SELECT clause, listing the columns FirstName, LastName, and Email. The interface updates to show the change. We type FROM Customer to name the data source for the columns. The interface updates to show the change.",
       "tts_text": null,
-      "word_count": 40,
+      "word_count": 98,
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
@@ -201,9 +201,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 9
+          "buttons": 10
         },
-        "summary": "DB Browser for SQLite is open on the Execute SQL tab with an empty query editor and no results displayed."
+        "summary": "The DB Browser for SQLite application is open on the Execute SQL tab with an empty query editor and no results displayed."
       },
       "merge": false
     },
@@ -211,9 +211,9 @@
       "beat_id": "beat_005",
       "attaches_to": "edge",
       "target_id": "edge_001",
-      "text": "We type a comment header that records who created the query, when it was written, and what problem it solves. We type the SELECT clause, listing the columns FirstName, LastName, and Email. The interface updates to show the change. We type FROM Customer to name the data source for the columns. The interface updates to show the change.",
+      "text": "We type a comment header that records who created the query, when it was written, and what problem it solves.",
       "tts_text": null,
-      "word_count": 58,
+      "word_count": 20,
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
@@ -227,7 +227,7 @@
           "tabs": 3,
           "buttons": 9
         },
-        "summary": "The Execute SQL tab is active showing a SQL comment header describing the database, with empty result panels below."
+        "summary": "The Execute SQL tab is active showing a SQL comment header with metadata, and no query results are displayed yet."
       },
       "merge": false
     },
@@ -249,9 +249,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "toolbar_buttons": 9
+          "buttons": 8
         },
-        "summary": "The Execute SQL tab is active showing an unfinished SELECT query (missing FROM clause) with no results yet displayed in the output pane."
+        "summary": "The Execute SQL tab is active showing a query with a comment header and a SELECT statement for FirstName, LastName, and Email, with no results yet displayed."
       },
       "merge": false
     },
@@ -273,9 +273,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 9
+          "buttons": 10
         },
-        "summary": "The Execute SQL tab is active showing a query selecting FirstName, LastName, and Email from the Customer table, with no results displayed yet."
+        "summary": "The Execute SQL tab is active, showing a SQL script that selects FirstName, LastName, and Email from the Customer table, with no results displayed yet."
       },
       "merge": false
     },
@@ -301,9 +301,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 9
+          "buttons": 12
         },
-        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with results displaying 60 rows including customers like Luís Gonçalves and Leonie Köhler."
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with 60 rows returned and results displayed in a grid below."
       },
       "merge": false
     },
@@ -331,7 +331,7 @@
           "tabs": 3,
           "buttons": 10
         },
-        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with results displayed below and a log confirming 60 rows returned successfully."
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with 60 rows returned and results displayed below."
       },
       "merge": false
     },
