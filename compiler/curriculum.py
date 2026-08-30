@@ -599,6 +599,13 @@ def _resolve_controlling_terminal() -> str:
         return "Terminal"
 
 
+def _application_to_app_name(application: str) -> str:
+    """Map canonical application ids to the human-facing process/window name."""
+    if application == "db_browser_sqlite":
+        return "DB Browser for SQLite"
+    return application
+
+
 def _query_dnd_state() -> str:
     """Return the current Do Not Disturb state as a normalized string.
 
@@ -1184,8 +1191,12 @@ def run_course(
     _assert_recording_hygiene(
         EnvironmentProfile(
             application=ordered_videos[0].application if ordered_videos else "unknown",
-            app_name=ordered_videos[0].application if ordered_videos else "unknown",
-            focus_target=ordered_videos[0].application if ordered_videos else "unknown",
+            app_name=_application_to_app_name(
+                ordered_videos[0].application if ordered_videos else "unknown"
+            ),
+            focus_target=_application_to_app_name(
+                ordered_videos[0].application if ordered_videos else "unknown"
+            ),
         )
     )
     for video in ordered_videos:
@@ -1259,10 +1270,7 @@ def run_course(
                 except Exception as exc:
                     print(f"Warning: environment scout failed: {exc}", file=sys.stderr)
             if profile is None:
-                # Map canonical application ids to human-facing process/window names.
-                app_name = video.application
-                if video.application == "db_browser_sqlite":
-                    app_name = "DB Browser for SQLite"
+                app_name = _application_to_app_name(video.application)
                 profile = EnvironmentProfile(
                     application=video.application,
                     app_name=app_name,
