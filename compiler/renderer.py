@@ -261,15 +261,10 @@ class GraphRenderer:
                     # long as its narration AND its recorded action clip, so
                     # no recorded content is ever trimmed and audio/picture
                     # share the same clock.
-                    frame_durations, debt_by_beat = self._synced_beat_durations(
+                    frame_durations, debt_by_beat, timing_details = self._synced_beat_durations(
                         graph, script_beats, audio_durations
                     )
-                    cursor = 0.0
-                    for beat in graph.narration_beats:
-                        duration = frame_durations.get(beat.beat_id, MIN_STATE_DURATION)
-                        beat.start_time = round(cursor, 3)
-                        cursor += duration
-                        beat.end_time = round(cursor, 3)
+                    self._print_timing_table(graph_id, timing_details)
 
                     # Write timing report and flag videos that exceed the pad cap.
                     timing_report_path = output_dir / f"{graph_id}_timing_report.json"
@@ -278,6 +273,11 @@ class GraphRenderer:
                     )
                     if debt_by_beat:
                         graph.render_status = "NEEDS_RESHOOT"
+                        raise RuntimeError(
+                            f"NEEDS_RESHOOT: {len(debt_by_beat)} beat(s) exceed the "
+                            f"{MAX_CLONE_PAD_SECONDS}s padding cap. See "
+                            f"{timing_report_path.resolve()}"
+                        )
 
                     # Persist the re-timed graph before rendering.
                     store = GraphStore()
@@ -317,6 +317,10 @@ class GraphRenderer:
                         result["needs_reshoot"] = True
                         result["timing_debt_seconds"] = round(sum(debt_by_beat.values()), 3)
                     return result
+            except RuntimeError as exc:
+                if "NEEDS_RESHOOT" in str(exc):
+                    raise
+                print(f"Warning: TTS pass failed ({exc}); falling back to silent.", file=sys.stderr)
             except Exception as exc:
                 print(f"Warning: TTS pass failed ({exc}); falling back to silent.", file=sys.stderr)
 
@@ -324,7 +328,7 @@ class GraphRenderer:
         # Use the recorded clip durations as the master timeline so the video
         # shows the real action pace and avoids long frozen padding caused by
         # word-count-based timings in silent mode.
-        frame_durations, _debt_by_beat = self._synced_beat_durations(
+        frame_durations, _debt_by_beat, _timing_details = self._synced_beat_durations(
             graph, script_beats, audio_durations=None
         )
         cursor = 0.0
@@ -470,7 +474,7 @@ class GraphRenderer:
         graph: ExecutionGraph,
         beats: List[ScriptBeat],
         audio_durations: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, float]:
+    ) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, Dict[str, Any]]]:
         """
         Compute the final on-screen duration for every script beat.
 
@@ -483,7 +487,11 @@ class GraphRenderer:
             clip + MAX_CLONE_PAD_SECONDS so silent padding never exceeds 4s.
           - Clips are NEVER trimmed to fit narration.
 
-        Returns ({beat_id: seconds}, {beat_id: timing_debt_seconds}).
+        Returns (
+            {beat_id: seconds},
+            {beat_id: timing_debt_seconds},
+            {beat_id: timing_detail_dict},
+        ).
         """
         minimums: Dict[str, float] = {
             nb.beat_id: (
@@ -494,6 +502,7 @@ class GraphRenderer:
 
         durations: Dict[str, float] = {}
         debt_by_beat: Dict[str, float] = {}
+        details: Dict[str, Dict[str, Any]] = {}
         for beat in beats:
             min_dur = minimums.get(beat.beat_id, MIN_STATE_DURATION)
             audio_dur: Optional[float] = None
@@ -503,6 +512,13 @@ class GraphRenderer:
             if beat.video_clip_path and Path(beat.video_clip_path).exists():
                 clip_dur = self._media_duration(beat.video_clip_path)
 
+            detail: Dict[str, Any] = {
+                "clip_dur": round(clip_dur, 3) if clip_dur is not None else 0.0,
+                "tts_dur": round(audio_dur, 3) if audio_dur is not None else 0.0,
+                "pad_applied": 0.0,
+                "action": "no_media",
+            }
+
             if clip_dur is not None:
                 # Never trim the clip; base duration includes the full clip.
                 base = max(min_dur, clip_dur)
@@ -510,16 +526,46 @@ class GraphRenderer:
                     allowed = clip_dur + MAX_CLONE_PAD_SECONDS
                     if audio_dur > allowed:
                         debt_by_beat[beat.beat_id] = round(audio_dur - allowed, 3)
+                        detail["pad_applied"] = round(MAX_CLONE_PAD_SECONDS, 3)
+                        detail["action"] = "NEEDS_RESHOOT"
+                    elif audio_dur > clip_dur:
+                        detail["pad_applied"] = round(audio_dur - clip_dur, 3)
+                        detail["action"] = "pad"
+                    elif audio_dur == clip_dur:
+                        detail["action"] = "exact"
+                    else:
+                        detail["action"] = "keep_clip"
                     duration = max(base, min(audio_dur, allowed))
                 else:
+                    detail["action"] = "clip_only"
                     duration = base
             elif audio_dur is not None:
+                detail["action"] = "tts_only"
                 duration = max(min_dur, audio_dur)
             else:
+                detail["action"] = "hold"
                 duration = min_dur
 
             durations[beat.beat_id] = round(duration, 3)
-        return durations, debt_by_beat
+            details[beat.beat_id] = detail
+        return durations, debt_by_beat, details
+
+    @staticmethod
+    def _print_timing_table(
+        graph_id: str,
+        details: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Print a per-beat timing table to stderr."""
+        print(
+            f"[TIMING] {graph_id}: beat_id | clip_dur | tts_dur | pad_applied | action",
+            file=sys.stderr,
+        )
+        for beat_id, d in details.items():
+            print(
+                f"[TIMING] {beat_id} | {d['clip_dur']:.3f} | {d['tts_dur']:.3f} | "
+                f"{d['pad_applied']:.3f} | {d['action']}",
+                file=sys.stderr,
+            )
 
     @staticmethod
     def _write_timing_report(

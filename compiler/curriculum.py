@@ -1501,8 +1501,24 @@ def run_course(
             print(f"[GATES] {video.video_id}", file=sys.stderr)
             print(format_gate_table(gate_result), file=sys.stderr)
             if not gate_result["passed"]:
+                failed: List[str] = []
+                for g in gate_result["gates"]:
+                    if g["passed"]:
+                        continue
+                    thr = g["threshold"]
+                    if thr.startswith("<"):
+                        op = "≥"
+                        thr = thr.lstrip("<")
+                    elif thr.startswith(">="):
+                        op = "<"
+                        thr = thr.lstrip(">=")
+                    elif "-" in thr:
+                        op = "outside"
+                    else:
+                        op = "≠"
+                    failed.append(f"{g['gate']}: {g['value']} {op} {thr}")
                 raise RuntimeError(
-                    f"Acceptance gates failed for {video.video_id}"
+                    f"Acceptance gates failed for {video.video_id}: " + "; ".join(failed)
                 )
 
             duration = computed_metrics["duration_seconds"]
@@ -1539,13 +1555,11 @@ def run_course(
             actual: Optional[str] = None
             screenshot_paths: List[str] = []
             attempts = 0
-            reliability = 0.0
             vlm_assessment = str(exc)
             local_discovery_result = locals().get("discovery_result")
             if local_discovery_result is not None:
                 actual = getattr(local_discovery_result, "final_editor_content", None)
                 attempts = getattr(local_discovery_result, "attempts", 0)
-                reliability = getattr(local_discovery_result, "reliability_score", 0.0)
                 locked_state = getattr(local_discovery_result, "locked_state", None)
                 if locked_state:
                     path = getattr(locked_state, "screenshot_path", None)
@@ -1560,7 +1574,6 @@ def run_course(
                 vlm_assessment=vlm_assessment,
                 screenshot_paths=screenshot_paths,
                 attempts=attempts,
-                reliability_score=reliability,
             )
             raise
 
@@ -1641,7 +1654,6 @@ def _write_attempt_report(
     vlm_assessment: Optional[str],
     screenshot_paths: List[str],
     attempts: int = 0,
-    reliability_score: float = 0.0,
     output_path: Optional[str] = None,
 ) -> Path:
     """Write the C10 attempt report to output/attempt_report.json."""
@@ -1666,7 +1678,6 @@ def _write_attempt_report(
         "screenshot_paths": screenshot_paths,
         "loop_ceilings": _LOOP_CEILINGS,
         "attempts": attempts,
-        "reliability_score": reliability_score,
     }
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[ATTEMPT REPORT] wrote {report_path}", file=sys.stderr)
@@ -1723,7 +1734,6 @@ def _dry_run_video(
         ),
         screenshot_paths=[],
         attempts=1,
-        reliability_score=0.0,
     )
     raise RuntimeError(error)
 

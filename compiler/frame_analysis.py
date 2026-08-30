@@ -386,14 +386,23 @@ def run_acceptance_gates(
     final_beat_text = metrics["final_beat_text"]
 
     b1 = 400 <= word_count <= 700
-    b2 = abs(duration - audio_duration) <= 2.0 if audio_duration > 0 else True
+    has_audio = audio_path is not None and audio_path.exists()
+    if has_audio:
+        sync_delta = abs(duration - audio_duration)
+        b2 = sync_delta <= 2.0
+        b2_value = round(sync_delta, 3)
+        b2_threshold = "<=2.0"
+    else:
+        b2 = True
+        b2_value = "skipped"
+        b2_threshold = "skipped"
     b3 = frozen_pct < 15.0
     b4 = error_frames == 0
     b5 = bool(re.search(r"[.!?]$", final_beat_text.strip()))
 
     gates = [
         {"gate": "B1_words", "value": word_count, "threshold": "400-700", "passed": b1},
-        {"gate": "B2_av_sync", "value": round(abs(duration - audio_duration), 3), "threshold": "<=2.0", "passed": b2},
+        {"gate": "B2_av_sync", "value": b2_value, "threshold": b2_threshold, "passed": b2},
         {"gate": "B3_frozen", "value": frozen_pct, "threshold": "<15%", "passed": b3},
         {"gate": "B4_errors", "value": error_frames, "threshold": "0", "passed": b4},
         {"gate": "B5_terminal", "value": final_beat_text[-30:] if final_beat_text else "", "threshold": "terminal punctuation", "passed": b5},

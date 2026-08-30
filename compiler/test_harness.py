@@ -24,9 +24,9 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
-from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, load_manifest
+from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, _write_attempt_report, load_manifest
 from compiler.discovery import EndStateDiscovery, _clip_has_off_app_interval
-from compiler.frame_analysis import detect_error_signature, frozen_share_percent
+from compiler.frame_analysis import detect_error_signature, frozen_share_percent, run_acceptance_gates
 from compiler.lesson_builder import LessonBuilder
 from compiler.narrator import ScriptBeat
 from compiler.renderer import GraphRenderer
@@ -1084,8 +1084,8 @@ class TestRendererPaddingCap(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_long_narration_writes_timing_report_and_flags_debt(self) -> None:
-        """If narration exceeds clip+4s the renderer reports timing debt."""
+    def test_long_narration_raises_needs_reshoot_and_writes_report(self) -> None:
+        """If narration exceeds clip+4s the renderer stops and emits timing debt."""
         clip = _make_video(self.tmpdir / "short_action.mp4", duration=2.0, motion=True)
         beats = [
             ScriptBeat(
@@ -1108,16 +1108,15 @@ class TestRendererPaddingCap(unittest.TestCase):
         original = fake_tts(None, tts_durations)  # type: ignore[arg-type]
         try:
             out_path = str(self.tmpdir / "pad_test.mp4")
-            result = renderer.render_from_script(
-                video_manifest=Manifest(),
-                script_beats=beats,
-                output_path=out_path,
-                output_mode="hybrid",
-            )
-            self.assertIsNotNone(result)
-            self.assertEqual(result.get("status"), "NEEDS_RESHOOT")
-            self.assertTrue(result.get("needs_reshoot"))
-            report_path = Path(result["timing_report_path"])
+            with self.assertRaises(RuntimeError) as ctx:
+                renderer.render_from_script(
+                    video_manifest=Manifest(),
+                    script_beats=beats,
+                    output_path=out_path,
+                    output_mode="hybrid",
+                )
+            self.assertIn("NEEDS_RESHOOT", str(ctx.exception))
+            report_path = self.tmpdir / "pad_test_timing_report.json"
             self.assertTrue(report_path.exists())
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["max_clone_pad_seconds"], 4.0)
@@ -1360,6 +1359,134 @@ class TestRendererNoTrim(unittest.TestCase):
             restore_tts(original)
 
 
+class TestAcceptanceGateAVSync(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_avsync_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _reference_md(self) -> Path:
+        path = self.tmpdir / "reference.md"
+        path.write_text(
+            "| Beat | Kind | Words | Text |\n"
+            "|------|------|-------|------|\n"
+            "| beat_001 | opening | 500 | This is the opening narration. |\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def _run(self, audio_path: Optional[Path]) -> Dict[str, Any]:
+        final_video = _make_video(
+            self.tmpdir / "final.mp4", duration=10.0, fps=2, motion=True
+        )
+        profile = EnvironmentProfile(
+            application="db_browser_sqlite",
+            app_name="DB Browser for SQLite",
+            focus_target="DB Browser for SQLite",
+        )
+        return run_acceptance_gates(
+            final_path=final_video,
+            audio_path=audio_path,
+            reference_md_path=self._reference_md(),
+            profile=profile,
+        )
+
+    def test_null_audio_reports_skipped(self) -> None:
+        """When no audio file exists the A/V sync gate is skipped, not measured."""
+        result = self._run(audio_path=None)
+        sync_gate = next(g for g in result["gates"] if g["gate"] == "B2_av_sync")
+        self.assertEqual(sync_gate["value"], "skipped")
+        self.assertTrue(sync_gate["passed"])
+
+    def test_large_delta_fails(self) -> None:
+        """A 3.0s A/V delta fails the sync gate."""
+        audio = _sine_wave_mp3(self.tmpdir / "audio_7s.mp3", duration_seconds=7.0)
+        result = self._run(audio_path=audio)
+        sync_gate = next(g for g in result["gates"] if g["gate"] == "B2_av_sync")
+        self.assertAlmostEqual(float(sync_gate["value"]), 3.0, delta=0.2)
+        self.assertFalse(sync_gate["passed"])
+
+    def test_small_delta_passes(self) -> None:
+        """A 1.0s A/V delta passes the sync gate."""
+        audio = _sine_wave_mp3(self.tmpdir / "audio_9s.mp3", duration_seconds=9.0)
+        result = self._run(audio_path=audio)
+        sync_gate = next(g for g in result["gates"] if g["gate"] == "B2_av_sync")
+        self.assertAlmostEqual(float(sync_gate["value"]), 1.0, delta=0.2)
+        self.assertTrue(sync_gate["passed"])
+
+
+class TestAttemptReportNamesFailingGate(unittest.TestCase):
+    def test_report_error_names_failing_gate(self) -> None:
+        """When a gate fails, the attempt report error names that gate."""
+        tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_report_"))
+        try:
+            final_video = _make_video(
+                tmpdir / "final.mp4", duration=10.0, fps=2, motion=False
+            )
+            reference = tmpdir / "reference.md"
+            reference.write_text(
+                "| Beat | Kind | Words | Text |\n"
+                "|------|------|-------|------|\n"
+                "| beat_001 | opening | 500 | Text ending with punctuation. |\n",
+                encoding="utf-8",
+            )
+            profile = EnvironmentProfile(
+                application="db_browser_sqlite",
+                app_name="DB Browser for SQLite",
+                focus_target="DB Browser for SQLite",
+            )
+            gate_result = run_acceptance_gates(
+                final_path=final_video,
+                audio_path=None,
+                reference_md_path=reference,
+                profile=profile,
+            )
+            self.assertFalse(gate_result["passed"])
+
+            # Build the same error message the pipeline uses.
+            failed = [
+                f"{g['gate']}: {g['value']} {g['threshold']}"
+                for g in gate_result["gates"]
+                if not g["passed"]
+            ]
+            error = "Acceptance gates failed for video_1_1: " + "; ".join(failed)
+
+            from compiler.curriculum import CourseManifest, VideoManifest
+            manifest = CourseManifest(
+                course_id="test_course",
+                title="Test",
+                description="Test",
+                target_audience="Test",
+                videos=[
+                    VideoManifest(
+                        video_id="video_1_1",
+                        title="Test Video",
+                        learning_objective="Test",
+                        discovery_objective="Test",
+                        application="db_browser_sqlite",
+                        format_tier="short",
+                    )
+                ],
+            )
+            report_path = tmpdir / "attempt_report.json"
+            _write_attempt_report(
+                manifest=manifest,
+                video_id="video_1_1",
+                error=error,
+                expected_editor_content="SELECT 1;",
+                actual_editor_content="SELECT 1;",
+                vlm_assessment="test",
+                screenshot_paths=[],
+                output_path=str(report_path),
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertIn("B3_frozen", report["error"])
+            self.assertNotIn("reliability_score", report)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -1390,6 +1517,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestFrozenShareMetric))
     suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityHardened))
     suite.addTests(loader.loadTestsFromTestCase(TestRendererNoTrim))
+    suite.addTests(loader.loadTestsFromTestCase(TestAcceptanceGateAVSync))
+    suite.addTests(loader.loadTestsFromTestCase(TestAttemptReportNamesFailingGate))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1

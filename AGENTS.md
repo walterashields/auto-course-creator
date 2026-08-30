@@ -64,6 +64,25 @@ Never commit `.env` files or API keys.
 - Seed databases (`.db` files in `compiler/discovery_output/`) are preserved by the cleanup step.
 - Render quality issues (clip/script duration mismatch, missing proof numbers, etc.) are warnings, not hard failures.
 
+## Visibility, status, and executor stop rules
+
+These rules are binding on the executor and must survive session resets.
+
+1. **Status file.** During every run, update `output/STATUS.txt` at least every
+   15 seconds with one line: `phase, beat x/y, elapsed, est. cost so far`.
+   On completion write `DONE: <final mp4 path>`; on abort write
+   `ABORTED: <gate + value>`. Fire a macOS notification (`osascript display
+   notification`) and a `say` announcement at completion or abort. The user
+   must always be able to answer “what is it doing” by reading one file.
+
+2. **Terminal visibility.** Never hide the controlling terminal. Minimize it if
+   screenshots require, but it stays in the Dock with the log tail visible
+   (run `tail -f output/live_video_1_1_c11.log` in a second window).
+
+3. **Executor stop rule.** When any run ends — pass OR fail — the executor
+   STOPS. No autonomous re-runs, no “one more try”. Paste the raw output and
+   wait for the governor’s next directive.
+
 ## Sync target
 
 This codebase is periodically synced to `~/Desktop/wsda-video-engine/compiler/` for integration with the web console.
