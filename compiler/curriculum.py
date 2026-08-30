@@ -599,19 +599,15 @@ def _resolve_controlling_terminal() -> str:
         return "Terminal"
 
 
-def _preflight_system_state(target_app_name: str, controlling_terminal: str) -> None:
+def _query_dnd_state() -> str:
+    """Return the current Do Not Disturb state as a normalized string.
+
+    macOS 12+ replaced the System Events ``do not disturb`` property with Focus
+    modes. We first try the legacy AppleScript API for older macOS, then fall
+    back to the ``com.apple.notificationcenterui`` defaults key that is still
+    honored on modern systems.
     """
-    Hard preflight via AppleScript System Events.
-
-    Asserts Do Not Disturb is on and only the target app + controlling terminal
-    (+ essential macOS UI processes) are running. Refuses to record otherwise.
-    """
-    import os
-
-    if os.environ.get("WSDA_SKIP_PREFLIGHT"):
-        return
-
-    # 1. Do Not Disturb must be on.
+    # Legacy AppleScript property (macOS <= 11).
     try:
         result = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to get do not disturb'],
@@ -619,53 +615,97 @@ def _preflight_system_state(target_app_name: str, controlling_terminal: str) -> 
             text=True,
             timeout=5,
         )
-        dnd = result.stdout.strip().lower()
-    except Exception as exc:
-        raise RuntimeError(f"[PREFLIGHT] Could not query Do Not Disturb: {exc}")
-    if dnd != "true":
-        raise RuntimeError(
-            f"[PREFLIGHT] Do Not Disturb is off ({dnd!r}). Enable it before recording."
-        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().lower()
+    except Exception:
+        pass
 
-    # 2. Enumerate visible (non-background) processes.
+    # Modern fallback: notification center defaults key.
     try:
+        prefs_path = os.path.expanduser(
+            "~/Library/Preferences/ByHost/com.apple.notificationcenterui"
+        )
         result = subprocess.run(
-            [
-                "osascript",
-                "-e",
-                'tell application "System Events" to get name of every process whose background only is false',
-            ],
+            ["defaults", "-currentHost", "read", prefs_path, "doNotDisturb"],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        visible = {p.strip() for p in result.stdout.split(",") if p.strip()}
-    except Exception as exc:
-        raise RuntimeError(f"[PREFLIGHT] Could not enumerate running processes: {exc}")
+        if result.returncode == 0:
+            return result.stdout.strip().lower()
+    except Exception:
+        pass
 
+    return "unknown"
+
+
+def _visible_window_owners() -> set:
+    """Return the set of process names that own at least one visible window."""
+    script = '''
+    tell application "System Events"
+        set owners to {}
+        repeat with proc in (every process whose background only is false and visible is true)
+            set procName to name of proc
+            try
+                set winList to every window of proc whose value of attribute "AXMinimized" is false
+                if (count of winList) > 0 then
+                    set end of owners to procName
+                end if
+            on error
+                -- Some processes do not expose window attributes; ignore.
+            end try
+        end repeat
+        return owners
+    end tell
+    '''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            text = result.stdout.strip()
+            if text:
+                return {p.strip() for p in text.split(",") if p.strip()}
+            return set()
+    except Exception:
+        pass
+    return set()
+
+
+def _preflight_system_state(target_app_name: str, controlling_terminal: str) -> None:
+    """
+    Hard preflight via AppleScript System Events.
+
+    Asserts Do Not Disturb is on and only the target app + controlling terminal
+    have visible windows. Refuses to record otherwise.
+    """
+    # 1. Do Not Disturb / Focus must be on.
+    dnd = _query_dnd_state()
+    if dnd not in {"true", "1", "yes", "on"}:
+        raise RuntimeError(
+            f"[PREFLIGHT] Do Not Disturb is off ({dnd!r}). Enable it before recording."
+        )
+
+    # 2. Enumerate owners of visible windows.
+    visible = _visible_window_owners()
     allowed = {
         target_app_name,
         controlling_terminal,
-        "Finder",
-        "SystemUIServer",
-        "Dock",
-        "WindowServer",
-        "loginwindow",
-        "ControlCenter",
-        "Spotlight",
-        "Python",  # test runners / python -m compiler.curriculum
-        "python",
-        "python3",
-        "osascript",
+        "Finder",  # desktop windows
     }
     offenders = visible - allowed
     if offenders:
         raise RuntimeError(
-            f"[PREFLIGHT] Disallowed visible processes are running: {sorted(offenders)}. "
-            "Close them or set WSDA_CONTROLLING_TERMINAL if needed."
+            f"[PREFLIGHT] Disallowed visible windows from: {sorted(offenders)}. "
+            "Close/hide them or set WSDA_CONTROLLING_TERMINAL if needed."
         )
 
     # 3. Optional dedicated render-account check.
+    import os
+
     render_user = os.environ.get("WSDA_RENDER_USER")
     if render_user:
         current_user = os.environ.get("USER", "")
@@ -690,30 +730,13 @@ def _assert_recording_hygiene(profile: "EnvironmentProfile") -> None:
     the off-app frame gate can only cut frames that are already recorded; a
     notification at run start must be cleared before recording begins.
     """
-    import os
-
-    if os.environ.get("WSDA_SKIP_PREFLIGHT"):
-        print("[RECORDING HYGIENE] preflight skipped via WSDA_SKIP_PREFLIGHT", file=sys.stderr)
-        return
-
     _preflight_system_state(
         target_app_name=profile.app_name,
         controlling_terminal=_resolve_controlling_terminal(),
     )
 
     # Do Not Disturb / Focus state (best-effort on macOS).
-    dnd_state = "unknown"
-    try:
-        result = subprocess.run(
-            ["defaults", "read", "com.apple.controlcenter", "NSStatusItem Visible FocusModes"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        dnd_state = result.stdout.strip() or "unknown"
-    except Exception as exc:
-        dnd_state = f"could not determine ({exc})"
-
+    dnd_state = _query_dnd_state()
     print(f"[RECORDING HYGIENE] Do Not Disturb/Focus: {dnd_state}", file=sys.stderr)
 
     # Overlay window check via VLM.
