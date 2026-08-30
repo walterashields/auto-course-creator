@@ -3211,7 +3211,10 @@ Return ONLY a JSON array of beats like:
 
         # ADAPT narration for validation/concept beats that conflict with observed facts.
         self._adapt_beats_to_observed_state(beats)
-        beats = self._collapse_merge_beats(beats)
+        collapsed = self._collapse_merge_beats(beats)
+        # Replace the caller's list in place so downstream consumers (graph build,
+        # canonical compare, renderer) see the merged beats.
+        beats[:] = collapsed
 
         return result
 
