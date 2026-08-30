@@ -29,134 +29,13 @@
       "has_preview": false,
       "recap_text_hint": null,
       "preview_text_hint": null,
-      "script_beats": [
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "In this video, we will.",
-          "kind": "opening",
-          "beat_id": "beat_001"
-        },
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "The editor is empty and.",
-          "kind": "state",
-          "beat_id": "beat_002"
-        },
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "SELECT is the SQL command.",
-          "kind": "explain",
-          "beat_id": "beat_003"
-        },
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "Right now the editor is.",
-          "kind": "state",
-          "beat_id": "beat_004"
-        },
-        {
-          "action": {
-            "type": "type_segments",
-            "segments": [
-              {
-                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-28\nDescription: Customer contact list for management\n*/"
-              }
-            ]
-          },
-          "text": "We type a comment header that records who created the query, when it was written, and what problem it solves.",
-          "kind": "demo",
-          "beat_id": "beat_005"
-        },
-        {
-          "action": {
-            "type": "type_segments",
-            "segments": [
-              {
-                "text": "\n\nSELECT\n    FirstName,\n    LastName,\n    Email"
-              }
-            ]
-          },
-          "text": "We type the SELECT clause, listing the columns FirstName, LastName, and.",
-          "kind": "demo",
-          "beat_id": "beat_006"
-        },
-        {
-          "action": {
-            "type": "type_segments",
-            "segments": [
-              {
-                "text": "\nFROM Customer;"
-              }
-            ]
-          },
-          "text": "We type FROM Customer to.",
-          "kind": "demo",
-          "beat_id": "beat_007"
-        },
-        {
-          "action": {
-            "type": "run_query"
-          },
-          "text": "We run the query and.",
-          "kind": "demo",
-          "beat_id": "beat_008"
-        },
-        {
-          "action": {
-            "type": "verify",
-            "detail": "the Execute SQL tab shows a populated results grid below the query"
-          },
-          "text": "We see 60 rows returned.",
-          "kind": "validation",
-          "beat_id": "beat_009"
-        },
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "The result pane shows the.",
-          "kind": "explain",
-          "beat_id": "beat_010"
-        },
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "Adding a comment header at.",
-          "kind": "explain",
-          "beat_id": "beat_011"
-        },
-        {
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "text": "We have written our first.",
-          "kind": "close",
-          "beat_id": "beat_012"
-        }
-      ],
       "planned_queries": [
         "SELECT FirstName, LastName, Email FROM Customer;"
       ]
     },
     {
       "video_id": "video_1_2",
-      "title": "Aliases — Speaking Management's Language",
+      "title": "Aliases \u2014 Speaking Management's Language",
       "learning_objective": "Use the AS keyword to give query results readable column headers",
       "discovery_objective": "Open the Execute SQL tab, type SELECT FirstName AS First Name, LastName AS Last Name, Email AS Email Address FROM Customer, run it with F5, and show the aliased headers",
       "application": "db_browser_sqlite",
