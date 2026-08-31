@@ -752,9 +752,11 @@ def _assert_recording_hygiene(profile: "EnvironmentProfile") -> None:
         agent = VisionAgent(profile=profile)
         b64 = agent.screenshot()
         app_name = profile.app_name
+        terminal = _resolve_controlling_terminal()
         prompt = (
             f"The target application is {app_name}, which is allowed to be on "
-            "screen. Look at this screenshot and answer: is there any notification banner, "
+            f"screen. The controlling terminal ({terminal}) is also allowed. "
+            "Look at this screenshot and answer: is there any notification banner, "
             "Messages conversation window, FaceTime overlay, Character Viewer, or window "
             f"from any OTHER application covering {app_name}? "
             "Reply exactly YES or NO, nothing else."
