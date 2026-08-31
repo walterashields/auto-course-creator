@@ -755,10 +755,10 @@ def _assert_recording_hygiene(profile: "EnvironmentProfile") -> None:
         terminal = _resolve_controlling_terminal()
         prompt = (
             f"The target application is {app_name}, which is allowed to be on "
-            f"screen. The controlling terminal ({terminal}) is also allowed. "
-            "Look at this screenshot and answer: is there any notification banner, "
-            "Messages conversation window, FaceTime overlay, Character Viewer, or window "
-            f"from any OTHER application covering {app_name}? "
+            f"screen. The controlling terminal ({terminal}) is also allowed and may "
+            "cover part of the screen. Treat only notification banners, Messages, "
+            "FaceTime, Character Viewer, or windows from OTHER applications as overlays. "
+            f"Is there any such overlay covering {app_name}? "
             "Reply exactly YES or NO, nothing else."
         )
         result = agent._call_vlm(prompt, expect_json=False, max_tokens=32)
