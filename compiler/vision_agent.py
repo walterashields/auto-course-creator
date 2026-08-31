@@ -1514,7 +1514,10 @@ end tell
                 text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
                 if not text:
                     continue
-                if expected_sofar.strip() and text and not text[0].isspace():
+                # C16: each segment starts on its own line during recording so
+                # multi-line clauses compose correctly even when a segment is
+                # indented whitespace.
+                if expected_sofar.strip() and text and not text.startswith("\n"):
                     text = "\n" + text
                 print(
                     f"  [SEGMENTS] recording segment {seg_idx + 1}/{len(segments)} "
@@ -1544,7 +1547,8 @@ end tell
             text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
             if not text:
                 continue
-            if expected_sofar.strip() and text and not text[0].isspace():
+            # C16: each segment starts on its own line.
+            if expected_sofar.strip() and text and not text.startswith("\n"):
                 text = "\n" + text
             print(
                 f"  [SEGMENTS] segment {seg_idx + 1}/{len(segments)} ({len(text)} chars)",

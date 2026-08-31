@@ -1629,7 +1629,7 @@ def _extract_sql_query(beat: "ScriptBeat") -> Optional[str]:
     elif action.get("type") == "type_segments":
         segments = action.get("segments") or []
         candidates.append(
-            "".join(
+            "\n".join(
                 (seg.get("text", "") if isinstance(seg, dict) else str(seg))
                 for seg in segments
             )

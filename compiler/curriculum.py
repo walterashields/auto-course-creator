@@ -429,7 +429,7 @@ def _full_sql_from_video(video: VideoManifest) -> Optional[str]:
             elif action_type == "type_segments":
                 segments = action.get("segments") or []
                 parts.append(
-                    "".join(
+                    "\n".join(
                         (seg.get("text", "") if isinstance(seg, dict) else str(seg))
                         for seg in segments
                     )
@@ -439,7 +439,7 @@ def _full_sql_from_video(video: VideoManifest) -> Optional[str]:
                 parts.append(action.get("query") or "")
                 has_sql_action = True
         if has_sql_action:
-            return "".join(parts).strip() or None
+            return "\n".join(parts).strip() or None
     if video.planned_queries:
         return video.planned_queries[0]
     return None
@@ -559,7 +559,7 @@ def _extract_final_editor_content(
             text = action.get("text") or ""
             if action.get("type") == "type_segments":
                 segments = action.get("segments") or []
-                text = "".join(
+                text = "\n".join(
                     s.get("text", "") if isinstance(s, dict) else str(s)
                     for s in segments
                 )
