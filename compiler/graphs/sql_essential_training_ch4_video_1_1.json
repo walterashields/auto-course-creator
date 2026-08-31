@@ -4,21 +4,21 @@
   "application": "db_browser_sqlite",
   "end_state": {
     "state_id": "state_005",
-    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_5e2cdfd3f7aa.png",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_2d81e6a85b3d.png",
     "timestamp": 0.0,
     "application": "db_browser_sqlite",
     "platform_snapshot": {
       "api_width_px": 1568,
       "api_height_px": 1019,
       "scale_to_logical": 0.9375,
-      "screenshot_sha256": "bbd56cc4c7acdf0bd820795c0d7e459c7a5fc796b655a54e35d37021deb5d7cb",
-      "run_duration_seconds": 388.381
+      "screenshot_sha256": "aeb1127105ed86fd7c10eab735d2c10749398c98c257213e47a46442fab37480",
+      "run_duration_seconds": 583.64
     },
     "visual_summary": "Open the Execute SQL tab, type the commented query SELECT FirstName, LastName, Email FROM Customer, run it with F5, and show the result pane with the contact list"
   },
   "start_state": {
     "state_id": "state_000",
-    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_5ab2bd67_start.png",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_start.png",
     "timestamp": 0.0,
     "application": "db_browser_sqlite",
     "platform_snapshot": {},
@@ -27,7 +27,7 @@
   "states": [
     {
       "state_id": "state_001",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_5ab2bd67_state_001.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_001.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -35,7 +35,7 @@
     },
     {
       "state_id": "state_002",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_5ab2bd67_state_002.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_002.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -43,7 +43,7 @@
     },
     {
       "state_id": "state_003",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_5ab2bd67_state_003.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_003.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -51,7 +51,7 @@
     },
     {
       "state_id": "state_004",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_5ab2bd67_state_004.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_004.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -67,7 +67,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_002.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_002.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -81,7 +81,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_003.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_003.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -95,7 +95,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_004.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_004.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -109,7 +109,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_005.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_005.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -141,7 +141,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_001.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_001.mp4",
       "observed_state": null,
       "merge": false
     },
@@ -155,7 +155,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_002.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_002.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": null,
@@ -164,9 +164,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 8
+          "buttons": 9
         },
-        "summary": "The Execute SQL tab is active, showing a SQL comment header with metadata about a customer contact list database, with no query results displayed yet.",
+        "summary": "The Execute SQL tab is active, showing a SQL comment header with creator, date, and description, with no query results displayed yet.",
         "editor_content": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/"
       },
       "merge": false
@@ -181,7 +181,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_003.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_003.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": null,
@@ -190,9 +190,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 9
+          "buttons": 10
         },
-        "summary": "The Execute SQL tab is active showing a SQL query with a header comment and a SELECT statement for FirstName, LastName, and Email, with no results yet displayed.",
+        "summary": "The Execute SQL tab is active, showing a SQL query with a header comment and a SELECT statement for FirstName, LastName, and Email, with no results yet displayed.",
         "editor_content": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/\nSELECT\n  FirstName,\n  LastName,\n  Email"
       },
       "merge": false
@@ -207,7 +207,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_004.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_004.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": null,
@@ -216,7 +216,7 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 9
+          "buttons": 8
         },
         "summary": "The Execute SQL tab is active showing a query that selects FirstName, LastName, and Email from the Customer table, with no results displayed yet.",
         "editor_content": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/\nSELECT\n  FirstName,\n  LastName,\n  Email\nFROM Customer;"
@@ -233,7 +233,36 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_005.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_005.mp4",
+      "observed_state": {
+        "active_tab": "Execute SQL",
+        "visible_table": "Customer",
+        "row_range_text": null,
+        "column_headers": [
+          "FirstName",
+          "LastName",
+          "Email"
+        ],
+        "modal_or_dropdown_open": false,
+        "ui_element_counts": {
+          "tabs": 3,
+          "buttons": 10
+        },
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with results displayed in a grid below and execution details in the log panel."
+      },
+      "merge": false
+    },
+    {
+      "beat_id": "beat_006",
+      "attaches_to": "state",
+      "target_id": "state_004",
+      "text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
+      "tts_text": null,
+      "word_count": 41,
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "audio_path": null,
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_006.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": "Customer",
@@ -248,36 +277,7 @@
           "tabs": 3,
           "buttons": 9
         },
-        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with 60 rows returned successfully."
-      },
-      "merge": false
-    },
-    {
-      "beat_id": "beat_006",
-      "attaches_to": "state",
-      "target_id": "state_004",
-      "text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
-      "tts_text": null,
-      "word_count": 41,
-      "start_time": 0.0,
-      "end_time": 0.0,
-      "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_006.mp4",
-      "observed_state": {
-        "active_tab": "Execute SQL",
-        "visible_table": "Customer",
-        "row_range_text": null,
-        "column_headers": [
-          "FirstName",
-          "LastName",
-          "Email"
-        ],
-        "modal_or_dropdown_open": false,
-        "ui_element_counts": {
-          "tabs": 3,
-          "buttons": 8
-        },
-        "summary": "DB Browser for SQLite showing an executed SELECT query on the Customer table returning FirstName, LastName, and Email columns with 60 rows returned successfully."
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with results displaying 60 rows returned successfully."
       },
       "merge": false
     },
@@ -291,7 +291,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_007.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_007.mp4",
       "observed_state": null,
       "merge": false
     },
@@ -305,7 +305,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_008.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_008.mp4",
       "observed_state": null,
       "merge": false
     },
@@ -319,7 +319,7 @@
       "start_time": 0.0,
       "end_time": 0.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/249a5c3a0f90_beat_009.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_009.mp4",
       "observed_state": null,
       "merge": false
     }

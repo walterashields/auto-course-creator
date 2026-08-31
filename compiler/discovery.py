@@ -516,7 +516,11 @@ class _ScreenCaptureKitRecorder:
         ):
             if output_type == sc.SCStreamOutputTypeScreen:
                 with recorder._lock:
-                    recorder._samples.append(sample_buffer)
+                    # Keep only the latest sample so the writer loop cannot fall
+                    # behind when the display delivers frames faster than the
+                    # target fps. This keeps clip durations true to wall-clock
+                    # recording time instead of inflating with queued buffers.
+                    recorder._samples[:] = [sample_buffer]
 
         DelegateClass = type(
             class_name,
@@ -3406,14 +3410,10 @@ class EndStateDiscovery:
                                     f"{len(segments)} ({len(text)} chars)",
                                     file=sys.stderr,
                                 )
-                                segment_action = {
-                                    "type": "type_segments",
-                                    "segments": [{"text": text}],
-                                }
                                 seg_ok = False
                                 for attempt in range(max_attempts):
-                                    if agent.execute_beat(
-                                        segment_action, fallback_text=beat_fallback
+                                    if agent.type_segments(
+                                        [{"text": text}], fallback_text=beat_fallback
                                     ):
                                         seg_ok = True
                                         break
@@ -3456,7 +3456,27 @@ class EndStateDiscovery:
                                         )
                             if beat_failed:
                                 break
-                            beat_ok = True
+                            # C16: one authoritative verification after all segments are
+                            # composed, instead of the per-segment VLM assessment that
+                            # bloated demo beats past their narration window.
+                            cumulative_intended = agent._last_composed_text or ""
+                            intended_state = (
+                                f"{self.profile.app_name or 'the target application'} is "
+                                "frontmost, the SQL editor is focused, and the cumulative "
+                                "SQL block appears exactly as authored."
+                            )
+                            if agent._assess_and_maybe_repair(
+                                self.objective,
+                                intended_state,
+                                intended_text=cumulative_intended,
+                            ):
+                                beat_ok = True
+                            else:
+                                failed_reason = (
+                                    f"Beat {beat.beat_id} final assessment failed"
+                                )
+                                beat_failed = True
+                                break
                         else:
                             for attempt in range(max_attempts):
                                 if agent.execute_beat(action, fallback_text=beat_fallback):
@@ -3713,12 +3733,10 @@ class EndStateDiscovery:
                                 break
 
                     if clip_path.exists():
-                        # C13: narration-paced beats must keep their full recorded
-                        # duration so the clip matches the beat's TTS window. Demo
-                        # beats are the exception: their concrete action produces
-                        # sustained motion and the C11 motion trim keeps them tight.
-                        if beat.kind == "demo":
-                            self._trim_clip_to_motion(clip_path)
+                        # C16: narration-paced beats (including demos) keep their full
+                        # recorded duration so the clip covers the TTS window. The
+                        # ScreenCaptureKit delegate now drops stale buffers, so clips
+                        # stay true to wall-clock recording time without trimming.
                         beat.video_clip_path = str(clip_path.resolve())
                     break
 
@@ -4010,7 +4028,7 @@ class EndStateDiscovery:
                         file=sys.stderr,
                     )
                     continue
-            if out_path.exists():
+            if out_path.exists() and beat.kind != "demo":
                 self._trim_clip_to_motion(out_path)
             beat.video_clip_path = str(out_path.resolve())
 
