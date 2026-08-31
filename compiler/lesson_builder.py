@@ -1001,12 +1001,14 @@ class LessonBuilder:
         # base and point at editor elements so the cursor is synced to the typing.
         is_demo = beat.kind == "demo"
 
-        def _add_hover(target: str) -> None:
-            # C14: repeated hovers on the same target are not redundant because
-            # the VisionAgent rotates the cursor position within the element,
-            # producing motion that satisfies the B3 anti-stall gate.
-            items.append(LessonBuilder._choreography_hover(target))
-            items.append(LessonBuilder._choreography_pause(1.5))
+        def _add_hover(target: str, sidx: int) -> None:
+            # C15: cursor rests on named targets; micro-motion to defeat stillness
+            # is banned. Each hover is a deliberate gesture tied to a sentence.
+            items.append({**LessonBuilder._choreography_hover(target), "sentence_idx": sidx})
+            items.append({**LessonBuilder._choreography_pause(1.5), "sentence_idx": sidx})
+
+        def _add_click(target: str, sidx: int) -> None:
+            items.append({**LessonBuilder._choreography_click(target), "sentence_idx": sidx})
 
         def _anchor_target() -> str:
             if is_demo and beat.action:
@@ -1021,7 +1023,7 @@ class LessonBuilder:
                 return "the finished SELECT statement in the SQL editor"
             return "the SQL editor text area"
 
-        for sentence in sentences:
+        for sidx, sentence in enumerate(sentences):
             targets = LessonBuilder._sentence_targets(sentence, columns, table)
             if not targets:
                 # Sentence references nothing visual: rest on the beat's anchor.
@@ -1055,7 +1057,7 @@ class LessonBuilder:
                             # Already toured this view; do not switch back.
                             continue
                         # First visit to this tab: click the tab itself as introduction.
-                        items.append(LessonBuilder._choreography_click(f"the {target_tab.replace('_', ' ').title()} tab"))
+                        _add_click(f"the {target_tab.replace('_', ' ').title()} tab", sidx)
                         introduced.add(target_tab)
                         current_tab = target_tab
                     if dedup_key in introduced:
@@ -1068,17 +1070,17 @@ class LessonBuilder:
                     # base at beat end.
                     if target_tab != current_tab:
                         if target_tab in introduced:
-                            items.append(LessonBuilder._choreography_click(f"the {target_tab.replace('_', ' ').title()} tab"))
+                            _add_click(f"the {target_tab.replace('_', ' ').title()} tab", sidx)
                             current_tab = target_tab
                         else:
                             # Tab not yet introduced; skip the gesture and rest on anchor.
                             continue
 
-                _add_hover(target)
+                _add_hover(target, sidx)
 
         # Return to Execute SQL home base if we wandered.
         if current_tab != "execute_sql":
-            items.append(LessonBuilder._choreography_click("the Execute SQL tab"))
+            items.append({**LessonBuilder._choreography_click("the Execute SQL tab"), "sentence_idx": len(sentences) - 1})
             current_tab = "execute_sql"
 
         # Every beat must have at least one gesture. If dedup skipped every
@@ -1093,8 +1095,8 @@ class LessonBuilder:
                 action_type = beat.action.get("type")
                 if action_type == "run_query":
                     anchor = "the Execute SQL toolbar button"
-            items.append(LessonBuilder._choreography_hover(anchor))
-            items.append(LessonBuilder._choreography_pause(1.5))
+            items.append({**LessonBuilder._choreography_hover(anchor), "sentence_idx": 0})
+            items.append({**LessonBuilder._choreography_pause(1.5), "sentence_idx": 0})
 
         # Print the sentence->gesture map before recording.
         print(f"[CHOREO MAP] {beat.beat_id}:", file=sys.stderr)
@@ -1850,73 +1852,59 @@ class LessonBuilder:
                     kind="opening",
                     text=(
                         "In this video, we will write our first SELECT query to pull a clean "
-                        "customer contact list for WSDA Music management. The goal is to return "
-                        "only the columns we need from the Customer table, so the result is "
-                        "focused and immediately useful."
-                    ),
-                    action=self._wait_action(),
-                ),
-                ScriptBeat(
-                    beat_id="beat_002",
-                    kind="state",
-                    text=(
-                        "The editor is empty and the result pane below it is blank. "
-                        "When we finish, the editor will hold a comment block followed by a "
-                        "formatted SELECT statement, and the result pane will show the customer "
-                        "contact list."
-                    ),
-                    action=self._wait_action(),
-                ),
-                ScriptBeat(
-                    beat_id="beat_003",
-                    kind="explain",
-                    text=(
-                        "SELECT is the SQL command that chooses which columns to return, and "
-                        "FROM chooses which table holds those columns. Together they form the "
-                        "simplest useful query pattern: ask for specific data from one table. "
-                        "This keeps the result small and fast because the database does not waste "
-                        "time returning columns we do not need."
-                    ),
-                    action=self._wait_action(),
-                ),
-                ScriptBeat(
-                    beat_id="beat_004",
-                    kind="state",
-                    text=(
-                        "The next three actions will add a comment header, the SELECT clause, "
-                        "and the FROM clause. Each piece will appear in the editor as it is typed, "
-                        "and the result pane will stay blank until we run the completed query."
+                        "customer contact list for WSDA Music management. We will add a comment "
+                        "header, list the columns, name the Customer table, and run the query."
                     ),
                     action=self._wait_action(),
                 ),
                 _segment_beat(
-                    "beat_005",
+                    "beat_002",
                     comment,
-                    "We type a comment header that records who created the query, when it was written, and what problem it solves.",
+                    (
+                        "We type a comment header at the top of the query so anyone who opens the "
+                        "file later can see who created it, when it was written, and what problem "
+                        "it solves. The header appears above the SQL and documents the query before "
+                        "any code runs, which is a professional habit worth keeping."
+                    ),
                 ),
                 _segment_beat(
-                    "beat_006",
+                    "beat_003",
                     select_clause,
-                    "We type the SELECT clause, listing the columns FirstName, LastName, and Email.",
+                    (
+                        "We type the SELECT clause, listing the columns FirstName, LastName, and "
+                        "Email. SELECT tells the database which columns to return, so we ask for "
+                        "only the contact fields we need. The SELECT clause appears between the "
+                        "comment header and the FROM clause, defining the output clearly."
+                    ),
                 ),
                 _segment_beat(
-                    "beat_007",
+                    "beat_004",
                     from_clause,
-                    "We type FROM Customer to name the data source for the columns.",
+                    (
+                        "We type FROM Customer to name the data source for the columns. FROM tells "
+                        "the database which table holds the data, so the query knows to look in the "
+                        "Customer table. This completes the simplest useful query pattern, asking "
+                        "for specific data from one table."
+                    ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_008",
+                    beat_id="beat_005",
                     kind="demo",
-                    text="We run the query and the result pane fills with the contact list.",
+                    text=(
+                        "We run the query by clicking the Execute SQL toolbar button. The result "
+                        "pane fills with the contact list, and the requested FirstName, LastName, "
+                        "and Email columns appear in the grid below the editor."
+                    ),
                     action={"type": "run_query"},
                 ),
                 ScriptBeat(
-                    beat_id="beat_009",
+                    beat_id="beat_006",
                     kind="validation",
                     text=_validation(
-                        f"We see {row_count} {rows_word} returned with FirstName, LastName, "
-                        f"and Email for each customer, confirming the contact list is complete "
-                        f"and the query ran exactly as intended"
+                        f"We see {row_count} {rows_word} returned in the result pane with "
+                        f"FirstName, LastName, and Email headers for each customer. The row count "
+                        f"confirms the contact list is complete, and the three requested columns "
+                        f"match exactly what we named in the SELECT clause"
                         if row_count is not None else "We see the contact list returned with the requested columns, confirming the query succeeded and the result is complete"
                     ),
                     action=self._verify_action(
@@ -1924,38 +1912,37 @@ class LessonBuilder:
                     ),
                 ),
                 ScriptBeat(
-                    beat_id="beat_010",
+                    beat_id="beat_007",
                     kind="explain",
                     text=(
                         "The result pane shows the complete customer contact list, with each "
-                        "customer record appearing exactly once in the order it is stored. "
-                        "Management now has a reliable set of first names, last names, and email "
-                        "addresses without extra columns cluttering the view. Because the database "
-                        "returned only the columns we requested, the output is compact and fast to "
-                        "scan."
+                        "customer record appearing once in the order it is stored. Management now "
+                        "has a reliable set of first names, last names, and email addresses without "
+                        "extra columns cluttering the view or slowing the report. This focused "
+                        "output is exactly what management requested."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_011",
+                    beat_id="beat_008",
                     kind="explain",
                     text=(
                         "Adding a comment header at the top of the query is a professional habit. "
                         "It records who created the query, when it was written, and what problem it "
                         "solves, which helps anyone who opens the file later. Good comments turn a "
-                        "quick one-off query into documentation that the whole team can trust and "
+                        "quick one-off query into documentation the whole team can trust and "
                         "maintain."
                     ),
                     action=self._wait_action(),
                 ),
                 ScriptBeat(
-                    beat_id="beat_012",
+                    beat_id="beat_009",
                     kind="close",
                     text=(
                         "We have written our first SELECT query and pulled a complete customer "
-                        "contact list. The query returned only the columns we needed and included "
-                        "a clear comment header. Next, we will make those column headers friendlier "
-                        "for management reports by using aliases."
+                        "contact list. The query returned only exactly the columns we needed and "
+                        "included a clear comment header. Next, we will make those column headers "
+                        "friendlier for management reports by using aliases."
                     ),
                     action=self._wait_action(),
                 ),
@@ -3248,6 +3235,12 @@ Return ONLY a JSON array of beats like:
                 errors.append(
                     f"{beat.beat_id} ({beat.kind}) fails integrity: terminal punctuation, "
                     f"min words, or function-word ending."
+                )
+
+            # C15: banned filler/template phrases are hard script defects.
+            if _contains_filler(beat.text):
+                errors.append(
+                    f"{beat.beat_id} contains banned filler phrase."
                 )
 
             lowered = beat.text.lower()

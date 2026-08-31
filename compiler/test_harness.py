@@ -1528,6 +1528,41 @@ class TestAcceptanceGateAVSync(unittest.TestCase):
         self.assertTrue(sync_gate["passed"])
 
 
+class TestFillerBan(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def _mock_video(self):
+        class MockVideo:
+            video_id = "video_1_1"
+            title = "Test"
+            learning_objective = "Test"
+            discovery_objective = "Test"
+            application = "db_browser_sqlite"
+            format_tier = "short"
+            exercise_artifact = {}
+            planned_queries = []
+        return MockVideo()
+
+    def test_banned_filler_phrase_fails_validation(self) -> None:
+        """The exact filler phrase 'The interface updates to show the change' is a defect."""
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="demo",
+                text="We type the SELECT clause. The interface updates to show the change.",
+                action={"type": "type_block", "text": "SELECT FirstName;"},
+            ),
+        ]
+        ok, errors, _ = self.builder.validate_script(beats, self._mock_video())
+        self.assertFalse(ok, "script containing banned filler phrase must fail validation")
+        self.assertTrue(
+            any("filler" in e.lower() for e in errors),
+            f"expected filler-ban error, got {errors}",
+        )
+
+
+
 class TestAttemptReportNamesFailingGate(unittest.TestCase):
     def test_report_error_names_failing_gate(self) -> None:
         """When a gate fails, the attempt report error names that gate."""
@@ -1632,6 +1667,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityHardened))
     suite.addTests(loader.loadTestsFromTestCase(TestRendererNoTrim))
     suite.addTests(loader.loadTestsFromTestCase(TestAcceptanceGateAVSync))
+    suite.addTests(loader.loadTestsFromTestCase(TestFillerBan))
     suite.addTests(loader.loadTestsFromTestCase(TestAttemptReportNamesFailingGate))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

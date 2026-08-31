@@ -21,7 +21,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import anthropic
 import cv2
@@ -119,7 +119,6 @@ class VisionAgent:
         self._last_executed_statement: str = ""
         self._last_composed_text: Optional[str] = None
         self._last_assessment_text: str = ""
-        self._choreo_target_calls: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Core screenshot / scaling helpers
@@ -2663,9 +2662,9 @@ end tell
         to approximate coordinates so the whole routine stays fast enough to fill
         the beat's narration window.
 
-        Repeating the same target returns a rotated set of positions within that
-        element so the cursor visibly moves instead of resting on an identical
-        pixel (C14 anti-stall).
+        C15: a target always resolves to the same single point. Micro-motion to
+        defeat stillness is patrol residue and is banned; the cursor rests on a
+        named target until a sentence change or the rest cap forces a move.
         """
         if not target:
             return None
@@ -2676,22 +2675,19 @@ end tell
         def pt(fx: float, fy: float) -> Tuple[int, int]:
             return (int(round(w * fx)), int(round(h * fy)))
 
-        # Multi-position pools for common targets so revisits produce motion.
-        pools: Dict[str, List[Tuple[float, float]]] = {
-            "sql editor text area": [(0.45, 0.34), (0.55, 0.39), (0.50, 0.44)],
-            "select clause": [(0.45, 0.38), (0.55, 0.40), (0.50, 0.42)],
-            "select statement": [(0.45, 0.38), (0.55, 0.40), (0.50, 0.42)],
-            "comment block": [(0.45, 0.27), (0.55, 0.30), (0.50, 0.32)],
-            "result pane": [(0.45, 0.70), (0.55, 0.75), (0.50, 0.80)],
-            "customer rows": [(0.45, 0.72), (0.55, 0.76), (0.50, 0.79)],
-        }
-
-        for key, positions in pools.items():
-            if key in lowered:
-                idx = self._choreo_target_calls.get(target, 0)
-                self._choreo_target_calls[target] = idx + 1
-                fx, fy = positions[idx % len(positions)]
-                return pt(fx, fy)
+        # Main editor regions.
+        if "sql editor text area" in lowered:
+            return pt(0.50, 0.39)
+        if "select clause" in lowered:
+            return pt(0.50, 0.40)
+        if "select statement" in lowered:
+            return pt(0.50, 0.40)
+        if "comment block" in lowered or "comment header" in lowered:
+            return pt(0.50, 0.29)
+        if "result pane" in lowered:
+            return pt(0.50, 0.75)
+        if "customer rows" in lowered:
+            return pt(0.50, 0.76)
 
         # Tabs along the top of the DB Browser window.
         if "database structure tab" in lowered:
@@ -2821,10 +2817,13 @@ end tell
         If ``max_duration`` is provided, the routine stops before it exceeds the
         budget and truncates the final pause so the recorded clip stays within
         the narration-paced timing contract.  Leftover time is spent resting on
-        the last target; cursor patrol/filler motion is banned (C14).
+        the last target; cursor patrol/filler motion is banned (C15).
         """
         start = time.time()
         ok = True
+        last_target: Optional[str] = None
+        last_sentence_idx: Optional[int] = None
+
         for i, item in enumerate(items):
             item = dict(item)
             remaining: Optional[float] = None
@@ -2840,10 +2839,10 @@ end tell
                         )
                     break
                 if item.get("type") == "pause":
-                    # C14: resting on a target is correct teaching, but no single
+                    # C15: resting on a target is correct teaching, but no single
                     # still run may exceed 6s (B3 anti-stall gate). Cap each pause
-                    # well below the gate so combined rests cannot breach it.
-                    item["duration"] = min(float(item.get("duration", 0.5)), remaining, 3.0)
+                    # at 5.0s so combined rests cannot breach it.
+                    item["duration"] = min(float(item.get("duration", 0.5)), remaining, 5.0)
 
             target = item.get("target", "")
             print(
@@ -2853,48 +2852,62 @@ end tell
             if not self.execute_choreography_item(item):
                 ok = False
 
+            if item.get("type") in ("hover", "click") and target:
+                last_target = target
+                last_sentence_idx = item.get("sentence_idx")
+
         if max_duration is not None:
             elapsed = time.time() - start
             leftover = max(0.0, max_duration - elapsed)
-            # C14: resting on a named target is correct teaching, but B3 caps any
-            # contiguous still run at 6s. Keep rests <= 5.5s; if narration leaves
-            # more time, revisit the same named targets rather than inventing
-            # patrol/filler motion.
-            while leftover > 0.05:
-                if leftover <= 3.0:
-                    print(
-                        f"  [CHOREO] resting {leftover:.2f}s on last target",
-                        file=sys.stderr,
-                    )
-                    time.sleep(leftover)
-                    break
-                print(
-                    "  [CHOREO] revisiting targets to avoid a long still run",
-                    file=sys.stderr,
-                )
+            # C15: cursor calm. Rest up to 5.0s on the last target, then move only
+            # to another named target of the current sentence. No patrol, no
+            # micro-motion, no filler movement.
+            if leftover > 0.05 and last_target is not None and last_sentence_idx is not None:
+                # Build ordered unique targets for the current sentence.
+                sentence_targets: List[str] = []
+                seen: Set[str] = set()
                 for item in items:
-                    if leftover <= 0.05:
-                        break
-                    revisit = dict(item)
-                    rev_type = revisit.get("type")
-                    if rev_type not in ("hover", "click", "pause"):
-                        continue
-                    # On revisit, point instead of clicking so we do not change
-                    # application state.
-                    if rev_type == "click":
-                        revisit["type"] = "hover"
-                    if revisit.get("type") == "pause":
-                        revisit["duration"] = min(
-                            float(revisit.get("duration", 0.5)), 5.5, leftover
-                        )
-                    target = revisit.get("target", "")
+                    if (
+                        item.get("sentence_idx") == last_sentence_idx
+                        and item.get("type") in ("hover", "click")
+                    ):
+                        t = item.get("target", "")
+                        if t and t not in seen:
+                            seen.add(t)
+                            sentence_targets.append(t)
+
+                current_idx = sentence_targets.index(last_target) if last_target in sentence_targets else 0
+
+                while leftover > 0.05:
+                    rest = min(leftover, 5.0)
                     print(
-                        f"  [CHOREO] {revisit.get('type')} {target[:60]}",
+                        f"  [CHOREO] resting {rest:.2f}s on '{last_target[:60]}'",
                         file=sys.stderr,
                     )
-                    self.execute_choreography_item(revisit)
+                    time.sleep(rest)
                     elapsed = time.time() - start
                     leftover = max(0.0, max_duration - elapsed)
+                    if leftover <= 0.05:
+                        break
+                    if len(sentence_targets) <= 1:
+                        # Only one target for this sentence; stay on it.
+                        continue
+                    current_idx = (current_idx + 1) % len(sentence_targets)
+                    next_target = sentence_targets[current_idx]
+                    print(
+                        f"  [CHOREO] moving to another target of current sentence: {next_target[:60]}",
+                        file=sys.stderr,
+                    )
+                    self._move_to_target(next_target)
+                    last_target = next_target
+                    elapsed = time.time() - start
+                    leftover = max(0.0, max_duration - elapsed)
+            elif leftover > 0.05:
+                print(
+                    f"  [CHOREO] resting {leftover:.2f}s (no sentence target to cycle)",
+                    file=sys.stderr,
+                )
+                time.sleep(leftover)
         return ok
 
     def frame_shows_error_signature(self, frame_path: str) -> bool:

@@ -80,6 +80,7 @@ _GENERIC_FILLER = {
     "basically", "essentially", "fundamentally",
     "it is important to note", "the fact that", "in order to",
     "as you can see", "as we can see",
+    "the interface updates to show the change",
 }
 
 _ACTION_WORDS = {
