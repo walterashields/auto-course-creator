@@ -136,6 +136,61 @@ def _clip_has_off_app_interval(
     return False
 
 
+def _schedule_choreography(items: List[Dict[str, Any]], audio_duration: float) -> List[Dict[str, Any]]:
+    """
+    C16: compute pause durations so the total choreography fills the narration
+    window (audio_duration - 1.0s tail, ±0.5s tolerance). Fixed 1.5s pauses are
+    banned; every pause is derived from the available window. Each pause is
+    capped at 5.0s to satisfy the cursor-calm / anti-stall rule. Any remaining
+    time is left for the executor's rest-on-last-target behavior.
+    """
+    target = max(0.0, audio_duration - 1.0)
+    if target <= 0.0 or not items:
+        return [dict(it) for it in items]
+
+    # Rough per-gesture motion cost. These are intentionally conservative so the
+    # computed pauses end up slightly shorter than the target; execute_choreography
+    # fills the remainder by resting on the last target.
+    GESTURE_COST = {
+        "hover": 0.5,
+        "click": 0.8,
+        "scroll": 0.8,
+        "drag": 1.0,
+    }
+
+    scheduled: List[Dict[str, Any]] = [dict(it) for it in items]
+    pause_indices: List[int] = []
+    fixed_cost = 0.0
+    for i, it in enumerate(scheduled):
+        t = it.get("type")
+        if t == "pause":
+            pause_indices.append(i)
+        else:
+            fixed_cost += GESTURE_COST.get(t, 0.5)
+
+    available = max(0.0, target - fixed_cost)
+    if pause_indices:
+        base_pause = available / len(pause_indices)
+        for i in pause_indices:
+            scheduled[i]["duration"] = min(base_pause, 5.0)
+        # Redistribute any time shaved off by the 5.0s cap.
+        used = sum(scheduled[i]["duration"] for i in pause_indices)
+        remaining = available - used
+        while remaining > 0.05:
+            progressed = False
+            for i in pause_indices:
+                if scheduled[i]["duration"] < 5.0 - 0.001:
+                    add = min(remaining, 5.0 - scheduled[i]["duration"], 0.5)
+                    scheduled[i]["duration"] += add
+                    remaining -= add
+                    progressed = True
+                    if remaining <= 0.05:
+                        break
+            if not progressed:
+                break
+    return scheduled
+
+
 def _extract_frame(video_path: str, out_path: str, offset: float = 0.5) -> bool:
     """Extract a single PNG frame from ``video_path`` at ``offset`` seconds."""
     try:
@@ -3214,6 +3269,7 @@ class EndStateDiscovery:
             # Ceiling: MAX_BEAT_RETRIES (default WSDA_MAX_ATTEMPTS=3) per-beat retries.
             for retry in range(MAX_BEAT_RETRIES):
                 beat_ok = False
+                executed_choreo_indices: set[int] = set()
                 if retry > 0 and not skipped:
                     # C10 beat-scoped retry: restore the last known-good editor
                     # state without re-composing prior passed beats.
@@ -3283,8 +3339,21 @@ class EndStateDiscovery:
                             file=sys.stderr,
                         )
 
-                    # C13: demo beats run their concrete action first; all beats then
-                    # fill the narration duration with choreography synced to TTS.
+                    # C16: schedule choreography so total duration fills the narration
+                    # window (audio - 1.0s tail). Use the scheduled version for execution.
+                    scheduled_choreo: List[Dict[str, Any]] = []
+                    if beat.choreography:
+                        scheduled_choreo = _schedule_choreography(
+                            beat.choreography, audio_duration
+                        )
+                        print(
+                            f"  [CHOREOGRAPHY SCHEDULED] {beat.beat_id}: "
+                            f"{scheduled_choreo}",
+                            file=sys.stderr,
+                        )
+
+                    # C13/C16: demo beats run their concrete action; all beats then fill
+                    # the narration duration with scheduled choreography synced to TTS.
                     is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
                     if is_demo_action:
                         # Segmented beats get the intended cumulative block as a
@@ -3305,15 +3374,99 @@ class EndStateDiscovery:
                         # Ceiling: 1 internal attempt for typing (handled by outer beat
                         # retry) or 3 attempts for other action types.
                         max_attempts = 1 if is_typing_action else 3
-                        for attempt in range(max_attempts):
-                            if agent.execute_beat(action, fallback_text=beat_fallback):
-                                beat_ok = True
+
+                        # C16: interleave line-pastes with sentence-level choreography so
+                        # the clause appears gradually as it is described.
+                        interleaved = (
+                            action.get("type") == "type_segments"
+                            and scheduled_choreo
+                        )
+                        if interleaved:
+                            segments = list(action.get("segments") or [])
+                            choreo_by_sentence: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
+                            for orig_idx, item in enumerate(scheduled_choreo):
+                                choreo_by_sentence.setdefault(
+                                    item.get("sentence_idx", 0), []
+                                ).append((orig_idx, item))
+                            choreo_pointer = {s: 0 for s in choreo_by_sentence}
+
+                            for seg_idx, segment in enumerate(segments):
+                                text = (
+                                    segment.get("text", "")
+                                    if isinstance(segment, dict)
+                                    else str(segment)
+                                )
+                                sidx = (
+                                    segment.get("sentence_idx", 0)
+                                    if isinstance(segment, dict)
+                                    else 0
+                                )
+                                print(
+                                    f"  [SEGMENTS] interleaved segment {seg_idx + 1}/"
+                                    f"{len(segments)} ({len(text)} chars)",
+                                    file=sys.stderr,
+                                )
+                                segment_action = {
+                                    "type": "type_segments",
+                                    "segments": [{"text": text}],
+                                }
+                                seg_ok = False
+                                for attempt in range(max_attempts):
+                                    if agent.execute_beat(
+                                        segment_action, fallback_text=beat_fallback
+                                    ):
+                                        seg_ok = True
+                                        break
+                                    print(
+                                        f"  Beat {beat.beat_id} segment {seg_idx + 1} "
+                                        f"failed attempt {attempt + 1}; retrying...",
+                                        file=sys.stderr,
+                                    )
+                                    time.sleep(0.5)
+                                if not seg_ok:
+                                    failed_reason = (
+                                        f"Beat {beat.beat_id} segment {seg_idx + 1} failed"
+                                    )
+                                    beat_failed = True
+                                    break
+
+                                # Run a slice of choreography tied to this sentence.
+                                if sidx in choreo_by_sentence:
+                                    items = choreo_by_sentence[sidx]
+                                    ptr = choreo_pointer[sidx]
+                                    # One gesture per segment, then any remainder on
+                                    # the final segment, keeps motion distributed.
+                                    if seg_idx < len(segments) - 1:
+                                        chunk = items[ptr : ptr + 1]
+                                    else:
+                                        chunk = items[ptr:]
+                                    choreo_pointer[sidx] = ptr + len(chunk)
+                                    if chunk:
+                                        for orig_idx, _ in chunk:
+                                            executed_choreo_indices.add(orig_idx)
+                                        elapsed = time.time() - clip_start
+                                        remaining_tts = (
+                                            max(0.0, audio_duration - elapsed)
+                                            if audio_duration
+                                            else None
+                                        )
+                                        agent.execute_choreography(
+                                            [it for _, it in chunk],
+                                            max_duration=remaining_tts,
+                                        )
+                            if beat_failed:
                                 break
-                            print(
-                                f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
-                                file=sys.stderr,
-                            )
-                            time.sleep(0.5)
+                            beat_ok = True
+                        else:
+                            for attempt in range(max_attempts):
+                                if agent.execute_beat(action, fallback_text=beat_fallback):
+                                    beat_ok = True
+                                    break
+                                print(
+                                    f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
+                                    file=sys.stderr,
+                                )
+                                time.sleep(0.5)
 
                         # Programmatic fallback for row-count validations: the VLM
                         # sometimes focuses on the SQL editor instead of the result
@@ -3366,24 +3519,30 @@ class EndStateDiscovery:
                         beat_ok = True
 
                     if not beat_failed:
-                        # C13: execute choreography during the remaining TTS window so
-                        # every beat fills its narration duration with deliberate motion.
-                        if beat_ok and beat.choreography:
-                            elapsed = time.time() - clip_start
-                            remaining_tts = (
-                                max(0.0, audio_duration - elapsed)
-                                if audio_duration
-                                else None
-                            )
-                            if remaining_tts is None or remaining_tts > 0.1:
-                                agent.execute_choreography(
-                                    beat.choreography, max_duration=remaining_tts
+                        # C16: execute any remaining scheduled choreography during the
+                        # remaining TTS window so every beat fills its narration duration.
+                        if beat_ok and scheduled_choreo:
+                            remaining_choreo = [
+                                item
+                                for idx, item in enumerate(scheduled_choreo)
+                                if idx not in executed_choreo_indices
+                            ]
+                            if remaining_choreo:
+                                elapsed = time.time() - clip_start
+                                remaining_tts = (
+                                    max(0.0, audio_duration - elapsed)
+                                    if audio_duration
+                                    else None
                                 )
-                            else:
-                                print(
-                                    f"  [CHOREO] {beat.beat_id}: TTS already ended; skipping choreography",
-                                    file=sys.stderr,
-                                )
+                                if remaining_tts is None or remaining_tts > 0.1:
+                                    agent.execute_choreography(
+                                        remaining_choreo, max_duration=remaining_tts
+                                    )
+                                else:
+                                    print(
+                                        f"  [CHOREO] {beat.beat_id}: TTS already ended; skipping remaining choreography",
+                                        file=sys.stderr,
+                                    )
 
                         if beat_ok and beat.kind == "demo":
                             executed_demo_count += 1
@@ -3475,12 +3634,12 @@ class EndStateDiscovery:
                             elapsed = time.time() - clip_start
                             wait_for_tts_end = max(0.0, audio_duration - elapsed)
                             if wait_for_tts_end > 0.1:
-                                # C14: keep the cursor moving over named targets while the
-                                # narration finishes; a plain sleep would create a long
+                                # C14/C16: keep the cursor moving over named targets while
+                                # the narration finishes; a plain sleep would create a long
                                 # static run that fails the B3 anti-stall gate.
-                                if beat.choreography:
+                                if scheduled_choreo:
                                     agent.execute_choreography(
-                                        beat.choreography, max_duration=wait_for_tts_end
+                                        scheduled_choreo, max_duration=wait_for_tts_end
                                     )
                                 else:
                                     time.sleep(wait_for_tts_end)

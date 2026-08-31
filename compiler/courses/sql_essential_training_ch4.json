@@ -31,7 +31,19 @@
       "preview_text_hint": null,
       "script_beats": [
         {
+          "beat_id": "beat_001",
+          "kind": "opening",
           "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. We will add a comment header, list the columns, name the Customer table, and run the query.",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 1.5,
           "choreography": [
             {
               "type": "hover",
@@ -64,62 +76,108 @@
               "sentence_idx": 1
             }
           ],
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "beat_id": "beat_001",
-          "kind": "opening",
-          "planned_duration": 1.5
+          "merge": false
         },
         {
-          "text": "We type a comment header at the top of the query so anyone who opens the file later can see who created it, when it was written, and what problem it solves. The header appears above the SQL and documents the query before any code runs, which is a professional habit worth keeping.",
-          "choreography": [
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 0
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 0
-            },
-            {
-              "type": "hover",
-              "target": "the comment block in the SQL editor",
-              "sentence_idx": 0
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 0
-            },
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 1
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 1
-            }
-          ],
-          "action": {
-            "type": "type_segments",
-            "segments": [
-              {
-                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/"
-              }
-            ]
-          },
           "beat_id": "beat_002",
           "kind": "demo",
-          "planned_duration": 10.9
+          "text": "We type a comment header at the top of the query so anyone who opens the file later can see who created it, when it was written, and what problem it solves. The header appears above the SQL and documents the query before any code runs, which is a professional habit worth keeping.",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*",
+                "sentence_idx": 0
+              },
+              {
+                "text": "Created By: WSDA Student",
+                "sentence_idx": 0
+              },
+              {
+                "text": "Create Date: 2026-08-31",
+                "sentence_idx": 0
+              },
+              {
+                "text": "Description: Customer contact list for management",
+                "sentence_idx": 1
+              },
+              {
+                "text": "*/",
+                "sentence_idx": 1
+              }
+            ]
+          },
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 10.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the comment block in the SQL editor",
+              "sentence_idx": 0
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            }
+          ],
+          "merge": false
         },
         {
+          "beat_id": "beat_003",
+          "kind": "demo",
           "text": "We type the SELECT clause, listing the columns FirstName, LastName, and Email. SELECT tells the database which columns to return, so we ask for only the contact fields we need. The SELECT clause appears between the comment header and the FROM clause, defining the output clearly.",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "SELECT",
+                "sentence_idx": 0
+              },
+              {
+                "text": "  FirstName,",
+                "sentence_idx": 0
+              },
+              {
+                "text": "  LastName,",
+                "sentence_idx": 0
+              },
+              {
+                "text": "  Email",
+                "sentence_idx": 0
+              }
+            ]
+          },
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 4.1,
           "choreography": [
             {
               "type": "hover",
@@ -192,20 +250,27 @@
               "sentence_idx": 2
             }
           ],
+          "merge": false
+        },
+        {
+          "beat_id": "beat_004",
+          "kind": "demo",
+          "text": "We type FROM Customer to name the data source for the columns. FROM tells the database which table holds the data, so the query knows to look in the Customer table. This completes the simplest useful query pattern, asking for specific data from one table.",
           "action": {
             "type": "type_segments",
             "segments": [
               {
-                "text": "\nSELECT\n  FirstName,\n  LastName,\n  Email"
+                "text": "FROM Customer;",
+                "sentence_idx": 0
               }
             ]
           },
-          "beat_id": "beat_003",
-          "kind": "demo",
-          "planned_duration": 4.5
-        },
-        {
-          "text": "We type FROM Customer to name the data source for the columns. FROM tells the database which table holds the data, so the query knows to look in the Customer table. This completes the simplest useful query pattern, asking for specific data from one table.",
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 1.9000000000000001,
           "choreography": [
             {
               "type": "hover",
@@ -238,20 +303,21 @@
               "sentence_idx": 2
             }
           ],
-          "action": {
-            "type": "type_segments",
-            "segments": [
-              {
-                "text": "\nFROM Customer;"
-              }
-            ]
-          },
-          "beat_id": "beat_004",
-          "kind": "demo",
-          "planned_duration": 2.0
+          "merge": false
         },
         {
+          "beat_id": "beat_005",
+          "kind": "demo",
           "text": "We run the query by clicking the Execute SQL toolbar button. The result pane fills with the contact list, and the requested FirstName, LastName, and Email columns appear in the grid below the editor.",
+          "action": {
+            "type": "run_query"
+          },
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 2.0,
           "choreography": [
             {
               "type": "hover",
@@ -334,15 +400,22 @@
               "sentence_idx": 1
             }
           ],
-          "action": {
-            "type": "run_query"
-          },
-          "beat_id": "beat_005",
-          "kind": "demo",
-          "planned_duration": 2.0
+          "merge": false
         },
         {
+          "beat_id": "beat_006",
+          "kind": "validation",
           "text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
+          "action": {
+            "type": "verify",
+            "detail": "the Execute SQL tab shows a populated results grid below the query"
+          },
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 2.0,
           "choreography": [
             {
               "type": "hover",
@@ -375,13 +448,8 @@
               "sentence_idx": 0
             },
             {
-              "type": "click",
-              "target": "the Browse Data tab",
-              "sentence_idx": 0
-            },
-            {
               "type": "hover",
-              "target": "the Customer rows in the Browse Data grid",
+              "target": "the result pane showing query output",
               "sentence_idx": 0
             },
             {
@@ -390,21 +458,32 @@
               "sentence_idx": 0
             },
             {
-              "type": "click",
-              "target": "the Execute SQL tab",
+              "type": "hover",
+              "target": "the SELECT clause in the SQL editor",
+              "sentence_idx": 1
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
               "sentence_idx": 1
             }
           ],
-          "action": {
-            "type": "verify",
-            "detail": "the Execute SQL tab shows a populated results grid below the query"
-          },
-          "beat_id": "beat_006",
-          "kind": "validation",
-          "planned_duration": 2.0
+          "merge": false
         },
         {
+          "beat_id": "beat_007",
+          "kind": "explain",
           "text": "The result pane shows the complete customer contact list, with each customer record appearing once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view or slowing the report. This focused output is exactly what management requested.",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 1.5,
           "choreography": [
             {
               "type": "hover",
@@ -437,16 +516,22 @@
               "sentence_idx": 2
             }
           ],
+          "merge": false
+        },
+        {
+          "beat_id": "beat_008",
+          "kind": "explain",
+          "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation the whole team can trust and maintain.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
-          "beat_id": "beat_007",
-          "kind": "explain",
-          "planned_duration": 1.5
-        },
-        {
-          "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation the whole team can trust and maintain.",
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 1.5,
           "choreography": [
             {
               "type": "hover",
@@ -489,16 +574,22 @@
               "sentence_idx": 2
             }
           ],
+          "merge": false
+        },
+        {
+          "beat_id": "beat_009",
+          "kind": "close",
+          "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only exactly the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
-          "beat_id": "beat_008",
-          "kind": "explain",
-          "planned_duration": 1.5
-        },
-        {
-          "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only exactly the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
+          "visual_check": null,
+          "attaches_to": null,
+          "target_id": null,
+          "video_clip_path": null,
+          "observed_state": null,
+          "planned_duration": 1.5,
           "choreography": [
             {
               "type": "hover",
@@ -541,13 +632,7 @@
               "sentence_idx": 2
             }
           ],
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "beat_id": "beat_009",
-          "kind": "close",
-          "planned_duration": 1.5
+          "merge": false
         }
       ],
       "planned_queries": [

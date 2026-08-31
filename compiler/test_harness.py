@@ -1634,6 +1634,52 @@ class TestAttemptReportNamesFailingGate(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class TestTargetContentConsistency(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def _mock_video(self):
+        class MockVideo:
+            video_id = "video_1_1"
+            title = "Test"
+            learning_objective = "Test"
+            discovery_objective = "Test"
+            application = "db_browser_sqlite"
+            format_tier = "short"
+            exercise_artifact = {}
+            planned_queries = []
+        return MockVideo()
+
+    def test_result_pane_sentence_with_browse_data_switch_fails(self):
+        """A validation beat referencing the result pane must not click Browse Data."""
+        beat = ScriptBeat(
+            beat_id="beat_006",
+            kind="validation",
+            text="We see 60 rows returned in the result pane with FirstName, LastName, and Email headers.",
+            action={"type": "verify", "detail": "result pane populated"},
+            choreography=[
+                {"type": "hover", "target": "the FirstName column header in the result pane", "sentence_idx": 0},
+                {"type": "click", "target": "the Browse Data tab", "sentence_idx": 0},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(beat, [], "Customer")
+        self.assertTrue(any("Browse Data" in e for e in errors), errors)
+
+    def test_matching_target_passes(self):
+        """A sentence about the result pane may gesture at the result pane."""
+        beat = ScriptBeat(
+            beat_id="beat_006",
+            kind="validation",
+            text="We see 60 rows returned in the result pane with FirstName, LastName, and Email headers.",
+            action={"type": "verify", "detail": "result pane populated"},
+            choreography=[
+                {"type": "hover", "target": "the result pane showing query output", "sentence_idx": 0},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(beat, [], "Customer")
+        self.assertEqual(errors, [])
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -1668,6 +1714,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestRendererNoTrim))
     suite.addTests(loader.loadTestsFromTestCase(TestAcceptanceGateAVSync))
     suite.addTests(loader.loadTestsFromTestCase(TestFillerBan))
+    suite.addTests(loader.loadTestsFromTestCase(TestTargetContentConsistency))
     suite.addTests(loader.loadTestsFromTestCase(TestAttemptReportNamesFailingGate))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

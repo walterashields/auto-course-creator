@@ -947,7 +947,7 @@ class LessonBuilder:
         if re.search(rf"\b{re.escape(table)}\b", sentence, re.IGNORECASE):
             if "structure" in lowered or "tree" in lowered or "columns" in lowered:
                 targets.append(f"the {table} table in the Database Structure tree")
-            elif "row" in lowered or "browse" in lowered or "grid" in lowered:
+            elif "browse" in lowered:
                 targets.append(f"the {table} rows in the Browse Data grid")
 
         if "result pane" in lowered or ("result" in lowered and "pane" in lowered):
@@ -1044,8 +1044,16 @@ class LessonBuilder:
                         editor_targets.append(t)
                 targets = editor_targets or [_anchor_target()]
 
+            # Allowed tabs for this sentence; a tab switch is permitted only when
+            # the sentence explicitly references that view's content.
+            allowed_tabs = {LessonBuilder._target_tab(t) for t in targets}
+
             for target in targets:
                 target_tab = LessonBuilder._target_tab(target)
+
+                # C16: never switch to a tab the current sentence does not reference.
+                if target_tab != current_tab and target_tab not in allowed_tabs:
+                    continue
 
                 # Cross-beat tour dedup: element introductions happen at most once.
                 is_introduction = target_tab in ("database_structure", "browse_data")
@@ -1112,6 +1120,73 @@ class LessonBuilder:
         tour_state["current_tab"] = current_tab
         tour_state["introduced"] = introduced
         return items
+
+    @staticmethod
+    def _choreography_matches_sentences(
+        beat: ScriptBeat, columns: List[str], table: str
+    ) -> List[str]:
+        """Return errors if any choreography gesture points at content the sentence does not name."""
+        errors: List[str] = []
+        if not beat.choreography or not beat.text:
+            return errors
+        sentences = LessonBuilder._split_sentences(beat.text)
+        if not sentences:
+            sentences = [beat.text]
+
+        for item in beat.choreography:
+            item_type = item.get("type")
+            if item_type not in ("hover", "click"):
+                continue
+            target = item.get("target", "")
+            sidx = item.get("sentence_idx", 0)
+            if sidx < 0 or sidx >= len(sentences):
+                continue
+            sentence = sentences[sidx]
+            allowed = set(LessonBuilder._sentence_targets(sentence, columns, table))
+            if not allowed:
+                # Sentence references nothing visual; anchor rests are allowed.
+                continue
+
+            target_tab = LessonBuilder._target_tab(target)
+            allowed_tabs = {LessonBuilder._target_tab(t) for t in allowed}
+            allowed_lower = {t.lower() for t in allowed}
+
+            # Tab switch check: a tab target is allowed only when the sentence
+            # explicitly references that view's content.
+            if "tab" in target.lower():
+                if target_tab == "browse_data":
+                    # Browse Data is a frequent false positive from the word "rows";
+                    # require an explicit reference.
+                    if (
+                        "browse data" not in sentence.lower()
+                        and "the browse data tab" not in allowed_lower
+                    ):
+                        errors.append(
+                            f"{beat.beat_id} sentence {sidx} switches to '{target}' "
+                            f"but sentence does not explicitly reference Browse Data"
+                        )
+                        continue
+                elif target_tab not in allowed_tabs:
+                    errors.append(
+                        f"{beat.beat_id} sentence {sidx} switches to '{target}' "
+                        f"but sentence references: {sorted(allowed)}"
+                    )
+                    continue
+                # Tab switch is explicitly permitted by this sentence.
+                continue
+
+            # Demo beats intentionally keep the cursor over editor anchors while
+            # typing, so only enforce tab-switch consistency for them.
+            if beat.kind == "demo":
+                continue
+
+            # General target check: the target must be one the sentence names.
+            if target.lower() not in allowed_lower:
+                errors.append(
+                    f"{beat.beat_id} sentence {sidx} gestures at '{target}' "
+                    f"but sentence references: {sorted(allowed)}"
+                )
+        return errors
 
     @staticmethod
     def _parse_demo_to_action(text: str) -> List[Dict[str, Any]]:
@@ -1830,6 +1905,26 @@ class LessonBuilder:
                 "segments": [{"text": text}],
             }
 
+        def _line_segments_action(
+            text: str,
+            sentence_indices: Optional[List[int]] = None,
+        ) -> Dict[str, Any]:
+            """Split a block into one segment per non-empty line with sentence tagging."""
+            lines = [line for line in text.split("\n") if line]
+            if sentence_indices is None:
+                sentence_indices = [0] * len(lines)
+            else:
+                sentence_indices = list(sentence_indices) + [0] * max(
+                    0, len(lines) - len(sentence_indices)
+                )
+            return {
+                "type": "type_segments",
+                "segments": [
+                    {"text": line, "sentence_idx": sidx}
+                    for line, sidx in zip(lines, sentence_indices[: len(lines)])
+                ],
+            }
+
         def _segment_beat(beat_id: str, text: str, narration: str) -> ScriptBeat:
             action = _segment_action(text)
             return ScriptBeat(
@@ -1857,34 +1952,46 @@ class LessonBuilder:
                     ),
                     action=self._wait_action(),
                 ),
-                _segment_beat(
-                    "beat_002",
-                    comment,
-                    (
+                ScriptBeat(
+                    beat_id="beat_002",
+                    kind="demo",
+                    text=(
                         "We type a comment header at the top of the query so anyone who opens the "
                         "file later can see who created it, when it was written, and what problem "
                         "it solves. The header appears above the SQL and documents the query before "
                         "any code runs, which is a professional habit worth keeping."
                     ),
+                    action=_line_segments_action(comment, [0, 0, 0, 1, 1]),
+                    planned_duration=LessonBuilder._planned_action_seconds(
+                        _line_segments_action(comment, [0, 0, 0, 1, 1])
+                    ),
                 ),
-                _segment_beat(
-                    "beat_003",
-                    select_clause,
-                    (
+                ScriptBeat(
+                    beat_id="beat_003",
+                    kind="demo",
+                    text=(
                         "We type the SELECT clause, listing the columns FirstName, LastName, and "
                         "Email. SELECT tells the database which columns to return, so we ask for "
                         "only the contact fields we need. The SELECT clause appears between the "
                         "comment header and the FROM clause, defining the output clearly."
                     ),
+                    action=_line_segments_action(select_clause),
+                    planned_duration=LessonBuilder._planned_action_seconds(
+                        _line_segments_action(select_clause)
+                    ),
                 ),
-                _segment_beat(
-                    "beat_004",
-                    from_clause,
-                    (
+                ScriptBeat(
+                    beat_id="beat_004",
+                    kind="demo",
+                    text=(
                         "We type FROM Customer to name the data source for the columns. FROM tells "
                         "the database which table holds the data, so the query knows to look in the "
                         "Customer table. This completes the simplest useful query pattern, asking "
                         "for specific data from one table."
+                    ),
+                    action=_line_segments_action(from_clause),
+                    planned_duration=LessonBuilder._planned_action_seconds(
+                        _line_segments_action(from_clause)
                     ),
                 ),
                 ScriptBeat(
@@ -3166,6 +3273,13 @@ Return ONLY a JSON array of beats like:
             errors.append("Script is empty.")
             return False, errors, warnings
 
+        # C16: load table/column metadata for target-content consistency checks.
+        exercise = video.exercise_artifact or {}
+        db_path = exercise.get("db_path")
+        table = exercise.get("table_name", "Orders")
+        facts = self._db_facts(db_path, table)
+        columns = facts.get("columns", [])
+
         # C13: every beat must have choreography to fill its narration duration.
         beats_without_choreography = [b.beat_id for b in beats if not b.choreography]
         if beats_without_choreography:
@@ -3243,6 +3357,10 @@ Return ONLY a JSON array of beats like:
                     f"{beat.beat_id} contains banned filler phrase."
                 )
 
+            # C16: gesture targets must name what the sentence names.
+            consistency_errors = self._choreography_matches_sentences(beat, columns, table)
+            errors.extend(consistency_errors)
+
             lowered = beat.text.lower()
             for pattern in self._FORBIDDEN_VOICE_PATTERNS:
                 if re.search(pattern, lowered):
@@ -3295,7 +3413,7 @@ Return ONLY a JSON array of beats like:
                 action_type = beat.action.get("type")
                 if action_type == "type_segments":
                     segments = beat.action.get("segments") or []
-                    segment_text = "".join(
+                    segment_text = "\n".join(
                         (s.get("text", "") if isinstance(s, dict) else str(s))
                         for s in segments
                     )
