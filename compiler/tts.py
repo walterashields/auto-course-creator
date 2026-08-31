@@ -7,9 +7,11 @@ Generates one continuous audio file from all narration beats.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,6 +26,9 @@ from compiler.schemas import ExecutionGraph, NarrationBeat
 from compiler.speech_normalize import SpeechNormalizer
 
 
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / "tts_cache"
+
+
 class TTSAuthError(RuntimeError):
     """Raised when ElevenLabs rejects the API key (HTTP 401/403)."""
 
@@ -34,13 +39,20 @@ class TTSGenerator:
     Produces one continuous audio file with silence padding between beats.
     """
 
-    def __init__(self, api_key: Optional[str] = None, voice_id: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        voice_id: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+    ):
         self.api_key = (api_key or os.environ.get("ELEVENLABS_API_KEY", "")).strip()
         self.voice_id = (voice_id or os.environ.get("ELEVENLABS_VOICE_ID", "")).strip()
         # eleven_turbo_v2 is deprecated; v2.5 is the supported successor.
         # Override with ELEVENLABS_MODEL_ID if needed.
         self.model = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_turbo_v2_5").strip()
         self.normalize = SpeechNormalizer.normalize
+        self.cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         if not self.api_key:
             raise ValueError("ElevenLabs API key required. Set ELEVENLABS_API_KEY env var.")
@@ -48,6 +60,24 @@ class TTSGenerator:
             raise ValueError("ElevenLabs voice ID required. Set ELEVENLABS_VOICE_ID env var.")
 
         print(f"TTS using key prefix: {self.api_key[:10]}... voice: {self.voice_id[:8]}...")
+
+    def _cache_key(self, text: str) -> str:
+        """Return a deterministic cache key for a normalized text + voice + model."""
+        payload = f"{text}|{self.voice_id}|{self.model}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _cached_path(self, text: str) -> Path:
+        return self.cache_dir / f"{self._cache_key(text)}.mp3"
+
+    def _clip_is_valid_static(self, clip_path: Path) -> bool:
+        """Return True if the MP3 exists and is decodable."""
+        if not clip_path.exists() or clip_path.stat().st_size < 1000:
+            return False
+        try:
+            AudioSegment.from_mp3(str(clip_path))
+            return True
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Credential preflight
@@ -112,8 +142,10 @@ class TTSGenerator:
 
     def generate_clips(self, graph: ExecutionGraph, temp_dir: Optional[str] = None) -> List[dict]:
         """
-        Generate individual TTS clips for each beat.
-        Returns list of dicts: {"beat_id", "path", "duration_ms", "start_ms", "end_ms"}
+        Generate individual TTS clips for each beat, using a persistent cache
+        keyed by the hash of normalized text + voice + model.
+
+        Returns list of tuples: (beat, clip_path, duration_ms)
         """
         clips = []
         temp_dir = Path(temp_dir) if temp_dir else Path(tempfile.gettempdir()) / "wsda_tts"
@@ -124,18 +156,31 @@ class TTSGenerator:
             text = self.normalize(beat.text)
             beat.tts_text = text  # Store normalized text back on beat
 
-            clip_path = temp_dir / f"{graph.graph_id}_beat_{i:03d}.mp3"
+            temp_clip_path = temp_dir / f"{graph.graph_id}_beat_{i:03d}.mp3"
+            cached_path = self._cached_path(text)
 
-            if not self._clip_is_valid(clip_path):
-                if clip_path.exists():
-                    clip_path.unlink()
-                self._synthesize_text(text, str(clip_path))
+            if self._clip_is_valid_static(cached_path):
+                print(
+                    f"[TTS] {beat.beat_id} cache HIT {cached_path.name}",
+                    file=sys.stderr,
+                )
+                shutil.copy2(str(cached_path), str(temp_clip_path))
+            else:
+                print(
+                    f"[TTS] {beat.beat_id} cache MISS {cached_path.name}",
+                    file=sys.stderr,
+                )
+                self._synthesize_text(text, str(cached_path))
+                if self._clip_is_valid_static(cached_path):
+                    shutil.copy2(str(cached_path), str(temp_clip_path))
+                else:
+                    raise RuntimeError(f"TTS synthesis failed for {beat.beat_id}")
 
             # Measure actual duration with pydub
-            audio = AudioSegment.from_mp3(str(clip_path))
+            audio = AudioSegment.from_mp3(str(temp_clip_path))
             duration_ms = len(audio)
 
-            clips.append((beat, str(clip_path), duration_ms))
+            clips.append((beat, str(temp_clip_path), duration_ms))
 
         return clips
 

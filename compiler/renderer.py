@@ -266,6 +266,15 @@ class GraphRenderer:
                     )
                     self._print_timing_table(graph_id, timing_details)
 
+                    # Sync the graph timeline to the actual frame durations so the
+                    # reported duration matches the rendered output.
+                    cursor = 0.0
+                    for beat in graph.narration_beats:
+                        duration = frame_durations.get(beat.beat_id, MIN_STATE_DURATION)
+                        beat.start_time = round(cursor, 3)
+                        cursor += duration
+                        beat.end_time = round(cursor, 3)
+
                     # Write timing report and flag videos that exceed the pad cap.
                     timing_report_path = output_dir / f"{graph_id}_timing_report.json"
                     self._write_timing_report(

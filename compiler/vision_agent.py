@@ -29,6 +29,9 @@ import numpy as np
 import pyautogui
 from PIL import Image
 
+# Automated recording must not abort when the cursor reaches a screen corner.
+pyautogui.FAILSAFE = False
+
 from .schemas import EnvironmentProfile
 from .frame_analysis import detect_error_signature
 from .cost_tracker import CostTracker, get_tracker, tracked_create
@@ -116,6 +119,7 @@ class VisionAgent:
         self._last_executed_statement: str = ""
         self._last_composed_text: Optional[str] = None
         self._last_assessment_text: str = ""
+        self._choreo_target_calls: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Core screenshot / scaling helpers
@@ -2649,6 +2653,248 @@ end tell
             if not self.emphasize_element(description, select=True):
                 ok = False
             time.sleep(0.3)
+        return ok
+
+    def _resolve_choreography_target(self, target: str) -> Optional[Tuple[int, int]]:
+        """Return logical screen coordinates for known choreography targets.
+
+        Choreography is not a precise VLM action; it only needs deliberate cursor
+        motion in the right region.  We resolve a small set of canonical phrases
+        to approximate coordinates so the whole routine stays fast enough to fill
+        the beat's narration window.
+
+        Repeating the same target returns a rotated set of positions within that
+        element so the cursor visibly moves instead of resting on an identical
+        pixel (C14 anti-stall).
+        """
+        if not target:
+            return None
+        lowered = target.lower()
+        size = pyautogui.size()
+        w, h = size.width, size.height
+
+        def pt(fx: float, fy: float) -> Tuple[int, int]:
+            return (int(round(w * fx)), int(round(h * fy)))
+
+        # Multi-position pools for common targets so revisits produce motion.
+        pools: Dict[str, List[Tuple[float, float]]] = {
+            "sql editor text area": [(0.45, 0.34), (0.55, 0.39), (0.50, 0.44)],
+            "select clause": [(0.45, 0.38), (0.55, 0.40), (0.50, 0.42)],
+            "select statement": [(0.45, 0.38), (0.55, 0.40), (0.50, 0.42)],
+            "comment block": [(0.45, 0.27), (0.55, 0.30), (0.50, 0.32)],
+            "result pane": [(0.45, 0.70), (0.55, 0.75), (0.50, 0.80)],
+            "customer rows": [(0.45, 0.72), (0.55, 0.76), (0.50, 0.79)],
+        }
+
+        for key, positions in pools.items():
+            if key in lowered:
+                idx = self._choreo_target_calls.get(target, 0)
+                self._choreo_target_calls[target] = idx + 1
+                fx, fy = positions[idx % len(positions)]
+                return pt(fx, fy)
+
+        # Tabs along the top of the DB Browser window.
+        if "database structure tab" in lowered:
+            return pt(0.42, 0.11)
+        if "execute sql tab" in lowered:
+            return pt(0.60, 0.11)
+        if "browse data tab" in lowered:
+            return pt(0.72, 0.11)
+
+        # Toolbar.
+        if "execute sql toolbar button" in lowered:
+            return pt(0.10, 0.14)
+
+        # Schema tree.
+        if "customer table" in lowered and "tree" in lowered:
+            return pt(0.08, 0.27)
+
+        # Columns in the Database Structure pane (right-hand list).
+        col_under_match = re.search(r"(\w+)\s+column\s+under", lowered)
+        if col_under_match:
+            col = col_under_match.group(1).lower()
+            offsets = {"firstname": 0.00, "last": 0.04, "email": 0.08}
+            off = 0.0
+            for key, val in offsets.items():
+                if key in col:
+                    off = val
+                    break
+            return pt(0.65, 0.27 + off)
+
+        # Column headers in the result grid.
+        col_header_match = re.search(r"(\w+)\s+column\s+header", lowered)
+        if col_header_match:
+            col = col_header_match.group(1).lower()
+            offsets = {"first": 0.00, "last": 0.07, "email": 0.14}
+            off = 0.0
+            for key, val in offsets.items():
+                if key in col:
+                    off = val
+                    break
+            return pt(0.065 + off, 0.62)
+
+        if "first row" in lowered:
+            return pt(0.18, 0.65)
+
+        return None
+
+    def _move_to_target(self, target: str) -> bool:
+        point = self._resolve_choreography_target(target)
+        if point is None:
+            return self.emphasize_element(target, select=False)
+        try:
+            pyautogui.moveTo(point[0], point[1], duration=0.7, tween=pyautogui.easeInOutQuad)
+            time.sleep(0.05)
+            return True
+        except Exception as exc:
+            print(f"Warning: direct choreography move failed: {exc}", file=sys.stderr)
+            return False
+
+    def execute_choreography_item(self, item: Dict[str, Any]) -> bool:
+        """
+        Execute one choreography action spec.
+
+        Supported types:
+          - hover:  move cursor to the described element
+          - click:  click the described element
+          - scroll: scroll the result pane or main window
+          - pause:  sleep for ``duration`` seconds
+          - drag:   drag-select across an element (for highlighting rows/cells)
+        """
+        action_type = (item.get("type") or "").lower()
+        target = item.get("target", "")
+        if action_type == "pause":
+            duration = float(item.get("duration", 0.5))
+            time.sleep(duration)
+            return True
+        if action_type == "hover":
+            return self._move_to_target(target)
+        if action_type == "click":
+            if not self._move_to_target(target):
+                return False
+            try:
+                pyautogui.click()
+                time.sleep(0.2)
+                return True
+            except Exception as exc:
+                print(f"Warning: click choreography failed: {exc}", file=sys.stderr)
+                return False
+        if action_type == "drag":
+            point = self._resolve_choreography_target(target)
+            if point is None:
+                return self.emphasize_element(target, select=True)
+            try:
+                x, y = point
+                pyautogui.moveTo(x, y, duration=0.4, tween=pyautogui.easeInOutQuad)
+                pyautogui.mouseDown()
+                pyautogui.moveTo(x + 150, y, duration=0.4, tween=pyautogui.easeInOutQuad)
+                pyautogui.mouseUp()
+                time.sleep(0.2)
+                return True
+            except Exception as exc:
+                print(f"Warning: drag choreography failed: {exc}", file=sys.stderr)
+                return False
+        if action_type == "scroll":
+            direction = item.get("direction", "down")
+            amount = int(item.get("amount", 3))
+            try:
+                if direction == "down":
+                    pyautogui.scroll(-amount * 30)
+                else:
+                    pyautogui.scroll(amount * 30)
+                time.sleep(0.2)
+                return True
+            except Exception as exc:
+                print(f"Warning: scroll choreography failed: {exc}", file=sys.stderr)
+                return False
+        print(f"Warning: unknown choreography type {action_type!r}", file=sys.stderr)
+        return False
+
+    def execute_choreography(
+        self,
+        items: List[Dict[str, Any]],
+        max_duration: Optional[float] = None,
+    ) -> bool:
+        """
+        Run a list of choreography items sequentially.
+
+        If ``max_duration`` is provided, the routine stops before it exceeds the
+        budget and truncates the final pause so the recorded clip stays within
+        the narration-paced timing contract.  Leftover time is spent resting on
+        the last target; cursor patrol/filler motion is banned (C14).
+        """
+        start = time.time()
+        ok = True
+        for i, item in enumerate(items):
+            item = dict(item)
+            remaining: Optional[float] = None
+            if max_duration is not None:
+                elapsed = time.time() - start
+                remaining = max(0.0, max_duration - elapsed)
+                if remaining <= 0.05:
+                    remaining_items = len(items) - i
+                    if remaining_items:
+                        print(
+                            f"  [CHOREO] time budget exhausted; skipping {remaining_items} item(s)",
+                            file=sys.stderr,
+                        )
+                    break
+                if item.get("type") == "pause":
+                    # C14: resting on a target is correct teaching, but no single
+                    # still run may exceed 6s (B3 anti-stall gate). Cap each pause
+                    # well below the gate so combined rests cannot breach it.
+                    item["duration"] = min(float(item.get("duration", 0.5)), remaining, 3.0)
+
+            target = item.get("target", "")
+            print(
+                f"  [CHOREO] {item.get('type')} {target[:60]}",
+                file=sys.stderr,
+            )
+            if not self.execute_choreography_item(item):
+                ok = False
+
+        if max_duration is not None:
+            elapsed = time.time() - start
+            leftover = max(0.0, max_duration - elapsed)
+            # C14: resting on a named target is correct teaching, but B3 caps any
+            # contiguous still run at 6s. Keep rests <= 5.5s; if narration leaves
+            # more time, revisit the same named targets rather than inventing
+            # patrol/filler motion.
+            while leftover > 0.05:
+                if leftover <= 3.0:
+                    print(
+                        f"  [CHOREO] resting {leftover:.2f}s on last target",
+                        file=sys.stderr,
+                    )
+                    time.sleep(leftover)
+                    break
+                print(
+                    "  [CHOREO] revisiting targets to avoid a long still run",
+                    file=sys.stderr,
+                )
+                for item in items:
+                    if leftover <= 0.05:
+                        break
+                    revisit = dict(item)
+                    rev_type = revisit.get("type")
+                    if rev_type not in ("hover", "click", "pause"):
+                        continue
+                    # On revisit, point instead of clicking so we do not change
+                    # application state.
+                    if rev_type == "click":
+                        revisit["type"] = "hover"
+                    if revisit.get("type") == "pause":
+                        revisit["duration"] = min(
+                            float(revisit.get("duration", 0.5)), 5.5, leftover
+                        )
+                    target = revisit.get("target", "")
+                    print(
+                        f"  [CHOREO] {revisit.get('type')} {target[:60]}",
+                        file=sys.stderr,
+                    )
+                    self.execute_choreography_item(revisit)
+                    elapsed = time.time() - start
+                    leftover = max(0.0, max_duration - elapsed)
         return ok
 
     def frame_shows_error_signature(self, frame_path: str) -> bool:

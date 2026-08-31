@@ -38,10 +38,14 @@ import numpy as np
 import pyautogui
 from PIL import Image
 
+# Automated recording must not abort when the cursor reaches a screen corner.
+pyautogui.FAILSAFE = False
+
 from .frame_analysis import count_error_signature_frames
 from .narrator import ScriptBeat
-from .schemas import DiscoveryResult, EnvironmentProfile, ScreenState
+from .schemas import DiscoveryResult, EnvironmentProfile, ExecutionGraph, NarrationBeat, ScreenState
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
+from .tts import TTSGenerator
 from .vision_agent import VisionAgent
 from .cost_tracker import get_tracker, tracked_create
 
@@ -3104,6 +3108,42 @@ class EndStateDiscovery:
         previous_observed_state: Optional[Dict[str, Any]] = None
         executed_demo_count = 0
 
+        # C13: pre-generate TTS for every beat so recording can be paced by the
+        # spoken duration. Persistent cache avoids re-synthesizing identical text.
+        tts_clip_by_beat: Dict[str, Tuple[str, int]] = {}
+        try:
+            tts_graph = ExecutionGraph(
+                graph_id=f"{run_id}_tts",
+                learning_objective="tts generation",
+                application=self.application,
+                start_state=ScreenState(
+                    state_id="state_start",
+                    screenshot_path="",
+                    timestamp=0.0,
+                    application="db_browser_sqlite",  # type: ignore[arg-type]
+                ),
+                end_state=ScreenState(
+                    state_id="state_end",
+                    screenshot_path="",
+                    timestamp=0.0,
+                    application="db_browser_sqlite",  # type: ignore[arg-type]
+                ),
+                narration_beats=[
+                    NarrationBeat(
+                        beat_id=beat.beat_id,
+                        attaches_to="state",
+                        target_id="state_start",
+                        text=beat.text,
+                    )
+                    for beat in beats
+                ],
+            )
+            tts = TTSGenerator()
+            tts_clips = tts.generate_clips(tts_graph, temp_dir=str(self.output_dir / "tts_tmp"))
+            tts_clip_by_beat = {beat.beat_id: (path, dur) for beat, path, dur in tts_clips}
+        except Exception as exc:
+            print(f"Warning: TTS pre-generation failed: {exc}; falling back to unpaced recording.", file=sys.stderr)
+
         # Ceiling: one pass per beat (bounded by len(beats)).
         for idx, beat in enumerate(beats):
             action = beat.action
@@ -3112,8 +3152,10 @@ class EndStateDiscovery:
                 action = {"type": "wait", "duration": 1.5}
 
             # --- SKIP redundant demo actions ----------------------------------
+            # C13: when choreography is present we record the beat's deliberate
+            # cursor tour, so never collapse it into a skipped state beat.
             skipped = False
-            if beat.kind == "demo" and action.get("type") != "wait":
+            if beat.kind == "demo" and action.get("type") != "wait" and not beat.choreography:
                 intended = self._intended_state_description(action)
                 later_demos = [j for j in range(idx + 1, len(beats)) if beats[j].kind == "demo"]
                 # Segmented typing builds the query clause-by-clause; each segment
@@ -3194,6 +3236,8 @@ class EndStateDiscovery:
                     recorder = _ScreenCaptureKitRecorder(
                         str(clip_path), fps=10, app_name=self.profile.app_name
                     )
+                audio_proc: Optional[subprocess.Popen] = None
+                audio_duration = 0.0
                 if not skipped:
                     # Stage prep before recording: clear editor for standalone typing
                     # beats, but keep the commented history in place for continuity
@@ -3207,6 +3251,25 @@ class EndStateDiscovery:
                         agent.dismiss_transient_ui()
                     agent.recording = True
                     recorder.start()
+                    # C13: start the beat's own TTS so recording is paced by speech.
+                    tts_info = tts_clip_by_beat.get(beat.beat_id)
+                    if tts_info:
+                        audio_path, audio_dur_ms = tts_info
+                        audio_duration = audio_dur_ms / 1000.0
+                        print(
+                            f"  [TTS] playing {beat.beat_id} audio ({audio_duration:.2f}s)",
+                            file=sys.stderr,
+                        )
+                        audio_proc = subprocess.Popen(
+                            ["afplay", str(audio_path)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    else:
+                        print(
+                            f"  [TTS] no audio for {beat.beat_id}; recording unpaced",
+                            file=sys.stderr,
+                        )
                 clip_start = time.time()
 
                 try:
@@ -3214,7 +3277,16 @@ class EndStateDiscovery:
                         f"  Executing beat {beat.beat_id} ({beat.kind}): {beat.text[:60]}",
                         file=sys.stderr,
                     )
-                    if not skipped:
+                    if beat.choreography:
+                        print(
+                            f"  [CHOREOGRAPHY] {beat.beat_id}: {beat.choreography}",
+                            file=sys.stderr,
+                        )
+
+                    # C13: demo beats run their concrete action first; all beats then
+                    # fill the narration duration with choreography synced to TTS.
+                    is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
+                    if is_demo_action:
                         # Segmented beats get the intended cumulative block as a
                         # fallback so a failed segment recovers to the real target.
                         beat_fallback = (
@@ -3290,6 +3362,29 @@ class EndStateDiscovery:
                                 beat_failed = True
                                 break
 
+                    if not is_demo_action:
+                        beat_ok = True
+
+                    if not beat_failed:
+                        # C13: execute choreography during the remaining TTS window so
+                        # every beat fills its narration duration with deliberate motion.
+                        if beat_ok and beat.choreography:
+                            elapsed = time.time() - clip_start
+                            remaining_tts = (
+                                max(0.0, audio_duration - elapsed)
+                                if audio_duration
+                                else None
+                            )
+                            if remaining_tts is None or remaining_tts > 0.1:
+                                agent.execute_choreography(
+                                    beat.choreography, max_duration=remaining_tts
+                                )
+                            else:
+                                print(
+                                    f"  [CHOREO] {beat.beat_id}: TTS already ended; skipping choreography",
+                                    file=sys.stderr,
+                                )
+
                         if beat_ok and beat.kind == "demo":
                             executed_demo_count += 1
 
@@ -3310,17 +3405,20 @@ class EndStateDiscovery:
                             if action.get("type") == "run_query":
                                 agent.scroll_result_pane_top()
                             agent.dismiss_transient_ui()
-                        elif beat_ok and beat.kind in (
+
+                        # C13: non-demo beats use choreography for motion. The old
+                        # emphasis path remains only as a fallback for beats without
+                        # choreography, and the long stability wait is skipped when
+                        # choreography already occupied the narration duration.
+                        if beat_ok and beat.kind in (
                             "opening", "state", "explain", "concept", "validation", "close"
                         ):
-                            # Part E: fill non-demo beats with real cursor motion so the
-                            # clip is not a static hold. This includes opening/close beats
-                            # which otherwise produce long still-image segments.
-                            print(
-                                f"  [EMPHASIS] {beat.beat_id}: performing emphasis actions",
-                                file=sys.stderr,
-                            )
-                            agent.perform_emphasis_actions(beat)
+                            if not beat.choreography:
+                                print(
+                                    f"  [EMPHASIS] {beat.beat_id}: performing emphasis actions",
+                                    file=sys.stderr,
+                                )
+                                agent.perform_emphasis_actions(beat)
 
                             # Persist the verified editor content for type_block beats.
                             if action.get("type") == "type_block":
@@ -3333,14 +3431,15 @@ class EndStateDiscovery:
                                     beat.observed_state["editor_content"] = intended
                                     last_good_editor = intended
 
-                            # Keep recorder running while the UI settles so the clip
-                            # captures the settled end state rather than cutting off
-                            # while animations or loading are still in progress.
-                            self._wait_for_visual_stability(
-                                interval_seconds=0.4,
-                                timeout_seconds=4.0,
-                                frontmost_log_path=frontmost_log_path,
-                            )
+                            if not beat.choreography:
+                                # Keep recorder running while the UI settles so the clip
+                                # captures the settled end state rather than cutting off
+                                # while animations or loading are still in progress.
+                                self._wait_for_visual_stability(
+                                    interval_seconds=0.4,
+                                    timeout_seconds=4.0,
+                                    frontmost_log_path=frontmost_log_path,
+                                )
 
                             # --- SQL result grounding --------------------------------
                             # Only auto-run and ground when the beat actually contains a
@@ -3370,10 +3469,41 @@ class EndStateDiscovery:
                                     )
                                     beat_failed = True
                                     break
+
+                        # C13: wait for the beat's TTS to finish, then record a 1.0s tail.
+                        if audio_proc is not None:
+                            elapsed = time.time() - clip_start
+                            wait_for_tts_end = max(0.0, audio_duration - elapsed)
+                            if wait_for_tts_end > 0.1:
+                                # C14: keep the cursor moving over named targets while the
+                                # narration finishes; a plain sleep would create a long
+                                # static run that fails the B3 anti-stall gate.
+                                if beat.choreography:
+                                    agent.execute_choreography(
+                                        beat.choreography, max_duration=wait_for_tts_end
+                                    )
+                                else:
+                                    time.sleep(wait_for_tts_end)
+                            try:
+                                audio_proc.wait(timeout=2.0)
+                            except subprocess.TimeoutExpired:
+                                audio_proc.terminate()
+                            time.sleep(1.0)
+
+                        # C14: non-demo beats stop recording after the narration tail so
+                        # assessment/grounding does not append long static frames.
+                        if not is_demo_action and not skipped:
+                            recorder.stop()
+                            agent.recording = False
                     else:
                         beat_ok = True
                 finally:
                     if not skipped:
+                        if audio_proc is not None:
+                            try:
+                                audio_proc.terminate()
+                            except Exception:
+                                pass
                         recorder.stop()
                         agent.recording = False
                 clip_end = time.time()
@@ -3424,7 +3554,12 @@ class EndStateDiscovery:
                                 break
 
                     if clip_path.exists():
-                        self._trim_clip_to_motion(clip_path)
+                        # C13: narration-paced beats must keep their full recorded
+                        # duration so the clip matches the beat's TTS window. Demo
+                        # beats are the exception: their concrete action produces
+                        # sustained motion and the C11 motion trim keeps them tight.
+                        if beat.kind == "demo":
+                            self._trim_clip_to_motion(clip_path)
                         beat.video_clip_path = str(clip_path.resolve())
                     break
 

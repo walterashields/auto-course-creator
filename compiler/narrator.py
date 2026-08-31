@@ -46,6 +46,9 @@ class ScriptBeat:
     observed_state: Optional[Dict[str, Any]] = None
     # Planned action duration used to budget narration length.
     planned_duration: Optional[float] = None
+    # Narration-paced on-screen choreography: a list of small action specs that
+    # fill the beat's spoken duration with deliberate cursor motion.
+    choreography: Optional[List[Dict[str, Any]]] = None
     # True when this beat should be merged into the previous beat by the renderer.
     merge: bool = False
 

@@ -895,6 +895,7 @@ def _video_order(manifest: CourseManifest) -> List[VideoManifest]:
 _SCRIPT_BEAT_FIELDS = {
     "beat_id", "kind", "text", "action", "visual_check",
     "attaches_to", "target_id", "video_clip_path", "observed_state",
+    "choreography", "planned_duration",
 }
 
 
@@ -1109,17 +1110,25 @@ class _Tee:
 
 
 def _setup_run_log(course_output_dir: Path):
-    """Persist console output to run.log inside the course output directory."""
-    log_path = course_output_dir / "run.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    # Ensure the file exists with a run header even if no log records are emitted.
-    if not log_path.exists():
-        log_path.write_text(
-            f"# Run log started {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
-            encoding="utf-8",
-        )
+    """
+    Persist console output to a timestamped run log inside the course output directory.
 
-    # Tee stdout/stderr so print() and logging both end up in run.log.
+    The filename always includes a timestamp so successive runs never clobber
+    previous logs. The most recent log is also symlinked as run_latest.log.
+    """
+    course_output_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    log_path = course_output_dir / f"run_{ts}.log"
+    # If a log already exists for this second, append a microsecond suffix.
+    if log_path.exists():
+        ts = time.strftime("%Y%m%d_%H%M%S") + f"_{time.time_ns() // 1_000_000 % 1000:03d}"
+        log_path = course_output_dir / f"run_{ts}.log"
+    log_path.write_text(
+        f"# Run log started {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+        encoding="utf-8",
+    )
+
+    # Tee stdout/stderr so print() and logging both end up in the run log.
     sys.stdout = _Tee(sys.stdout, log_path)  # type: ignore[assignment]
     sys.stderr = _Tee(sys.stderr, log_path)  # type: ignore[assignment]
 
@@ -1129,6 +1138,17 @@ def _setup_run_log(course_output_dir: Path):
     root = logging.getLogger()
     root.setLevel(min(root.level or logging.INFO, logging.INFO))
     root.addHandler(handler)
+
+    # Stable symlink to the current run log for live tailing.
+    latest_link = course_output_dir / "run_latest.log"
+    try:
+        if latest_link.exists() or latest_link.is_symlink():
+            latest_link.unlink()
+        latest_link.symlink_to(log_path.name)
+    except Exception:
+        pass
+
+    print(f"[RUN LOG] {log_path}", file=sys.stderr)
     return handler
 
 

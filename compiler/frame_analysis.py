@@ -211,6 +211,45 @@ def frozen_share_percent(
     return (frozen_pairs / (len(gray_frames) - 1)) * 100.0
 
 
+def max_frozen_run_seconds(
+    video_path: Path,
+    sample_fps: int = 1,
+    width: int = 320,
+    mse_threshold: float = 0.5,
+) -> float:
+    """
+    Return the longest contiguous run of visually identical seconds in the video.
+
+    A second is "frozen" when consecutive sampled frames have MSE <
+    ``mse_threshold``.  A run of N frozen pairs corresponds to N+1 seconds of
+    frozen video.  The B3 anti-stall gate uses this value instead of the
+    overall frozen share so that resting the cursor on a discussed element is
+    allowed, but a stale frame for >6s is not.
+    """
+    frames = _extract_frames_at_fps(video_path, sample_fps)
+    if len(frames) < 2:
+        return 0.0
+
+    gray_frames: List[np.ndarray] = []
+    for _t, bgr in frames:
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        gray = _resize_to_width(gray, width)
+        gray_frames.append(gray.astype(np.float32))
+
+    max_run_pairs = 0
+    current_run = 0
+    for prev, curr in zip(gray_frames, gray_frames[1:]):
+        mse = float(np.mean((prev - curr) ** 2))
+        if mse < mse_threshold:
+            current_run += 1
+            max_run_pairs = max(max_run_pairs, current_run)
+        else:
+            current_run = 0
+
+    # N frozen pairs == N+1 seconds of contiguous stall.
+    return (max_run_pairs + 1) / sample_fps
+
+
 # ---------------------------------------------------------------------------
 # A4 — Computed metrics and reconciliation
 # ---------------------------------------------------------------------------
@@ -289,6 +328,7 @@ def compute_video_metrics(
     audio_duration = _video_duration(audio_path) if audio_path and audio_path.exists() else 0.0
     word_count = word_count_from_reference(reference_md_path)
     frozen_pct = frozen_share_percent(final_path)
+    max_frozen_run = max_frozen_run_seconds(final_path)
     error_frames = count_error_signature_frames(final_path, profile)
 
     final_beat_text = ""
@@ -312,6 +352,7 @@ def compute_video_metrics(
         "audio_duration_seconds": round(audio_duration, 3),
         "word_count": word_count,
         "frozen_pct": round(frozen_pct, 2),
+        "max_frozen_run_seconds": round(max_frozen_run, 2),
         "error_frames": error_frames,
         "final_beat_text": final_beat_text,
     }
@@ -381,6 +422,7 @@ def run_acceptance_gates(
     duration = metrics["duration_seconds"]
     audio_duration = metrics["audio_duration_seconds"]
     word_count = metrics["word_count"]
+    max_frozen_run = metrics["max_frozen_run_seconds"]
     frozen_pct = metrics["frozen_pct"]
     error_frames = metrics["error_frames"]
     final_beat_text = metrics["final_beat_text"]
@@ -396,14 +438,16 @@ def run_acceptance_gates(
         b2 = True
         b2_value = "skipped"
         b2_threshold = "skipped"
-    b3 = frozen_pct < 15.0
+    # C14: anti-stall gate.  Resting the cursor on the element being discussed
+    # is correct teaching; only contiguous stalls longer than 6s fail.
+    b3 = max_frozen_run <= 6.0
     b4 = error_frames == 0
     b5 = bool(re.search(r"[.!?]$", final_beat_text.strip()))
 
     gates = [
         {"gate": "B1_words", "value": word_count, "threshold": "400-700", "passed": b1},
         {"gate": "B2_av_sync", "value": b2_value, "threshold": b2_threshold, "passed": b2},
-        {"gate": "B3_frozen", "value": frozen_pct, "threshold": "<15%", "passed": b3},
+        {"gate": "B3_frozen", "value": max_frozen_run, "threshold": "<=6.0s", "passed": b3},
         {"gate": "B4_errors", "value": error_frames, "threshold": "0", "passed": b4},
         {"gate": "B5_terminal", "value": final_beat_text[-30:] if final_beat_text else "", "threshold": "terminal punctuation", "passed": b5},
     ]

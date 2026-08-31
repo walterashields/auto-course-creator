@@ -11,6 +11,7 @@ harness, and builds an ExecutionGraph from the resulting recorded clips.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -881,6 +882,236 @@ class LessonBuilder:
         return {"type": "sequence", "actions": actions}
 
     @staticmethod
+    def _choreography_pause(duration: float = 1.0) -> Dict[str, Any]:
+        return {"type": "pause", "duration": duration}
+
+    @staticmethod
+    def _choreography_hover(target: str) -> Dict[str, Any]:
+        return {"type": "hover", "target": target}
+
+    @staticmethod
+    def _choreography_click(target: str) -> Dict[str, Any]:
+        return {"type": "click", "target": target}
+
+    @staticmethod
+    def _choreography_scroll(direction: str = "down", amount: int = 3) -> Dict[str, Any]:
+        return {"type": "scroll", "direction": direction, "amount": amount}
+
+    @staticmethod
+    def _choreography_drag(target: str) -> Dict[str, Any]:
+        return {"type": "drag", "target": target}
+
+    @staticmethod
+    def _choreography_tour(columns: List[str], table: str) -> List[Dict[str, Any]]:
+        """Return a cursor tour of the DB Browser environment."""
+        items: List[Dict[str, Any]] = []
+        items.append(LessonBuilder._choreography_hover("the SQL editor text area"))
+        items.append(LessonBuilder._choreography_pause(1.0))
+        items.append(LessonBuilder._choreography_hover("the result pane showing query output"))
+        items.append(LessonBuilder._choreography_pause(1.0))
+        items.append(LessonBuilder._choreography_click("the Database Structure tab"))
+        items.append(LessonBuilder._choreography_click(f"the {table} table in the Database Structure tree"))
+        for col in columns[:3]:
+            items.append(LessonBuilder._choreography_hover(f"the {col} column under {table}"))
+            items.append(LessonBuilder._choreography_pause(0.8))
+        items.append(LessonBuilder._choreography_click("the Browse Data tab"))
+        items.append(LessonBuilder._choreography_hover(f"the {table} rows in the Browse Data grid"))
+        items.append(LessonBuilder._choreography_pause(1.0))
+        items.append(LessonBuilder._choreography_click("the Execute SQL tab"))
+        items.append(LessonBuilder._choreography_pause(1.0))
+        return items
+
+    @staticmethod
+    def _sentence_targets(sentence: str, columns: List[str], table: str) -> List[str]:
+        """Return ordered list of UI targets referenced by a sentence."""
+        lowered = sentence.lower()
+        targets: List[str] = []
+
+        # Specific tab targets first so explicit references win.
+        if "database structure" in lowered:
+            targets.append("the Database Structure tab")
+        if "browse data" in lowered:
+            targets.append("the Browse Data tab")
+        if "execute sql" in lowered:
+            targets.append("the Execute SQL tab")
+
+        # Column headers or columns under a table.
+        for col in columns:
+            if re.search(rf"\b{re.escape(col)}\b", sentence, re.IGNORECASE):
+                if "header" in lowered or "column" in lowered:
+                    targets.append(f"the {col} column header in the result pane")
+                else:
+                    targets.append(f"the {col} column under {table}")
+
+        # Table reference.
+        if re.search(rf"\b{re.escape(table)}\b", sentence, re.IGNORECASE):
+            if "structure" in lowered or "tree" in lowered or "columns" in lowered:
+                targets.append(f"the {table} table in the Database Structure tree")
+            elif "row" in lowered or "browse" in lowered or "grid" in lowered:
+                targets.append(f"the {table} rows in the Browse Data grid")
+
+        if "result pane" in lowered or ("result" in lowered and "pane" in lowered):
+            targets.append("the result pane showing query output")
+        if "editor" in lowered or re.search(r"\bquery\b", lowered):
+            targets.append("the SQL editor text area")
+        if re.search(r"\b(comment block|comment header)\b", lowered):
+            targets.append("the comment block in the SQL editor")
+        if re.search(r"\b(select clause|select list)\b", lowered):
+            targets.append("the SELECT clause in the SQL editor")
+        if re.search(r"\b(order by clause)\b", lowered):
+            targets.append("the ORDER BY clause in the SQL editor")
+        if re.search(r"\b(limit clause)\b", lowered):
+            targets.append("the LIMIT clause in the SQL editor")
+        if re.search(r"\b(run|execute)\s+the\s+quer", lowered):
+            targets.append("the Execute SQL toolbar button")
+        if re.search(r"\bfirst\s+row\b", lowered):
+            targets.append("the first row in the result grid")
+        if re.search(r"\bfinished\s+select\b", lowered):
+            targets.append("the finished SELECT statement in the SQL editor")
+
+        return targets
+
+    @staticmethod
+    def _target_tab(target: str) -> str:
+        """Return the tab/view a choreography target belongs to."""
+        lowered = target.lower()
+        if "database structure" in lowered:
+            return "database_structure"
+        if "browse data" in lowered:
+            return "browse_data"
+        return "execute_sql"  # Home base for everything else.
+
+    @staticmethod
+    def _choreography_for_beat(
+        beat: ScriptBeat,
+        columns: List[str],
+        table: str,
+        tour_state: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Generate sentence-level choreography with cross-beat tour dedup."""
+        sentences = LessonBuilder._split_sentences(beat.text)
+        if not sentences:
+            sentences = [beat.text]
+
+        items: List[Dict[str, Any]] = []
+        current_tab = tour_state.get("current_tab", "execute_sql")
+        introduced: Set[str] = tour_state.get("introduced", set())
+
+        # Demo beats are composition/execution; they stay on the Execute SQL home
+        # base and point at editor elements so the cursor is synced to the typing.
+        is_demo = beat.kind == "demo"
+
+        def _add_hover(target: str) -> None:
+            # C14: repeated hovers on the same target are not redundant because
+            # the VisionAgent rotates the cursor position within the element,
+            # producing motion that satisfies the B3 anti-stall gate.
+            items.append(LessonBuilder._choreography_hover(target))
+            items.append(LessonBuilder._choreography_pause(1.5))
+
+        def _anchor_target() -> str:
+            if is_demo and beat.action:
+                action_type = beat.action.get("type")
+                if action_type in ("type_block", "type_segments", "type"):
+                    return "the SQL editor text area"
+                if action_type == "run_query":
+                    return "the Execute SQL toolbar button"
+            if beat.kind == "validation":
+                return "the result pane showing query output"
+            if beat.kind == "close":
+                return "the finished SELECT statement in the SQL editor"
+            return "the SQL editor text area"
+
+        for sentence in sentences:
+            targets = LessonBuilder._sentence_targets(sentence, columns, table)
+            if not targets:
+                # Sentence references nothing visual: rest on the beat's anchor.
+                targets = [_anchor_target()]
+
+            if is_demo:
+                # Demo beats are composition/execution on the Execute SQL tab.
+                # Map any result-pane / schema-tree references to editor anchors
+                # so the cursor stays over the live typing area.
+                editor_targets: List[str] = []
+                for t in targets:
+                    lowered = t.lower()
+                    if "result pane" in lowered or "column header" in lowered:
+                        editor_targets.append("the SELECT clause in the SQL editor")
+                    elif "column under" in lowered or "rows in the" in lowered:
+                        editor_targets.append("the SQL editor text area")
+                    elif LessonBuilder._target_tab(t) == "execute_sql":
+                        editor_targets.append(t)
+                targets = editor_targets or [_anchor_target()]
+
+            for target in targets:
+                target_tab = LessonBuilder._target_tab(target)
+
+                # Cross-beat tour dedup: element introductions happen at most once.
+                is_introduction = target_tab in ("database_structure", "browse_data")
+                dedup_key = f"{target_tab}:{target}"
+
+                if is_introduction:
+                    if target_tab != current_tab:
+                        if target_tab in introduced:
+                            # Already toured this view; do not switch back.
+                            continue
+                        # First visit to this tab: click the tab itself as introduction.
+                        items.append(LessonBuilder._choreography_click(f"the {target_tab.replace('_', ' ').title()} tab"))
+                        introduced.add(target_tab)
+                        current_tab = target_tab
+                    if dedup_key in introduced:
+                        # Element already introduced in this view.
+                        continue
+                    introduced.add(dedup_key)
+                else:
+                    # Non-tour targets can switch tabs if the sentence explicitly
+                    # references that view, but we always return to Execute SQL home
+                    # base at beat end.
+                    if target_tab != current_tab:
+                        if target_tab in introduced:
+                            items.append(LessonBuilder._choreography_click(f"the {target_tab.replace('_', ' ').title()} tab"))
+                            current_tab = target_tab
+                        else:
+                            # Tab not yet introduced; skip the gesture and rest on anchor.
+                            continue
+
+                _add_hover(target)
+
+        # Return to Execute SQL home base if we wandered.
+        if current_tab != "execute_sql":
+            items.append(LessonBuilder._choreography_click("the Execute SQL tab"))
+            current_tab = "execute_sql"
+
+        # Every beat must have at least one gesture. If dedup skipped every
+        # target, rest on the beat's anchor so the cursor is visible.
+        if not items:
+            anchor = "the SQL editor text area"
+            if beat.kind == "validation":
+                anchor = "the result pane showing query output"
+            elif beat.kind == "close":
+                anchor = "the finished SELECT statement in the SQL editor"
+            elif beat.kind == "demo" and beat.action:
+                action_type = beat.action.get("type")
+                if action_type == "run_query":
+                    anchor = "the Execute SQL toolbar button"
+            items.append(LessonBuilder._choreography_hover(anchor))
+            items.append(LessonBuilder._choreography_pause(1.5))
+
+        # Print the sentence->gesture map before recording.
+        print(f"[CHOREO MAP] {beat.beat_id}:", file=sys.stderr)
+        for sentence in sentences:
+            sentence_targets = LessonBuilder._sentence_targets(sentence, columns, table)
+            if not sentence_targets:
+                sentence_targets = ["anchor: SQL editor text area"]
+            print(
+                f'[CHOREO MAP]   "{sentence}" -> {", ".join(sentence_targets)}',
+                file=sys.stderr,
+            )
+
+        tour_state["current_tab"] = current_tab
+        tour_state["introduced"] = introduced
+        return items
+
+    @staticmethod
     def _parse_demo_to_action(text: str) -> List[Dict[str, Any]]:
         """
         Parse a demo-beat narration sentence into vision-agent action dicts.
@@ -1568,6 +1799,7 @@ class LessonBuilder:
 
         row_count = ground.get("row_count")
         columns = ground.get("columns", [])
+        table_name = exercise.get("table_name", "Customer")
         columns_text = ", ".join(columns) if columns else "FirstName, LastName, Email"
         rows_word = "rows" if row_count != 1 else "row"
         first_rows = ground.get("first_rows", [])
@@ -1651,10 +1883,9 @@ class LessonBuilder:
                     beat_id="beat_004",
                     kind="state",
                     text=(
-                        "Right now the editor is empty and the result pane below it is blank. "
-                        "When we finish, the editor will hold a comment block followed by a "
-                        "formatted SELECT statement, and the result pane will show the customer "
-                        "contact list."
+                        "The next three actions will add a comment header, the SELECT clause, "
+                        "and the FROM clause. Each piece will appear in the editor as it is typed, "
+                        "and the result pane will stay blank until we run the completed query."
                     ),
                     action=self._wait_action(),
                 ),
@@ -2316,6 +2547,15 @@ class LessonBuilder:
                 ),
             ]
 
+        # C13/C14: every beat gets sentence-level choreography. A beat with no
+        # choreography is a script defect and will fail validation.
+        tour_state: Dict[str, Any] = {"current_tab": "execute_sql", "introduced": set()}
+        for beat in beats:
+            if not beat.choreography:
+                beat.choreography = self._choreography_for_beat(
+                    beat, columns, table_name, tour_state
+                )
+
         return beats
 
     def _enforce_word_limits(
@@ -2907,6 +3147,21 @@ Return ONLY a JSON array of beats like:
             parts.append(chunk)
         return parts
 
+    @staticmethod
+    def _similarity_ratio(a: str, b: str) -> float:
+        """Return normalized similarity of two beat texts."""
+        return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+    def _find_similar_beats(self, beats: List[ScriptBeat]) -> List[Tuple[str, str, float]]:
+        """Return pairs of beats whose text is >75% similar."""
+        violations: List[Tuple[str, str, float]] = []
+        for i in range(len(beats)):
+            for j in range(i + 1, len(beats)):
+                ratio = self._similarity_ratio(beats[i].text, beats[j].text)
+                if ratio > 0.75:
+                    violations.append((beats[i].beat_id, beats[j].beat_id, ratio))
+        return violations
+
     def validate_script(
         self, beats: List[ScriptBeat], video: Any
     ) -> tuple[bool, List[str], List[str]]:
@@ -2923,6 +3178,22 @@ Return ONLY a JSON array of beats like:
         if not beats:
             errors.append("Script is empty.")
             return False, errors, warnings
+
+        # C13: every beat must have choreography to fill its narration duration.
+        beats_without_choreography = [b.beat_id for b in beats if not b.choreography]
+        if beats_without_choreography:
+            errors.append(
+                f"Beats missing choreography: {beats_without_choreography}. "
+                "Every beat needs an explicit action plan filling its narration duration."
+            )
+
+        # C14: no two beats may be >75% similar.
+        similar = self._find_similar_beats(beats)
+        for a, b, ratio in similar:
+            errors.append(
+                f"Script similarity gate violated: {a} and {b} are {ratio:.0%} similar. "
+                "Merge or regenerate the offending beat."
+            )
 
         kinds = [b.kind for b in beats]
         required = {"opening", "demo", "validation", "close"}
@@ -3344,7 +3615,7 @@ Return ONLY a JSON array of beats like:
         if not isinstance(action, dict):
             return False
         action_type = action.get("type")
-        if action_type in ("type_block", "run_query", "execute_query"):
+        if action_type in ("type_block", "type_segments", "run_query", "execute_query"):
             return True
         if action_type == "type" and action.get("text"):
             return True

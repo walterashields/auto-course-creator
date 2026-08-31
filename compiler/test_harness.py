@@ -486,6 +486,56 @@ class TestValidationEchoSemantic(unittest.TestCase):
         self.assertEqual([b.beat_id for b in merged], ["beat_001"])
 
 
+class TestScriptSimilarityGate(unittest.TestCase):
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_similar_beats_are_flagged(self) -> None:
+        """Two beats >75% similar violate the script similarity gate."""
+        beats = [
+            ScriptBeat(
+                beat_id="beat_002",
+                kind="state",
+                text=(
+                    "The editor is empty and the result pane below it is blank. "
+                    "When we finish, the editor will hold a comment block followed by a "
+                    "formatted SELECT statement, and the result pane will show the customer "
+                    "contact list."
+                ),
+            ),
+            ScriptBeat(
+                beat_id="beat_004",
+                kind="state",
+                text=(
+                    "Right now the editor is empty and the result pane below it is blank. "
+                    "When we finish, the editor will hold a comment block followed by a "
+                    "formatted SELECT statement, and the result pane will show the customer "
+                    "contact list."
+                ),
+            ),
+        ]
+        similar = self.builder._find_similar_beats(beats)
+        self.assertTrue(similar, "duplicate state beats should be flagged as similar")
+        self.assertGreater(similar[0][2], 0.75)
+
+    def test_distinct_beats_pass(self) -> None:
+        """Different beats are not flagged as similar."""
+        beats = [
+            ScriptBeat(
+                beat_id="beat_002",
+                kind="state",
+                text="The editor is empty and the result pane below it is blank.",
+            ),
+            ScriptBeat(
+                beat_id="beat_004",
+                kind="state",
+                text="The next three actions will add a comment header, the SELECT clause, and the FROM clause.",
+            ),
+        ]
+        similar = self.builder._find_similar_beats(beats)
+        self.assertFalse(similar)
+
+
 class TestScriptIntegrityGate(unittest.TestCase):
     def setUp(self) -> None:
         self.builder = LessonBuilder()
@@ -1271,6 +1321,68 @@ class TestFrozenShareMetric(unittest.TestCase):
         self.assertLess(frozen_pct, 95.0)
 
 
+class TestFrozenRunGate(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_frozen_run_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _reference_md(self) -> Path:
+        path = self.tmpdir / "reference.md"
+        path.write_text(
+            "| Beat | Kind | Words | Text |\n"
+            "|------|------|-------|------|\n"
+            "| beat_001 | opening | 500 | This is the opening narration ending with punctuation. |\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def _run(self, video: Path) -> Dict[str, Any]:
+        profile = EnvironmentProfile(
+            application="db_browser_sqlite",
+            app_name="DB Browser for SQLite",
+            focus_target="DB Browser for SQLite",
+        )
+        return run_acceptance_gates(
+            final_path=video,
+            audio_path=None,
+            reference_md_path=self._reference_md(),
+            profile=profile,
+        )
+
+    def test_seven_second_static_run_fails(self) -> None:
+        """A single 7-second frozen run fails the B3 anti-stall gate."""
+        video = _make_video(self.tmpdir / "static_7s.mp4", duration=7.0, fps=1, motion=False)
+        result = self._run(video)
+        frozen_gate = next(g for g in result["gates"] if g["gate"] == "B3_frozen")
+        self.assertGreaterEqual(float(frozen_gate["value"]), 7.0)
+        self.assertFalse(frozen_gate["passed"])
+
+    def test_three_five_second_rests_pass(self) -> None:
+        """Three separate 5-second rests, separated by motion, pass B3."""
+        clips: List[Path] = []
+        for i in range(3):
+            clips.append(_make_video(self.tmpdir / f"rest_{i}.mp4", duration=5.0, fps=1, motion=False))
+            if i < 2:
+                clips.append(_make_video(self.tmpdir / f"motion_{i}.mp4", duration=1.0, fps=1, motion=True))
+        combined = self.tmpdir / "combined_rests.mp4"
+        concat_list = self.tmpdir / "concat.txt"
+        concat_list.write_text(
+            "\n".join(f"file '{p.resolve()}'" for p in clips),
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+             "-c", "copy", str(combined)],
+            check=True, capture_output=True, timeout=60,
+        )
+        result = self._run(combined)
+        frozen_gate = next(g for g in result["gates"] if g["gate"] == "B3_frozen")
+        self.assertLessEqual(float(frozen_gate["value"]), 6.0)
+        self.assertTrue(frozen_gate["passed"])
+
+
 class TestScriptIntegrityHardened(unittest.TestCase):
     def setUp(self) -> None:
         self.builder = LessonBuilder()
@@ -1497,6 +1609,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestRenderFromScript))
     suite.addTests(loader.loadTestsFromTestCase(TestAdaptBeatsToObservedState))
     suite.addTests(loader.loadTestsFromTestCase(TestValidationEchoSemantic))
+    suite.addTests(loader.loadTestsFromTestCase(TestScriptSimilarityGate))
     suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityGate))
     suite.addTests(loader.loadTestsFromTestCase(TestEditorReadBack))
     suite.addTests(loader.loadTestsFromTestCase(TestExactLineTyping))
@@ -1515,6 +1628,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestFullBufferReadBack))
     suite.addTests(loader.loadTestsFromTestCase(TestPixelErrorSignature))
     suite.addTests(loader.loadTestsFromTestCase(TestFrozenShareMetric))
+    suite.addTests(loader.loadTestsFromTestCase(TestFrozenRunGate))
     suite.addTests(loader.loadTestsFromTestCase(TestScriptIntegrityHardened))
     suite.addTests(loader.loadTestsFromTestCase(TestRendererNoTrim))
     suite.addTests(loader.loadTestsFromTestCase(TestAcceptanceGateAVSync))
