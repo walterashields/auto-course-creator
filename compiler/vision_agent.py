@@ -1473,6 +1473,7 @@ end tell
         self,
         segments: List[Dict[str, Any]],
         fallback_text: Optional[str] = None,
+        focus_editor: bool = True,
     ) -> bool:
         """
         Type a list of segments into the editor, verifying after each one.
@@ -1480,12 +1481,16 @@ end tell
         During recording each segment is entered with real keystrokes using the
         per-line typing path; paste and select-all are never used. Outside of
         recording the fast paste path is used.
+
+        Args:
+            focus_editor: When False, the caller has already focused the editor,
+                so skip the expensive VLM focus click at the start of the call.
         """
         if not segments:
             return True
 
         self._ensure_frontmost()
-        initial = self._read_editor_content() or ""
+        initial = self._read_editor_content(focus=focus_editor) or ""
 
         def _build_cumulative(base: str, segs: List[Any]) -> str:
             out = base

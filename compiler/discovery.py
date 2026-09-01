@@ -3394,6 +3394,11 @@ class EndStateDiscovery:
                                 ).append((orig_idx, item))
                             choreo_pointer = {s: 0 for s in choreo_by_sentence}
 
+                            # C16: focus the editor once for the whole beat so the
+                            # interleaved segments do not each pay the VLM focus-tax.
+                            if segments:
+                                agent._focus_editor()
+
                             for seg_idx, segment in enumerate(segments):
                                 text = (
                                     segment.get("text", "")
@@ -3413,7 +3418,9 @@ class EndStateDiscovery:
                                 seg_ok = False
                                 for attempt in range(max_attempts):
                                     if agent.type_segments(
-                                        [{"text": text}], fallback_text=beat_fallback
+                                        [{"text": text}],
+                                        fallback_text=beat_fallback,
+                                        focus_editor=False,
                                     ):
                                         seg_ok = True
                                         break

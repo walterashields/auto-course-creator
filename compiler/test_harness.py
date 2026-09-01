@@ -956,7 +956,7 @@ class TestSegmentedTyping(unittest.TestCase):
         def type_side_effect(text: str) -> None:
             nonlocal expected
             expected += text
-        def read_back() -> str:
+        def read_back(*args, **kwargs) -> str:
             return expected
         with (
             mock.patch.object(agent, "_ensure_frontmost") as mock_frontmost,
