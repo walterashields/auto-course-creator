@@ -136,15 +136,20 @@ def _clip_has_off_app_interval(
     return False
 
 
-def _schedule_choreography(items: List[Dict[str, Any]], audio_duration: float) -> List[Dict[str, Any]]:
+def _schedule_choreography(
+    items: List[Dict[str, Any]],
+    audio_duration: float,
+    reserved_seconds: float = 0.0,
+) -> List[Dict[str, Any]]:
     """
     C16: compute pause durations so the total choreography fills the narration
-    window (audio_duration - 1.0s tail, ±0.5s tolerance). Fixed 1.5s pauses are
-    banned; every pause is derived from the available window. Each pause is
-    capped at 5.0s to satisfy the cursor-calm / anti-stall rule. Any remaining
-    time is left for the executor's rest-on-last-target behavior.
+    window (audio_duration - 1.0s tail - reserved_seconds, ±0.5s tolerance).
+    Fixed 1.5s pauses are banned; every pause is derived from the available
+    window. Each pause is capped at 5.0s to satisfy the cursor-calm / anti-stall
+    rule. Any remaining time is left for the executor's rest-on-last-target
+    behavior.
     """
-    target = max(0.0, audio_duration - 1.0)
+    target = max(0.0, audio_duration - 1.0 - reserved_seconds)
     if target <= 0.0 or not items:
         return [dict(it) for it in items]
 
@@ -3343,22 +3348,40 @@ class EndStateDiscovery:
                             file=sys.stderr,
                         )
 
+                    # C13/C16: demo beats run their concrete action; all beats then fill
+                    # the narration duration with scheduled choreography synced to TTS.
+                    is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
+
+                    # C16: reserve time in the narration window for the concrete demo
+                    # action so choreography pauses do not consume the entire TTS budget.
+                    reserved_action_seconds = 0.0
+                    if is_demo_action:
+                        action_type = action.get("type")
+                        if action_type == "type_segments":
+                            segment_count = len(action.get("segments") or [])
+                            # Initial editor focus (~2s) + ~2s per segment for paste,
+                            # accessibility read-back, and line-paste verification.
+                            reserved_action_seconds = 2.0 + segment_count * 2.0
+                        elif action_type in ("type_block", "append_block", "run_query"):
+                            reserved_action_seconds = 3.0
+                        else:
+                            reserved_action_seconds = 2.0
+
                     # C16: schedule choreography so total duration fills the narration
-                    # window (audio - 1.0s tail). Use the scheduled version for execution.
+                    # window (audio - 1.0s tail - reserved action time). Use the
+                    # scheduled version for execution.
                     scheduled_choreo: List[Dict[str, Any]] = []
                     if beat.choreography:
                         scheduled_choreo = _schedule_choreography(
-                            beat.choreography, audio_duration
+                            beat.choreography,
+                            audio_duration,
+                            reserved_seconds=reserved_action_seconds,
                         )
                         print(
                             f"  [CHOREOGRAPHY SCHEDULED] {beat.beat_id}: "
                             f"{scheduled_choreo}",
                             file=sys.stderr,
                         )
-
-                    # C13/C16: demo beats run their concrete action; all beats then fill
-                    # the narration duration with scheduled choreography synced to TTS.
-                    is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
                     if is_demo_action:
                         # Segmented beats get the intended cumulative block as a
                         # fallback so a failed segment recovers to the real target.
@@ -3656,7 +3679,9 @@ class EndStateDiscovery:
                                     beat_failed = True
                                     break
 
-                        # C13: wait for the beat's TTS to finish, then record a 1.0s tail.
+                        # C13/C16: wait for the beat's TTS to finish, then record a 1.0s
+                        # tail. Demo beats included: every beat recording ends at TTS end +
+                        # 1.0s so long static frames cannot accumulate.
                         if audio_proc is not None:
                             elapsed = time.time() - clip_start
                             wait_for_tts_end = max(0.0, audio_duration - elapsed)
@@ -3676,9 +3701,9 @@ class EndStateDiscovery:
                                 audio_proc.terminate()
                             time.sleep(1.0)
 
-                        # C14: non-demo beats stop recording after the narration tail so
+                        # C16: every beat stops recording after the narration tail so
                         # assessment/grounding does not append long static frames.
-                        if not is_demo_action and not skipped:
+                        if not skipped:
                             recorder.stop()
                             agent.recording = False
                     else:

@@ -494,7 +494,9 @@ class GraphRenderer:
             recording deficit; it is recorded as timing debt and the render is
             marked NEEDS_RESHOOT. The video duration for that beat stays at
             clip + MAX_CLONE_PAD_SECONDS so silent padding never exceeds 4s.
-          - Clips are NEVER trimmed to fit narration.
+          - If clip exceeds narration + MAX_CLONE_PAD_SECONDS, the excess is a
+            recording overrun; it is recorded as timing debt and the render is
+            marked NEEDS_RESHOOT. Clips are otherwise kept intact.
 
         Returns (
             {beat_id: seconds},
@@ -529,22 +531,31 @@ class GraphRenderer:
             }
 
             if clip_dur is not None:
-                # Never trim the clip; base duration includes the full clip.
+                # Keep the full clip unless it overruns the narration budget.
                 base = max(min_dur, clip_dur)
                 if audio_dur is not None:
-                    allowed = clip_dur + MAX_CLONE_PAD_SECONDS
-                    if audio_dur > allowed:
-                        debt_by_beat[beat.beat_id] = round(audio_dur - allowed, 3)
+                    under_allowed = clip_dur + MAX_CLONE_PAD_SECONDS
+                    over_allowed = audio_dur + MAX_CLONE_PAD_SECONDS
+                    if audio_dur > under_allowed:
+                        debt_by_beat[beat.beat_id] = round(audio_dur - under_allowed, 3)
                         detail["pad_applied"] = round(MAX_CLONE_PAD_SECONDS, 3)
                         detail["action"] = "NEEDS_RESHOOT"
+                        duration = max(base, audio_dur)
+                    elif clip_dur > over_allowed:
+                        debt_by_beat[beat.beat_id] = round(clip_dur - over_allowed, 3)
+                        detail["pad_applied"] = round(clip_dur - audio_dur, 3)
+                        detail["action"] = "NEEDS_RESHOOT"
+                        duration = base
                     elif audio_dur > clip_dur:
                         detail["pad_applied"] = round(audio_dur - clip_dur, 3)
                         detail["action"] = "pad"
+                        duration = max(base, audio_dur)
                     elif audio_dur == clip_dur:
                         detail["action"] = "exact"
+                        duration = base
                     else:
                         detail["action"] = "keep_clip"
-                    duration = max(base, min(audio_dur, allowed))
+                        duration = base
                 else:
                     detail["action"] = "clip_only"
                     duration = base

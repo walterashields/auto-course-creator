@@ -1433,7 +1433,7 @@ class TestRendererNoTrim(unittest.TestCase):
 
     def test_clip_longer_than_narration_is_not_trimmed(self) -> None:
         """If the recorded clip is longer than the narration, the full clip is kept."""
-        clip = _make_video(self.tmpdir / "long_action.mp4", duration=8.0, fps=10, motion=True)
+        clip = _make_video(self.tmpdir / "long_action.mp4", duration=5.5, fps=10, motion=True)
         beats = [
             ScriptBeat(
                 beat_id="beat_001",
@@ -1465,8 +1465,43 @@ class TestRendererNoTrim(unittest.TestCase):
             final_path = Path(result["final_path"])
             self.assertTrue(final_path.exists())
             final_dur = _media_duration(final_path)
-            # The full 8s clip must survive; final duration should be at least 7.5s.
-            self.assertGreaterEqual(final_dur, 7.5)
+            # The full 5.5s clip must survive; final duration should be at least 5.0s.
+            self.assertGreaterEqual(final_dur, 5.0)
+        finally:
+            restore_tts(original)
+
+    def test_clip_overrun_breaching_pad_cap_raises_needs_reshoot(self) -> None:
+        """A clip that exceeds narration + MAX_CLONE_PAD_SECONDS is flagged NEEDS_RESHOOT."""
+        clip = _make_video(self.tmpdir / "huge_action.mp4", duration=8.0, fps=10, motion=True)
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="demo",
+                text="Short narration.",
+                action={"type": "click", "target": {"x": 0.5, "y": 0.5}},
+                video_clip_path=str(clip.resolve()),
+            )
+        ]
+
+        class Manifest:
+            title = "Overrun test"
+            learning_objective = "Test overrun."
+            application = "db_browser_sqlite"
+            format_tier = "short"
+
+        renderer = GraphRenderer(output_dir=str(self.tmpdir))
+        tts_durations = {"beat_001": 2.0}
+        original = fake_tts(None, tts_durations)  # type: ignore[arg-type]
+        try:
+            out_path = str(self.tmpdir / "overrun_test.mp4")
+            with self.assertRaises(RuntimeError) as ctx:
+                renderer.render_from_script(
+                    video_manifest=Manifest(),
+                    script_beats=beats,
+                    output_path=out_path,
+                    output_mode="auto",
+                )
+            self.assertIn("NEEDS_RESHOOT", str(ctx.exception))
         finally:
             restore_tts(original)
 
