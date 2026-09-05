@@ -1009,6 +1009,30 @@ end tell
         if post_delay > 0:
             time.sleep(post_delay)
 
+    def _hotkey_paste(self) -> None:
+        """
+        Paste with a single AppleScript keystroke instead of a pyautogui storm.
+
+        pyautogui key events cost ~118ms each on the render machine, so the
+        cmd+v chord plus ``_release_all_modifiers`` ran ~1.5s per pasted line
+        (C19 step-timing: hotkey=1.5-1.6s of each ~2.0s paste_line). One
+        System Events ``keystroke "v" using command down`` is a single
+        subprocess (~0.1-0.3s) and presses/releases atomically, which also
+        removes the stuck-modifier race that ``_release_all_modifiers``
+        defended against. The per-beat Character Viewer dismissal in
+        ``_focus_editor`` remains as the guard.
+        """
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to keystroke "v" using '
+                "command down",
+            ],
+            capture_output=True,
+            timeout=5,
+        )
+
     def _paste_line(
         self,
         line: str,
@@ -1018,10 +1042,11 @@ end tell
         """
         Paste exactly one line (optionally plus its newline) into the editor.
 
-        The only keystrokes used are the sanctioned ``cmd+v`` paste. After the
-        paste we wait a flat cadence (C18: ``pace[0]``, 0.4s/line) so the
-        composition is visibly line-by-line. Character Viewer dismissal happens
-        once per beat in ``_focus_editor``, not per line.
+        The only keystrokes used are the sanctioned ``cmd+v`` paste, delivered
+        via ``_hotkey_paste``. After the paste we wait a flat cadence (C18:
+        ``pace[0]``, 0.4s/line) so the composition is visibly line-by-line.
+        Character Viewer dismissal happens once per beat in ``_focus_editor``,
+        not per line.
 
         The clipboard is intentionally left alone after the paste. Restoring the
         original clipboard inside this helper races the asynchronous paste and
@@ -1031,7 +1056,8 @@ end tell
         text = line + ("\n" if add_newline else "")
         self._copy_to_clipboard(text)
         time.sleep(0.05)
-        self._safe_hotkey("command", "v", post_delay=0.05)
+        self._hotkey_paste()
+        time.sleep(0.05)
         # C18: flat fast-end cadence; the governor's escalation rule is that a
         # failed beat-end canonical check at this pace is the evidence to slow
         # down, not precaution.
@@ -2627,7 +2653,12 @@ end tell
             prior_editor = self._strip_trailing_newline(self._read_editor_content() or "")
             segment_with_separator = self._ensure_leading_separator(prior_editor, full)
             cumulative_intended = prior_editor + segment_with_separator
-            if not self.type_segments(segments, fallback_text=fallback_text):
+            # C19: the pre-read above already ran _focus_editor (AX focus +
+            # the per-beat Character Viewer dismissal, ~4s), so the entry read
+            # inside type_segments must not pay it a second time.
+            if not self.type_segments(
+                segments, fallback_text=fallback_text, focus_editor=False
+            ):
                 return False
             cumulative_intended = self._last_composed_text or cumulative_intended
             return self._assess_and_maybe_repair(

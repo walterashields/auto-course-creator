@@ -1147,6 +1147,7 @@ class TestC17NarrationSizing(unittest.TestCase):
             self.assertEqual(mock_create.call_count, 1)
 
     def test_demo_narration_within_tolerance_unchanged(self) -> None:
+        """C19: text within ±2s of action+4s variance+3s gestures is untouched."""
         builder = LessonBuilder()
         with tempfile.TemporaryDirectory() as tmp:
             self._write_measurements(
@@ -1156,7 +1157,8 @@ class TestC17NarrationSizing(unittest.TestCase):
                     {
                         "beat_id": "beat_002",
                         "action_type": "type_segments",
-                        "action_seconds": 6.0,
+                        # 23-word text ≈ 8.4s; target = 1.5 + 4 + 3 = 8.5s.
+                        "action_seconds": 1.5,
                         "ok": True,
                     }
                 ],
@@ -1267,6 +1269,74 @@ class TestC18ConsolidatedSegments(unittest.TestCase):
         agent._focus_editor()
         dismiss.assert_called_once()
         focus_ax.assert_called_once()
+
+
+class TestC19AppleScriptPaste(unittest.TestCase):
+    """C19: single-AppleScript paste hotkey, one focus per beat, sizing margin."""
+
+    def test_paste_line_uses_one_applescript_keystroke_no_key_storm(self) -> None:
+        """_paste_line pastes via one osascript keystroke and zero pyautogui events."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        key_down = mock.patch("compiler.vision_agent.pyautogui.keyDown").start()
+        key_up = mock.patch("compiler.vision_agent.pyautogui.keyUp").start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        with (
+            mock.patch.object(agent, "_copy_to_clipboard"),
+            mock.patch("time.sleep"),
+        ):
+            agent._paste_line("SELECT")
+        key_down.assert_not_called()
+        key_up.assert_not_called()
+        self.assertEqual(run.call_count, 1)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], "osascript")
+        self.assertIn('keystroke "v" using command down', argv[2])
+
+    def test_execute_beat_type_segments_focuses_editor_once(self) -> None:
+        """The pre-read already focused the editor; type_segments must skip its own."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(agent, "_read_editor_content", return_value="").start()
+        ts = mock.patch.object(agent, "type_segments", return_value=True).start()
+        assess = mock.patch.object(agent, "_assess_and_maybe_repair", return_value=True).start()
+        ok = agent.execute_beat(
+            {"type": "type_segments", "segments": [{"text": "SELECT"}]}
+        )
+        self.assertTrue(ok)
+        self.assertFalse(ts.call_args.kwargs["focus_editor"])
+        assess.assert_called_once()
+
+    def test_narration_target_includes_variance_and_gesture_margin(self) -> None:
+        """A beat already sized to action+4s+3s is left untouched (no LLM call)."""
+        builder = LessonBuilder()
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = {
+                "video_id": "video_x",
+                "beats": [
+                    {
+                        "beat_id": "beat_002",
+                        "action_type": "type_segments",
+                        "action_seconds": 10.0,
+                        "ok": True,
+                    }
+                ],
+            }
+            Path(tmp, "action_seconds_video_x.json").write_text(json.dumps(payload))
+            # (10.0 action + 4.0 variance + 3.0 gestures) * 2.75 wps = 46 words.
+            text = " ".join(["word"] * 45 + ["end."])
+            self.assertEqual(builder._word_count(text), 46)
+            beat = ScriptBeat(
+                beat_id="beat_002", kind="demo", text=text, action=None
+            )
+            with (
+                mock.patch.dict("os.environ", {"WSDA_ACTION_SECONDS_DIR": tmp}),
+                mock.patch("compiler.lesson_builder.tracked_create") as mock_create,
+            ):
+                builder._size_demo_narration([beat], "video_x")
+            mock_create.assert_not_called()
+            self.assertEqual(beat.text, text)
+            self.assertEqual(beat.planned_duration, 10.0)
 
 
 class TestStageMatchesStory(unittest.TestCase):
@@ -2001,6 +2071,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC17DeterministicDemo))
     suite.addTests(loader.loadTestsFromTestCase(TestC17NarrationSizing))
     suite.addTests(loader.loadTestsFromTestCase(TestC18ConsolidatedSegments))
+    suite.addTests(loader.loadTestsFromTestCase(TestC19AppleScriptPaste))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

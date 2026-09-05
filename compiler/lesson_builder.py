@@ -52,6 +52,10 @@ MODEL = os.environ.get("NARRATOR_MODEL", "claude-sonnet-5")
 # errs toward padding (cap 4s) rather than overruns.
 NARRATION_WORDS_PER_SECOND = 2.75
 GESTURE_ALLOWANCE_SECONDS = 3.0
+# C19: measured dry-run action_seconds carries ±~4s of VLM-assess and
+# AppleScript round-trip variance between runs; narration is sized to the
+# action plus this margin plus the gesture allowance.
+VARIANCE_MARGIN_SECONDS = 4.0
 SIZING_TOLERANCE_SECONDS = 2.0
 ACTION_SECONDS_DIR_ENV = "WSDA_ACTION_SECONDS_DIR"
 
@@ -221,6 +225,9 @@ class LessonBuilder:
         C17: size each demo beat's narration to its measured action time plus
         gesture allowance (±SIZING_TOLERANCE_SECONDS).
 
+        C19: the target is action_seconds + VARIANCE_MARGIN_SECONDS (±4s of
+        run-to-run VLM/AppleScript variance) + GESTURE_ALLOWANCE_SECONDS.
+
         Line-paste is deterministic, so the on-screen action now takes as long
         as it takes; the narration must explain-while-doing for that full span:
         what each line does, why it matters, and what to watch for as it
@@ -238,7 +245,11 @@ class LessonBuilder:
             if action_seconds is None:
                 continue
             beat.planned_duration = action_seconds
-            target_seconds = action_seconds + GESTURE_ALLOWANCE_SECONDS
+            target_seconds = (
+                action_seconds
+                + VARIANCE_MARGIN_SECONDS
+                + GESTURE_ALLOWANCE_SECONDS
+            )
             target_words = int(target_seconds * NARRATION_WORDS_PER_SECOND)
             current_words = self._word_count(beat.text)
             delta_seconds = (current_words / NARRATION_WORDS_PER_SECOND) - target_seconds
@@ -253,7 +264,8 @@ class LessonBuilder:
                 print(
                     f"[SIZING] {beat.beat_id}: narration is {delta_seconds:.1f}s OVER "
                     f"target {target_seconds:.1f}s (action {action_seconds:.1f}s + "
-                    f"gestures {GESTURE_ALLOWANCE_SECONDS:.1f}s); leaving text unchanged "
+                    f"{VARIANCE_MARGIN_SECONDS:.1f}s variance + "
+                    f"{GESTURE_ALLOWANCE_SECONDS:.1f}s gestures); leaving text unchanged "
                     "for governor retargeting",
                     file=sys.stderr,
                 )
@@ -290,7 +302,8 @@ class LessonBuilder:
                 print(
                     f"[SIZING] {beat.beat_id}: {current_words} -> {self._word_count(expanded)} "
                     f"words (target {target_seconds:.1f}s from action {action_seconds:.1f}s "
-                    f"+ gestures {GESTURE_ALLOWANCE_SECONDS:.1f}s)",
+                    f"+ {VARIANCE_MARGIN_SECONDS:.1f}s variance + "
+                    f"{GESTURE_ALLOWANCE_SECONDS:.1f}s gestures)",
                     file=sys.stderr,
                 )
             else:
@@ -3230,11 +3243,17 @@ class LessonBuilder:
         if measured:
             sizing_lines = []
             for beat_id, seconds in measured.items():
-                target = seconds + GESTURE_ALLOWANCE_SECONDS
+                target = (
+                    seconds
+                    + VARIANCE_MARGIN_SECONDS
+                    + GESTURE_ALLOWANCE_SECONDS
+                )
                 words = int(target * NARRATION_WORDS_PER_SECOND)
                 sizing_lines.append(
                     f"- {beat_id}: demo action measured {seconds:.1f}s on screen; write "
-                    f"about {words} words of narration (target {target:.1f}s spoken, ±2s), "
+                    f"about {words} words of narration (target {target:.1f}s spoken = "
+                    f"action + {VARIANCE_MARGIN_SECONDS:.0f}s variance + "
+                    f"{GESTURE_ALLOWANCE_SECONDS:.0f}s gestures, ±2s), "
                     "explain-while-doing: what each line does, why it matters, and what "
                     "to watch for as it appears."
                 )
