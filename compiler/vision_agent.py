@@ -606,11 +606,19 @@ class VisionAgent:
         self._activate_target_app()
 
     def _focus_editor(self) -> None:
-        """Click the editor, falling back to a normalized center click."""
+        """Focus the editor, falling back to VLM clicks when AX focus fails."""
         print("  [TYPE BLOCK] focusing editor", file=sys.stderr)
         self._ensure_frontmost()
-        # The editor only exists on the execution tab; ensure it is active
-        # before trying to focus the editor area.
+        # Fast path: when the execution tab is already active, accessibility can
+        # set keyboard focus on the SQL editor directly in ~0.2s. The two VLM
+        # clicks below each cost a screenshot plus a model round-trip and were
+        # measured as a main driver of demo beats overrunning their TTS window
+        # (C16 recording-stop debug: ~2 VLM focus calls per demo beat on top of
+        # segmented typing pushed 17s narrations to 48-58s clips).
+        if self._ensure_editor_focused_accessibility():
+            return
+        # Slow path: the editor text area does not exist yet, so another tab is
+        # active. Activate the execution tab via VLM before focusing the editor.
         execute_tab = self.profile.landmarks.get("execute_tab", "Execute SQL tab")
         self.find_and_click(f"Click the {execute_tab} tab", execute_tab)
         if not self.find_and_click("Focus the SQL editor", "SQL editor text area"):
