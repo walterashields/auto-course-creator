@@ -1200,6 +1200,75 @@ class TestC17NarrationSizing(unittest.TestCase):
             self.assertIsNone(beat.planned_duration)
 
 
+class TestC18ConsolidatedSegments(unittest.TestCase):
+    """C18: contiguous lines merge into one segment; dismissal moves to per-beat."""
+
+    @staticmethod
+    def _video_1_1():
+        class MockVideo:
+            video_id = "video_1_1"
+            title = "Test"
+            learning_objective = "Test"
+            discovery_objective = "Test"
+            application = "db_browser_sqlite"
+            format_tier = "short"
+            exercise_artifact = {}
+            planned_queries = []
+
+        return MockVideo()
+
+    def test_video_1_1_demo_beats_have_consolidated_segments(self) -> None:
+        """beat_002 <= 2 segments, beat_003 <= 2, beat_004 == 1; merged text carries newlines."""
+        builder = LessonBuilder()
+        beats = builder._build_sql_script_beats(self._video_1_1())
+        by_id = {b.beat_id: b for b in beats}
+
+        seg2 = by_id["beat_002"].action["segments"]
+        self.assertLessEqual(len(seg2), 2, seg2)
+        self.assertEqual([s["sentence_idx"] for s in seg2], [0, 1])
+        self.assertIn("\n", seg2[0]["text"])  # comment header merged, not one segment per line
+        self.assertIn("/*", seg2[0]["text"])
+        self.assertIn("*/", seg2[1]["text"])
+
+        seg3 = by_id["beat_003"].action["segments"]
+        self.assertLessEqual(len(seg3), 2, seg3)
+        self.assertIn("\nSELECT", "\n" + seg3[0]["text"])
+        self.assertIn("Email", seg3[0]["text"])
+
+        seg4 = by_id["beat_004"].action["segments"]
+        self.assertEqual(len(seg4), 1, seg4)
+        self.assertIn("FROM Customer;", seg4[0]["text"])
+
+    def test_paste_line_uses_flat_cadence_and_no_dismissal(self) -> None:
+        """C18: _paste_line sleeps a flat 0.4s and never dismisses the Character Viewer."""
+        agent = VisionAgent()
+        dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+        self.addCleanup(mock.patch.stopall)
+        with (
+            mock.patch.object(agent, "_copy_to_clipboard"),
+            mock.patch.object(agent, "_safe_hotkey"),
+            mock.patch("time.sleep") as mock_sleep,
+        ):
+            agent._paste_line("SELECT")
+            agent._paste_line("FROM Customer;", add_newline=False)
+        dismiss.assert_not_called()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list if c.args]
+        self.assertEqual(max(sleeps), 0.4)
+
+    def test_focus_editor_dismisses_once_per_call(self) -> None:
+        """The single per-beat Character Viewer dismissal lives in _focus_editor."""
+        agent = VisionAgent()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+        focus_ax = mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
+        ).start()
+        self.addCleanup(mock.patch.stopall)
+        agent._focus_editor()
+        dismiss.assert_called_once()
+        focus_ax.assert_called_once()
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -1931,6 +2000,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestSegmentedTyping))
     suite.addTests(loader.loadTestsFromTestCase(TestC17DeterministicDemo))
     suite.addTests(loader.loadTestsFromTestCase(TestC17NarrationSizing))
+    suite.addTests(loader.loadTestsFromTestCase(TestC18ConsolidatedSegments))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

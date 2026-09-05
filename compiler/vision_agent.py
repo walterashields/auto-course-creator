@@ -630,6 +630,11 @@ class VisionAgent:
         """Focus the editor, falling back to VLM clicks when AX focus fails."""
         print("  [TYPE BLOCK] focusing editor", file=sys.stderr)
         self._ensure_frontmost()
+        # C18: dismiss the Character Viewer once per focus call (i.e. once per
+        # demo beat in both the interleaved and execute_beat paths) instead of
+        # per line/segment inside _paste_line. AX focus is proven to stick
+        # across a beat, so mid-beat dismissal was pure overhead.
+        self._dismiss_character_viewer()
         # Fast path: when the execution tab is already active, accessibility can
         # set keyboard focus on the SQL editor directly in ~0.2s. The two VLM
         # clicks below each cost a screenshot plus a model round-trip and were
@@ -1014,8 +1019,9 @@ end tell
         Paste exactly one line (optionally plus its newline) into the editor.
 
         The only keystrokes used are the sanctioned ``cmd+v`` paste. After the
-        paste we wait a progressive cadence so the composition is visibly
-        line-by-line, then dismiss the Character Viewer defensively.
+        paste we wait a flat cadence (C18: ``pace[0]``, 0.4s/line) so the
+        composition is visibly line-by-line. Character Viewer dismissal happens
+        once per beat in ``_focus_editor``, not per line.
 
         The clipboard is intentionally left alone after the paste. Restoring the
         original clipboard inside this helper races the asynchronous paste and
@@ -1026,11 +1032,10 @@ end tell
         self._copy_to_clipboard(text)
         time.sleep(0.05)
         self._safe_hotkey("command", "v", post_delay=0.05)
-        # Progressive cadence: the narration names each clause as its lines appear.
-        delay = 0.4 + (0.4 * (hash(line) % 1000) / 1000.0)
-        delay = max(pace[0], min(pace[1], delay))
-        time.sleep(delay)
-        self._dismiss_character_viewer()
+        # C18: flat fast-end cadence; the governor's escalation rule is that a
+        # failed beat-end canonical check at this pace is the evidence to slow
+        # down, not precaution.
+        time.sleep(pace[0])
 
     def _read_current_line(self) -> str:
         """

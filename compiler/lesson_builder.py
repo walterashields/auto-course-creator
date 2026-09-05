@@ -2033,7 +2033,15 @@ class LessonBuilder:
             text: str,
             sentence_indices: Optional[List[int]] = None,
         ) -> Dict[str, Any]:
-            """Split a block into one segment per non-empty line with sentence tagging."""
+            """Split a block into segments with sentence tagging.
+
+            C18: contiguous lines sharing the same sentence index are merged into
+            ONE segment (one clipboard string, newlines included). Segmentation
+            exists only where a physical interruption is required for narration
+            sync (a sentence boundary); the executor pastes each segment
+            line-by-line at the flat cadence, so consolidated segments still
+            compose visibly.
+            """
             lines = [line for line in text.split("\n") if line]
             if sentence_indices is None:
                 sentence_indices = [0] * len(lines)
@@ -2041,13 +2049,13 @@ class LessonBuilder:
                 sentence_indices = list(sentence_indices) + [0] * max(
                     0, len(lines) - len(sentence_indices)
                 )
-            return {
-                "type": "type_segments",
-                "segments": [
-                    {"text": line, "sentence_idx": sidx}
-                    for line, sidx in zip(lines, sentence_indices[: len(lines)])
-                ],
-            }
+            segments: List[Dict[str, Any]] = []
+            for line, sidx in zip(lines, sentence_indices[: len(lines)]):
+                if segments and segments[-1]["sentence_idx"] == sidx:
+                    segments[-1]["text"] += "\n" + line
+                else:
+                    segments.append({"text": line, "sentence_idx": sidx})
+            return {"type": "type_segments", "segments": segments}
 
         def _segment_beat(beat_id: str, text: str, narration: str) -> ScriptBeat:
             action = _segment_action(text)

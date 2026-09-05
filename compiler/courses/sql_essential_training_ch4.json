@@ -86,23 +86,11 @@
             "type": "type_segments",
             "segments": [
               {
-                "text": "/*",
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31",
                 "sentence_idx": 0
               },
               {
-                "text": "Created By: WSDA Student",
-                "sentence_idx": 0
-              },
-              {
-                "text": "Create Date: 2026-08-31",
-                "sentence_idx": 0
-              },
-              {
-                "text": "Description: Customer contact list for management",
-                "sentence_idx": 1
-              },
-              {
-                "text": "*/",
+                "text": "Description: Customer contact list for management\n*/",
                 "sentence_idx": 1
               }
             ]
@@ -112,7 +100,7 @@
           "target_id": null,
           "video_clip_path": null,
           "observed_state": null,
-          "planned_duration": 10.5,
+          "planned_duration": 10.8,
           "choreography": [
             {
               "type": "hover",
@@ -155,19 +143,7 @@
             "type": "type_segments",
             "segments": [
               {
-                "text": "SELECT",
-                "sentence_idx": 0
-              },
-              {
-                "text": "  FirstName,",
-                "sentence_idx": 0
-              },
-              {
-                "text": "  LastName,",
-                "sentence_idx": 0
-              },
-              {
-                "text": "  Email",
+                "text": "SELECT\n  FirstName,\n  LastName,\n  Email",
                 "sentence_idx": 0
               }
             ]
@@ -177,7 +153,7 @@
           "target_id": null,
           "video_clip_path": null,
           "observed_state": null,
-          "planned_duration": 4.1,
+          "planned_duration": 4.4,
           "choreography": [
             {
               "type": "hover",
