@@ -1007,6 +1007,199 @@ class TestSegmentedTyping(unittest.TestCase):
             self.assertIn("SELECT 2;", pasted)
 
 
+class TestC17DeterministicDemo(unittest.TestCase):
+    """C17: AX-first editor focus, cached run button, verification-free recording paste."""
+
+    def _agent(self) -> VisionAgent:
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        return agent
+
+    @staticmethod
+    def _ax_result(stdout: str) -> Any:
+        return mock.Mock(returncode=0, stdout=stdout + "\n", stderr="")
+
+    def test_focus_editor_fast_path_skips_vlm_clicks(self) -> None:
+        """When AX focus succeeds, no VLM click is paid."""
+        agent = self._agent()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        fac = mock.patch.object(agent, "find_and_click", return_value=True).start()
+        with mock.patch(
+            "compiler.vision_agent.subprocess.run",
+            return_value=self._ax_result("wsda-focused"),
+        ):
+            agent._focus_editor()
+        fac.assert_not_called()
+
+    def test_focus_editor_falls_back_to_vlm_when_no_text_area(self) -> None:
+        """When the AX tree has no text area, both VLM clicks run (tab + editor)."""
+        agent = self._agent()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        fac = mock.patch.object(agent, "find_and_click", return_value=True).start()
+        with mock.patch(
+            "compiler.vision_agent.subprocess.run",
+            return_value=self._ax_result("wsda-no-text-area"),
+        ):
+            agent._focus_editor()
+        self.assertEqual(fac.call_count, 2)
+
+    def test_run_query_uses_cached_button_without_vlm(self) -> None:
+        """A primed run-button cache must serve run_query with zero VLM calls."""
+        agent = self._agent()
+        agent._run_button_point = (120, 130)
+        fac = mock.patch.object(agent, "find_and_click", return_value=True).start()
+        with (
+            mock.patch.object(agent, "_ensure_frontmost"),
+            mock.patch.object(agent, "_read_editor_content", return_value="SELECT 1;"),
+            mock.patch.object(agent, "_extract_uncommented_sql", return_value=("SELECT 1;", "")),
+            mock.patch.object(agent, "_verify_statement_isolation", return_value=True),
+            mock.patch.object(agent, "_result_pane_shows_error", return_value=False),
+            mock.patch("compiler.vision_agent.pyautogui.moveTo"),
+            mock.patch("compiler.vision_agent.pyautogui.click"),
+            mock.patch("time.sleep"),
+        ):
+            self.assertTrue(agent.run_query())
+        fac.assert_not_called()
+
+    def test_recording_line_paste_skips_all_verification(self) -> None:
+        """During recording the paste is deterministic: no per-line or block checks."""
+        agent = self._agent()
+        agent.recording = True
+        pasted: List[str] = []
+        read_current = mock.patch.object(agent, "_read_current_line").start()
+        read_editor = mock.patch.object(agent, "_read_editor_content", return_value="").start()
+        canonical = mock.patch.object(agent, "_canonical_compare", return_value=True).start()
+        with (
+            mock.patch.object(
+                agent, "_paste_line", side_effect=lambda line, **kw: pasted.append(line)
+            ),
+            mock.patch.object(agent, "_safe_hotkey"),
+            mock.patch("time.sleep"),
+        ):
+            self.assertTrue(agent._type_text_line_by_line("SELECT\nFROM Customer;"))
+        self.assertEqual(pasted, ["SELECT", "FROM Customer;"])
+        read_current.assert_not_called()
+        read_editor.assert_not_called()
+        canonical.assert_not_called()
+
+    def test_rehearsal_line_paste_still_verifies(self) -> None:
+        """Outside recording the per-line read-back verification is preserved."""
+        agent = self._agent()
+        agent.recording = False
+        read_current = mock.patch.object(
+            agent, "_read_current_line", side_effect=lambda: "SELECT"
+        ).start()
+        with (
+            mock.patch.object(agent, "_paste_line"),
+            mock.patch.object(agent, "_read_editor_content", return_value="SELECT"),
+            mock.patch.object(agent, "_canonical_compare", return_value=True),
+            mock.patch.object(agent, "_safe_hotkey"),
+            mock.patch("time.sleep"),
+        ):
+            self.assertTrue(agent._type_text_line_by_line("SELECT"))
+        read_current.assert_called()
+
+
+class TestC17NarrationSizing(unittest.TestCase):
+    """C17: LessonBuilder sizes demo narration to measured action + gestures."""
+
+    @staticmethod
+    def _write_measurements(tmpdir: str, video_id: str, rows: List[Dict[str, Any]]) -> None:
+        payload = {"video_id": video_id, "beats": rows}
+        Path(tmpdir, f"action_seconds_{video_id}.json").write_text(json.dumps(payload))
+
+    def test_demo_narration_expands_to_measured_action(self) -> None:
+        builder = LessonBuilder()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_measurements(
+                tmp,
+                "video_x",
+                [
+                    {
+                        "beat_id": "beat_002",
+                        "action_type": "type_segments",
+                        "action_seconds": 30.0,
+                        "ok": True,
+                    }
+                ],
+            )
+            beat = ScriptBeat(
+                beat_id="beat_002",
+                kind="demo",
+                text="We type the SELECT clause listing the columns.",
+                action={"type": "type_segments", "segments": [{"text": "SELECT 1;"}]},
+            )
+            expanded_text = (
+                "We type the SELECT clause listing the columns FirstName, LastName, and "
+                "Email so the report shows only the contact fields. "
+            ) * 8
+            block = mock.Mock(type="text", text=expanded_text.strip())
+            resp = mock.Mock(content=[block])
+            with (
+                mock.patch.dict("os.environ", {"WSDA_ACTION_SECONDS_DIR": tmp}),
+                mock.patch(
+                    "compiler.lesson_builder.tracked_create", return_value=resp
+                ) as mock_create,
+            ):
+                builder._size_demo_narration([beat], "video_x")
+            self.assertEqual(beat.planned_duration, 30.0)
+            self.assertEqual(beat.text, expanded_text.strip())
+            self.assertEqual(mock_create.call_count, 1)
+
+    def test_demo_narration_within_tolerance_unchanged(self) -> None:
+        builder = LessonBuilder()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_measurements(
+                tmp,
+                "video_x",
+                [
+                    {
+                        "beat_id": "beat_002",
+                        "action_type": "type_segments",
+                        "action_seconds": 6.0,
+                        "ok": True,
+                    }
+                ],
+            )
+            text = (
+                "We type the SELECT clause listing the columns FirstName, LastName, and "
+                "Email so the report shows only the contact fields management asked for."
+            )
+            beat = ScriptBeat(beat_id="beat_002", kind="demo", text=text, action=None)
+            with (
+                mock.patch.dict("os.environ", {"WSDA_ACTION_SECONDS_DIR": tmp}),
+                mock.patch("compiler.lesson_builder.tracked_create") as mock_create,
+            ):
+                builder._size_demo_narration([beat], "video_x")
+            self.assertEqual(beat.text, text)
+            mock_create.assert_not_called()
+
+    def test_failed_measurements_are_ignored(self) -> None:
+        builder = LessonBuilder()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_measurements(
+                tmp,
+                "video_x",
+                [
+                    {
+                        "beat_id": "beat_002",
+                        "action_type": "type_segments",
+                        "action_seconds": 30.0,
+                        "ok": False,
+                    }
+                ],
+            )
+            beat = ScriptBeat(
+                beat_id="beat_002",
+                kind="demo",
+                text="We type the SELECT clause listing the columns.",
+                action=None,
+            )
+            with mock.patch.dict("os.environ", {"WSDA_ACTION_SECONDS_DIR": tmp}):
+                builder._size_demo_narration([beat], "video_x")
+            self.assertIsNone(beat.planned_duration)
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -1736,6 +1929,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestRunQuery))
     suite.addTests(loader.loadTestsFromTestCase(TestWholeVideoFrameGate))
     suite.addTests(loader.loadTestsFromTestCase(TestSegmentedTyping))
+    suite.addTests(loader.loadTestsFromTestCase(TestC17DeterministicDemo))
+    suite.addTests(loader.loadTestsFromTestCase(TestC17NarrationSizing))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

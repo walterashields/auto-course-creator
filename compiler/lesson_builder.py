@@ -45,6 +45,16 @@ from .cost_tracker import get_tracker, tracked_create
 
 MODEL = os.environ.get("NARRATOR_MODEL", "claude-sonnet-5")
 
+# C17: narration sizing from --dry-run-actions measurements. Demo-beat
+# narration is sized to measured action_seconds + a gesture allowance, within
+# ±2 seconds. The words/second rate is calibrated on the ElevenLabs
+# eleven_turbo_v2_5 voice from video_1_1 scripts (~2.9-3.2 w/s); sizing low
+# errs toward padding (cap 4s) rather than overruns.
+NARRATION_WORDS_PER_SECOND = 2.75
+GESTURE_ALLOWANCE_SECONDS = 3.0
+SIZING_TOLERANCE_SECONDS = 2.0
+ACTION_SECONDS_DIR_ENV = "WSDA_ACTION_SECONDS_DIR"
+
 _APP_FRIENDLY_NAMES = {
     "db_browser_sqlite": "DB Browser for SQLite",
     "metabase": "Metabase",
@@ -176,6 +186,120 @@ class LessonBuilder:
             subs = action.get("actions") or []
             return sum(LessonBuilder._planned_action_seconds(sub) for sub in subs) or 2.0
         return 2.0
+
+    @staticmethod
+    def _measured_action_seconds(video_id: str) -> Dict[str, float]:
+        """
+        C17: load --dry-run-actions measurements (output/action_seconds_<id>.json,
+        directory overridable via WSDA_ACTION_SECONDS_DIR) keyed by beat_id.
+        Only successful measurements are used.
+        """
+        directory = Path(os.environ.get(ACTION_SECONDS_DIR_ENV, "output"))
+        path = directory / f"action_seconds_{video_id}.json"
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"Warning: could not read action seconds from {path}: {exc}", file=sys.stderr)
+            return {}
+        measured = {
+            row["beat_id"]: float(row["action_seconds"])
+            for row in payload.get("beats", [])
+            if row.get("ok") and row.get("beat_id") and row.get("action_seconds")
+        }
+        if measured:
+            print(
+                f"[SIZING] loaded measured action seconds for {video_id}: "
+                + ", ".join(f"{k}={v:.1f}s" for k, v in measured.items()),
+                file=sys.stderr,
+            )
+        return measured
+
+    def _size_demo_narration(self, beats: List[ScriptBeat], video_id: str) -> None:
+        """
+        C17: size each demo beat's narration to its measured action time plus
+        gesture allowance (±SIZING_TOLERANCE_SECONDS).
+
+        Line-paste is deterministic, so the on-screen action now takes as long
+        as it takes; the narration must explain-while-doing for that full span:
+        what each line does, why it matters, and what to watch for as it
+        appears. Substance only — the filler ban still applies. Beats already
+        within tolerance are left untouched; beats over target are reported so
+        the governor can retarget instead of silently overfilling.
+        """
+        measured = self._measured_action_seconds(video_id)
+        if not measured:
+            return
+        for beat in beats:
+            if beat.kind != "demo":
+                continue
+            action_seconds = measured.get(beat.beat_id)
+            if action_seconds is None:
+                continue
+            beat.planned_duration = action_seconds
+            target_seconds = action_seconds + GESTURE_ALLOWANCE_SECONDS
+            target_words = int(target_seconds * NARRATION_WORDS_PER_SECOND)
+            current_words = self._word_count(beat.text)
+            delta_seconds = (current_words / NARRATION_WORDS_PER_SECOND) - target_seconds
+            if abs(delta_seconds) <= SIZING_TOLERANCE_SECONDS:
+                print(
+                    f"[SIZING] {beat.beat_id}: {current_words} words within "
+                    f"±{SIZING_TOLERANCE_SECONDS:.0f}s of target {target_seconds:.1f}s",
+                    file=sys.stderr,
+                )
+                continue
+            if delta_seconds > 0:
+                print(
+                    f"[SIZING] {beat.beat_id}: narration is {delta_seconds:.1f}s OVER "
+                    f"target {target_seconds:.1f}s (action {action_seconds:.1f}s + "
+                    f"gestures {GESTURE_ALLOWANCE_SECONDS:.1f}s); leaving text unchanged "
+                    "for governor retargeting",
+                    file=sys.stderr,
+                )
+                continue
+            prompt = (
+                f"Expand this training-video narration beat so it takes about "
+                f"{target_seconds:.0f} seconds spoken (about {target_words} words at "
+                f"~{NARRATION_WORDS_PER_SECOND} words per second). The beat accompanies "
+                f"a demo action that takes {action_seconds:.1f} seconds on screen, so "
+                "narrate explain-while-doing: keep every existing sentence verbatim at "
+                "the start, then add what each typed line does, why it matters, and "
+                "what to watch for on screen as it appears.\n"
+                "Rules: first person plural, present tense ('We ...'); no filler, no "
+                "invented facts, no new numbers or names beyond those already present; "
+                "end every sentence with terminal punctuation; keep SQL keywords "
+                "uppercase; return ONLY the expanded narration text.\n\n"
+                f"Beat: {beat.text.strip()}"
+            )
+            try:
+                response = tracked_create(
+                    self.client,
+                    model=MODEL,
+                    max_tokens=512,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                expanded = " ".join(
+                    block.text for block in response.content if block.type == "text"
+                ).strip().strip('"')
+            except Exception as exc:
+                print(f"Warning: LLM narration sizing failed for {beat.beat_id}: {exc}", file=sys.stderr)
+                expanded = ""
+            if expanded and self._word_count(expanded) >= current_words:
+                beat.text = expanded
+                print(
+                    f"[SIZING] {beat.beat_id}: {current_words} -> {self._word_count(expanded)} "
+                    f"words (target {target_seconds:.1f}s from action {action_seconds:.1f}s "
+                    f"+ gestures {GESTURE_ALLOWANCE_SECONDS:.1f}s)",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[SIZING] {beat.beat_id}: NEEDS {target_words} words for "
+                    f"{target_seconds:.1f}s; currently {current_words}. LLM expansion "
+                    "unavailable; governor sets the narration target.",
+                    file=sys.stderr,
+                )
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
@@ -2999,6 +3123,8 @@ class LessonBuilder:
                 fix_errors = errors
 
         beats = self._validate_script_beats(beats, video)
+        # C17: size demo-beat narration to measured action time + gesture allowance.
+        self._size_demo_narration(beats, video.video_id)
         beats = self._enforce_word_limits(beats, video)
         beats = self._merge_validation_echoes(beats)
         self._enforce_sentence_integrity(beats)
@@ -3089,6 +3215,27 @@ class LessonBuilder:
         except Exception:
             style_guide = "Follow the WSDA delivery style: first-person plural present tense, no filler, narrate as it happens."
 
+        # C17: when --dry-run-actions measurements exist, size demo beats to cover
+        # the measured action plus gesture allowance (±2s), explain-while-doing.
+        sizing_section = ""
+        measured = self._measured_action_seconds(video.video_id)
+        if measured:
+            sizing_lines = []
+            for beat_id, seconds in measured.items():
+                target = seconds + GESTURE_ALLOWANCE_SECONDS
+                words = int(target * NARRATION_WORDS_PER_SECOND)
+                sizing_lines.append(
+                    f"- {beat_id}: demo action measured {seconds:.1f}s on screen; write "
+                    f"about {words} words of narration (target {target:.1f}s spoken, ±2s), "
+                    "explain-while-doing: what each line does, why it matters, and what "
+                    "to watch for as it appears."
+                )
+            sizing_section = (
+                "\n\nMEASURED DEMO TIMING (from --dry-run-actions; size these demo beats "
+                "to cover the measured action, substance only, no filler):\n"
+                + "\n".join(sizing_lines)
+            )
+
         return f"""You are writing narration for a short software-training video in the style of SQL Essentials.
 
 Course context
@@ -3098,6 +3245,7 @@ Course context
 - Discovery objective: {video.discovery_objective}
 - Running example: {table_name} table in {db_path}
 {env_section}
+{sizing_section}
 
 DELIVERY STYLE GUIDE (apply verbatim):
 {style_guide}

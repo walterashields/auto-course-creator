@@ -2007,6 +2007,7 @@ class EndStateDiscovery:
         opening_state_query: Optional[str] = None,
         profile: Optional[EnvironmentProfile] = None,
         video_id: Optional[str] = None,
+        actions_only: bool = False,
     ):
         self.objective = objective
         self.application = application
@@ -2014,6 +2015,10 @@ class EndStateDiscovery:
         self.opening_state_query = opening_state_query
         self.profile = profile or self._default_profile_for_app(application)
         self.video_id = video_id
+        # C17: when True, run demo actions without recording/TTS/choreography and
+        # measure per-beat wall time so narration can be sized to the action.
+        self.actions_only = actions_only
+        self.action_timings: List[Dict[str, Any]] = []
         self.client = anthropic.Anthropic()
         self.output_dir = Path(__file__).resolve().parent / "discovery_output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -3118,6 +3123,13 @@ class EndStateDiscovery:
             return self._make_result(success=False, reason=stage_assertion["reason"])
 
         agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir), profile=self.profile)
+        # C17: ground the Execute/Run toolbar button once, outside any recording
+        # window, so run_query needs no mid-beat VLM locate call. Best effort:
+        # run_query falls back to a per-beat locate when priming fails.
+        try:
+            agent.prime_run_button_cache()
+        except Exception as exc:
+            print(f"Warning: run-button priming failed: {exc}", file=sys.stderr)
         frontmost_log_path = self.output_dir / f"frontmost_{run_id}.log"
         if frontmost_log_path.exists():
             frontmost_log_path.unlink()
@@ -3174,39 +3186,41 @@ class EndStateDiscovery:
 
         # C13: pre-generate TTS for every beat so recording can be paced by the
         # spoken duration. Persistent cache avoids re-synthesizing identical text.
+        # C17: skipped entirely in actions_only mode (no recording, no pacing).
         tts_clip_by_beat: Dict[str, Tuple[str, int]] = {}
-        try:
-            tts_graph = ExecutionGraph(
-                graph_id=f"{run_id}_tts",
-                learning_objective="tts generation",
-                application=self.application,
-                start_state=ScreenState(
-                    state_id="state_start",
-                    screenshot_path="",
-                    timestamp=0.0,
-                    application="db_browser_sqlite",  # type: ignore[arg-type]
-                ),
-                end_state=ScreenState(
-                    state_id="state_end",
-                    screenshot_path="",
-                    timestamp=0.0,
-                    application="db_browser_sqlite",  # type: ignore[arg-type]
-                ),
-                narration_beats=[
-                    NarrationBeat(
-                        beat_id=beat.beat_id,
-                        attaches_to="state",
-                        target_id="state_start",
-                        text=beat.text,
-                    )
-                    for beat in beats
-                ],
-            )
-            tts = TTSGenerator()
-            tts_clips = tts.generate_clips(tts_graph, temp_dir=str(self.output_dir / "tts_tmp"))
-            tts_clip_by_beat = {beat.beat_id: (path, dur) for beat, path, dur in tts_clips}
-        except Exception as exc:
-            print(f"Warning: TTS pre-generation failed: {exc}; falling back to unpaced recording.", file=sys.stderr)
+        if not self.actions_only:
+            try:
+                tts_graph = ExecutionGraph(
+                    graph_id=f"{run_id}_tts",
+                    learning_objective="tts generation",
+                    application=self.application,
+                    start_state=ScreenState(
+                        state_id="state_start",
+                        screenshot_path="",
+                        timestamp=0.0,
+                        application="db_browser_sqlite",  # type: ignore[arg-type]
+                    ),
+                    end_state=ScreenState(
+                        state_id="state_end",
+                        screenshot_path="",
+                        timestamp=0.0,
+                        application="db_browser_sqlite",  # type: ignore[arg-type]
+                    ),
+                    narration_beats=[
+                        NarrationBeat(
+                            beat_id=beat.beat_id,
+                            attaches_to="state",
+                            target_id="state_start",
+                            text=beat.text,
+                        )
+                        for beat in beats
+                    ],
+                )
+                tts = TTSGenerator()
+                tts_clips = tts.generate_clips(tts_graph, temp_dir=str(self.output_dir / "tts_tmp"))
+                tts_clip_by_beat = {beat.beat_id: (path, dur) for beat, path, dur in tts_clips}
+            except Exception as exc:
+                print(f"Warning: TTS pre-generation failed: {exc}; falling back to unpaced recording.", file=sys.stderr)
 
         # Ceiling: one pass per beat (bounded by len(beats)).
         for idx, beat in enumerate(beats):
@@ -3214,6 +3228,50 @@ class EndStateDiscovery:
             if not action:
                 # Non-demo beats without an explicit action simply wait.
                 action = {"type": "wait", "duration": 1.5}
+
+            if self.actions_only:
+                # C17: measure the deterministic demo action with no recorder, no
+                # TTS, and no choreography so LessonBuilder can size narration to
+                # action_seconds + gesture time. agent.recording is set so the
+                # production line-paste path (not the rehearsal paste path) is
+                # what gets timed.
+                if beat.kind != "demo" or action.get("type") == "wait":
+                    continue
+                beat_start = time.time()
+                action_ok = False
+                try:
+                    agent.recording = True
+                    action_ok = agent.execute_beat(
+                        dict(action),
+                        fallback_text=segment_fallback_text or None,
+                    )
+                except Exception as exc:
+                    print(
+                        f"  [ACTION TIMING] {beat.beat_id} raised: {exc}",
+                        file=sys.stderr,
+                    )
+                finally:
+                    agent.recording = False
+                action_seconds = time.time() - beat_start
+                self.action_timings.append(
+                    {
+                        "beat_id": beat.beat_id,
+                        "action_type": action.get("type"),
+                        "action_seconds": round(action_seconds, 3),
+                        "ok": bool(action_ok),
+                    }
+                )
+                print(
+                    f"[ACTION TIMING] {beat.beat_id} | {action.get('type')} | "
+                    f"{action_seconds:.2f}s | ok={action_ok}",
+                    file=sys.stderr,
+                )
+                if not action_ok:
+                    return self._finish_action_timings(
+                        success=False,
+                        reason=f"[ACTION TIMING] {beat.beat_id} demo action failed",
+                    )
+                continue
 
             # --- SKIP redundant demo actions ----------------------------------
             # C13: when choreography is present we record the beat's deliberate
@@ -3817,6 +3875,9 @@ class EndStateDiscovery:
 
         if failed_reason:
             return self._make_result(success=False, reason=failed_reason)
+
+        if self.actions_only:
+            return self._finish_action_timings(success=True)
 
         # TIDY end state: dismiss any open dropdown/modal before final capture.
         try:
@@ -4643,6 +4704,30 @@ class EndStateDiscovery:
 
         print("[STAGE PREP] DB open and Customer count = 60", file=sys.stderr)
         return {"ok": True}
+
+    def _finish_action_timings(self, success: bool, reason: str = "") -> DiscoveryResult:
+        """
+        C17: print and persist the per-beat action_seconds table for
+        --dry-run-actions, then return a minimal result (no clips exist).
+        """
+        print("", file=sys.stderr)
+        print("[ACTION TIMINGS] beat_id | action_type | action_seconds | ok", file=sys.stderr)
+        for row in self.action_timings:
+            print(
+                f"[ACTION TIMINGS] {row['beat_id']} | {row['action_type']} | "
+                f"{row['action_seconds']:.2f} | {row['ok']}",
+                file=sys.stderr,
+            )
+        out_path = Path("output") / f"action_seconds_{self.video_id or 'video'}.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "video_id": self.video_id,
+            "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "beats": self.action_timings,
+        }
+        out_path.write_text(json.dumps(payload, indent=2))
+        print(f"[ACTION TIMINGS] wrote {out_path}", file=sys.stderr)
+        return self._make_result(success=success, reason=reason)
 
     def _make_result(
         self,

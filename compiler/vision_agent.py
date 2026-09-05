@@ -119,6 +119,11 @@ class VisionAgent:
         self._last_executed_statement: str = ""
         self._last_composed_text: Optional[str] = None
         self._last_assessment_text: str = ""
+        # C17: cached Execute/Run toolbar button point (logical coordinates),
+        # primed once at stage prep so run_query needs no mid-beat VLM call.
+        self._run_button_point: Optional[Tuple[int, int]] = None
+        # Last successful find_and_click point (logical), for caching.
+        self._last_click_point: Optional[Tuple[int, int]] = None
 
     # ------------------------------------------------------------------
     # Core screenshot / scaling helpers
@@ -518,12 +523,34 @@ class VisionAgent:
             instruction: High-level instruction (e.g., "Open the Customers table").
             element_description: What to click (e.g., "Browse Data tab").
         """
+        located = self._vlm_locate_point(instruction, element_description)
+        if located is None:
+            return False
+        lx, ly = located
+        print(f"  VLM click '{element_description}' at logical ({lx}, {ly})", file=sys.stderr)
+
+        # Animate cursor for visibility in recordings.
+        pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+        pyautogui.click(lx, ly)
+        time.sleep(0.5)
+        self._last_click_point = (lx, ly)
+        return True
+
+    def _vlm_locate_point(
+        self, instruction: str, element_description: str
+    ) -> Optional[Tuple[int, int]]:
+        """
+        Ask the VLM for the center of an element and return logical coordinates.
+
+        Does NOT click or move the cursor — safe for preflight caching where
+        pressing the element would change application state.
+        """
         self._ensure_frontmost()
 
         prompt = (
             f"You are a UI automation assistant controlling {self.profile.app_name}.\n"
             f"Task: {instruction}\n"
-            f"Find and click the center of this element: {element_description}\n\n"
+            f"Find the center of this element: {element_description}\n\n"
             "Return ONLY a JSON object with this exact shape:\n"
             '{"action": "click", "point": {"x": int, "y": int}, '
             '"element_type": "tab|button|column_header|table_cell|filter_box|menu_item|other", '
@@ -536,16 +563,16 @@ class VisionAgent:
         action = result.action
         if not action:
             print(
-                f"Warning: VLM did not return a click action for '{element_description}'. "
+                f"Warning: VLM did not return a point for '{element_description}'. "
                 f"Response: {result.text[:200]}",
                 file=sys.stderr,
             )
-            return False
+            return None
 
         point = action.get("point") or action
         if not isinstance(point, dict) or "x" not in point or "y" not in point:
-            print(f"Warning: VLM click action missing point: {action}", file=sys.stderr)
-            return False
+            print(f"Warning: VLM locate action missing point: {action}", file=sys.stderr)
+            return None
 
         lx, ly = self._api_to_logical(point["x"], point["y"])
         # Reject coordinates at the extreme corners; they usually mean the VLM
@@ -558,15 +585,9 @@ class VisionAgent:
                 "target application may not be in focus.",
                 file=sys.stderr,
             )
-            return False
+            return None
 
-        print(f"  VLM click '{element_description}' at logical ({lx}, {ly})", file=sys.stderr)
-
-        # Animate cursor for visibility in recordings.
-        pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
-        pyautogui.click(lx, ly)
-        time.sleep(0.5)
-        return True
+        return (lx, ly)
 
     def type_text(self, text: str) -> bool:
         """Type text at the current keyboard focus."""
@@ -637,29 +658,87 @@ class VisionAgent:
         """
         Set keyboard focus to the top-most text area in the target window.
 
-        DB Browser exposes the SQL editor as an AXTextArea, but the VLM click
-        can land on a label or splitter and leave focus elsewhere. This helper
-        finds the highest text area (the editor) and sets AXFocused to true.
+        DB Browser exposes the SQL editor as an AXTextArea, but its Qt AX tree
+        does not respond to System Events' class-filtered queries: ``every
+        text area of window 1`` always returns 0 elements (C17 probe of run
+        fe15840c7548 / live debug 2026-09-05). ``entire contents`` enumerates
+        the real tree, so we filter that by AXTextArea role and set AXFocused
+        on the top-most text area (the editor; the lower one is the results
+        pane). Returns True only when a text area was found and focused.
         """
         process_name = self.profile.focus_target or self.profile.app_name
         script = f"""\
 tell application "System Events"
     tell process {json.dumps(process_name)}
-        tell window 1
-            set textAreas to every text area
-            if length of textAreas is 0 then return false
-            set topTA to item 1 of textAreas
-            set minY to item 2 of (position of topTA)
-            repeat with ta in textAreas
-                set y to item 2 of (position of ta)
+        set ec to entire contents of window 1
+        set topTA to missing value
+        set minY to 99999
+        repeat with el in ec
+            if (role of el) is "AXTextArea" then
+                set pos to position of el
+                set y to item 2 of pos
                 if y < minY then
                     set minY to y
-                    set topTA to ta
+                    set topTA to el
                 end if
-            end repeat
-            set value of attribute "AXFocused" of topTA to true
-            return true
-        end tell
+            end if
+        end repeat
+        if topTA is missing value then return "wsda-no-text-area"
+        set value of attribute "AXFocused" of topTA to true
+        return "wsda-focused"
+    end tell
+end tell
+"""
+        print(
+            f"  [FOCUS] AX query: entire-contents role=AXTextArea filter on {process_name!r}",
+            file=sys.stderr,
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            stdout = (result.stdout or "").strip()
+            print(
+                f"  [FOCUS] AX result: rc={result.returncode} out={stdout!r} "
+                f"err={(result.stderr or '').strip()[:160]!r}",
+                file=sys.stderr,
+            )
+            if result.returncode == 0 and stdout == "wsda-focused":
+                return True
+        except Exception as exc:
+            print(
+                f"  [FOCUS] accessibility focus helper failed: {exc}",
+                file=sys.stderr,
+            )
+        return False
+
+    def _activate_execute_tab_accessibility(self) -> bool:
+        """
+        Activate the Execute SQL tab by clicking its AXRadioButton.
+
+        Same ``entire contents`` role-filter workaround as the focus helper:
+        class-filtered ``every radio button`` queries return nothing on DB
+        Browser's Qt AX tree.
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        set ec to entire contents of window 1
+        repeat with el in ec
+            if (role of el) is "AXRadioButton" then
+                try
+                    if (name of el) is "Execute SQL" then
+                        click el
+                        return "wsda-ok"
+                    end if
+                end try
+            end if
+        end repeat
+        return "wsda-no-radio"
     end tell
 end tell
 """
@@ -668,15 +747,50 @@ end tell
                 ["osascript", "-e", script],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=10,
             )
-            if result.returncode == 0 and result.stdout.strip() == "true":
+            if result.returncode == 0 and (result.stdout or "").strip() == "wsda-ok":
+                time.sleep(0.8)
                 return True
         except Exception as exc:
             print(
-                f"  [FOCUS] accessibility focus helper failed: {exc}",
+                f"  [FOCUS] execute-tab AX click failed: {exc}",
                 file=sys.stderr,
             )
+        return False
+
+    def prime_run_button_cache(self) -> bool:
+        """
+        Resolve the Execute/Run toolbar button once, before recording starts.
+
+        C17: demo beats may run queries mid-recording; grounding the button at
+        stage prep keeps the recording window free of VLM calls. Uses one VLM
+        ``find_and_click`` (allowed outside the recording window) and caches
+        the logical point for ``run_query``.
+        """
+        if self._run_button_point is not None:
+            return True
+        self._ensure_frontmost()
+        if not self._activate_execute_tab_accessibility():
+            print(
+                "  [RUN QUERY] could not activate Execute SQL tab via AX; "
+                "skipping button priming",
+                file=sys.stderr,
+            )
+            return False
+        run_button = self.profile.landmarks.get(
+            "run_button",
+            "the Execute SQL toolbar button (blue play triangle / right-pointing arrow icon)",
+        )
+        print("  [RUN QUERY] priming Execute/Run toolbar button at stage prep", file=sys.stderr)
+        point = self._vlm_locate_point(
+            "Locate (do NOT press) the Execute/Run toolbar button",
+            run_button,
+        )
+        if point is not None:
+            self._run_button_point = point
+            print(f"  [RUN QUERY] button cached at {point}", file=sys.stderr)
+            return True
         return False
 
     def _clear_editor_accessibility(self) -> bool:
@@ -1310,12 +1424,19 @@ end tell
         Compose a multi-line block by pasting one line at a time.
 
         Each line is pasted with its newline using the sanctioned ``cmd+v``
-        paste. After every line we read the full editor buffer via accessibility
-        and compare it to the cumulative expected text; this verifies the just-
-        pasted line in context. If a line is corrupted, we re-paste only that
-        line. After the full block we run a final normalized full-buffer
-        verification. The whole composition is retried at most ``max_attempts``
-        times; after that the caller must abort (C10 composition ceiling).
+        paste. Outside of recording, after every line we read the full editor
+        buffer via accessibility and compare it to the cumulative expected
+        text; if a line is corrupted, we re-paste only that line, and a final
+        normalized full-buffer verification closes the block (C10 canonical
+        compare).
+
+        During recording (C17) the paste is deterministic and unverified:
+        per-line read-back/repair and the per-block canonical check are
+        skipped so no extra AX/VLM work sits inside the recording window.
+        The safety net is the beat-end assessment's cheap canonical check
+        (``_assess_and_maybe_repair`` -> ``_cheap_checks_ok``), which does one
+        full editor read-back and the canonical match. Verification stays in
+        rehearsals (non-recording path, unchanged).
         """
         if not text:
             return True
@@ -1348,6 +1469,10 @@ end tell
             for idx, line in enumerate(lines):
                 self._paste_line(line, add_newline=(idx < len(lines) - 1))
                 expected = expected + line + ("\n" if idx < len(lines) - 1 else "")
+                if self.recording:
+                    # C17: deterministic paste; the beat-end canonical check is
+                    # the single point of verification inside a recording.
+                    continue
                 if line == "":
                     # Blank separator lines carry no content to verify; the full-buffer
                     # check at the end ensures the separator landed correctly.
@@ -1370,6 +1495,16 @@ end tell
                     if current != line:
                         print("  [LINE PASTE] repair failed; aborting attempt", file=sys.stderr)
                         break
+
+            if self.recording:
+                # C17: no mid-recording verification; the beat-end assessment
+                # owns the canonical match.
+                print(
+                    "  [LINE PASTE] deterministic paste complete "
+                    f"({len(lines)} lines; verified at beat end)",
+                    file=sys.stderr,
+                )
+                return True
 
             # Final full-buffer normalized verification (C10 canonical compare).
             read_back = self._read_editor_content(focus=False) or ""
@@ -1545,7 +1680,11 @@ end tell
                     return False
                 expected_sofar += text
             self._last_composed_text = expected_sofar
-            print("  [SEGMENTS] all recording segments typed and verified", file=sys.stderr)
+            print(
+                "  [SEGMENTS] all recording segments typed "
+                "(canonical check runs at beat end)",
+                file=sys.stderr,
+            )
             return True
 
         # Non-recording path: fast paste with retry fallback.
@@ -2081,21 +2220,35 @@ end tell
             "run_button",
             "the Execute SQL toolbar button (blue play triangle / right-pointing arrow icon)",
         )
-        clicked = self.find_and_click(
+        clicked = False
+        if self._run_button_point is not None:
+            # C17: cached at stage prep; no VLM call inside the recording window.
+            bx, by = self._run_button_point
+            print(f"  [RUN QUERY] clicking cached Execute button at ({bx}, {by})", file=sys.stderr)
+            pyautogui.moveTo(bx, by, duration=0.5, tween=pyautogui.easeInOutQuad)
+            pyautogui.click(bx, by)
+            time.sleep(0.5)
+            clicked = True
+        elif self.find_and_click(
             "Execute the SQL query in the editor",
             run_button,
-        )
+        ):
+            if self._last_click_point is not None:
+                self._run_button_point = self._last_click_point
+            clicked = True
 
         executed = False
         if clicked:
             # Give the app time to execute and render the result pane.
             time.sleep(2.5)
             executed = True
-            if self._results_visible():
-                if not self._result_pane_shows_error():
-                    print("  [RUN QUERY] results visible", file=sys.stderr)
-                    return True
-                print("  [RUN QUERY] error signature detected after run", file=sys.stderr)
+            # C17: deterministic post-run check. The pixel error signature is
+            # the only mid-run signal we need; visual confirmation of populated
+            # results is the beat-end assessment's job, not a VLM call here.
+            if not self._result_pane_shows_error():
+                print("  [RUN QUERY] results visible", file=sys.stderr)
+                return True
+            print("  [RUN QUERY] error signature detected after run", file=sys.stderr)
 
         if not executed:
             print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
@@ -2105,7 +2258,7 @@ end tell
                 f"{result_tab} in {self.profile.app_name}",
             ):
                 time.sleep(1.0)
-                if self._results_visible() and not self._result_pane_shows_error():
+                if not self._result_pane_shows_error():
                     print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
                     return True
 

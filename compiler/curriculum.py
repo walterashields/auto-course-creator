@@ -1161,6 +1161,7 @@ def run_course(
     output_mode: Literal["auto", "hybrid", "raw"] = "auto",
     only_video: Optional[str] = None,
     dry_run: bool = False,
+    dry_run_actions: bool = False,
 ) -> dict:
     """
     Run the full compiler pipeline for every video in the manifest.
@@ -1177,6 +1178,10 @@ def run_course(
     ``only_video`` restricts the run to a single video_id for iteration discipline.
 
     ``dry_run`` skips VLM/screen recording and exercises the attempt-report path.
+
+    ``dry_run_actions`` (C17) executes demo actions without recording or TTS and
+    reports per-beat ``action_seconds`` so LessonBuilder can size demo-beat
+    narration to the measured action plus gesture time.
 
     Returns a summary dict with per-video outputs and aggregate duration.
     """
@@ -1344,6 +1349,8 @@ def run_course(
                 db_path=db_path,
                 opening_state_query=opening_state_query,
                 profile=profile,
+                video_id=video.video_id,
+                actions_only=dry_run_actions,
             )
             discovery_result = lesson_builder.execute_script(
                 beats=script_beats,
@@ -1359,6 +1366,21 @@ def run_course(
                 raise RuntimeError(
                     f"Script execution failed for {video.video_id}: {video.discovery_objective}"
                 )
+
+            if dry_run_actions:
+                # C17: demo actions were executed and timed without recording;
+                # skip reliability/render/canonical gates entirely.
+                video_outputs.append(
+                    {
+                        "video_id": video.video_id,
+                        "action_timings": list(discovery.action_timings),
+                    }
+                )
+                print(
+                    f"done (dry-run-actions; {len(discovery.action_timings)} demo actions timed)"
+                )
+                _close_application(profile.app_name)
+                continue
 
             if discovery_result.reliability_score < min_reliability:
                 print(
@@ -1817,6 +1839,14 @@ def main() -> int:
             "no API calls. Also enabled by WSDA_DRY_RUN=1."
         ),
     )
+    parser.add_argument(
+        "--dry-run-actions",
+        action="store_true",
+        help=(
+            "C17: execute demo actions without recording or TTS and print per-beat "
+            "action_seconds so narration can be sized to the measured action."
+        ),
+    )
     args = parser.parse_args()
 
     dry_run = args.dry_run or os.environ.get("WSDA_DRY_RUN", "").strip() in (
@@ -1838,6 +1868,20 @@ def main() -> int:
         save_manifest(manifest)
     else:
         manifest = existing_manifest
+
+    # C17: action timing pass — execute demo actions without recording and report
+    # per-beat action_seconds. No iteration loop, no render gates.
+    if args.dry_run_actions:
+        results = run_course(
+            manifest,
+            output_dir=args.output_dir,
+            min_reliability=args.min_reliability,
+            output_mode=args.output_mode,
+            only_video=args.only_video,
+            dry_run_actions=True,
+        )
+        print(json.dumps(results.get("video_outputs", []), indent=2))
+        return 0
 
     # C9/C10 iteration discipline: single-video loop with raw gate output per experiment.
     if args.only_video:
