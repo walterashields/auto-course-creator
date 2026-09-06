@@ -1344,11 +1344,15 @@ class TestC20IdempotentFocus(unittest.TestCase):
     """C20: focus is idempotent — an already-focused editor skips the focus cycle."""
 
     def _ax_state_mock(self, states: List[str]):
-        """subprocess.run mock answering AX scripts with the next queued state."""
+        """subprocess.run mock answering AX scripts with the next queued state.
+
+        C21: the first AX call in a focus path is the focused-element guard,
+        so the queue holds guard markers ("wsda-focused-editor" = early exit).
+        """
         queue = list(states)
 
         def _run(argv, **kwargs):
-            out = queue.pop(0) if queue else "wsda-not-focused"
+            out = queue.pop(0) if queue else "wsda-no-focused-el"
             return subprocess.CompletedProcess(argv, 0, out, "")
 
         return mock.patch(
@@ -1359,7 +1363,7 @@ class TestC20IdempotentFocus(unittest.TestCase):
         """Two focus calls with an already-focused editor: zero dismissal, zero AX writes."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        with self._ax_state_mock(["wsda-already-focused", "wsda-already-focused"]):
+        with self._ax_state_mock(["wsda-focused-editor", "wsda-focused-editor"]):
             dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
             frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
             ax_write = mock.patch.object(
@@ -1380,7 +1384,9 @@ class TestC20IdempotentFocus(unittest.TestCase):
         """First call runs one full cycle; the second early-exits with no dismissal."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        with self._ax_state_mock(["wsda-not-focused", "wsda-already-focused"]):
+        with self._ax_state_mock(
+            ["wsda-focused-other|Terminal|AXTerminal", "wsda-focused-editor"]
+        ):
             dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
             frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
             ax_write = mock.patch.object(
@@ -1396,6 +1402,135 @@ class TestC20IdempotentFocus(unittest.TestCase):
         ax_write.assert_called_once()
         click.assert_not_called()
         self.assertEqual(buf.getvalue().count("editor already focused; skipping"), 1)
+
+
+class TestC21FocusedElementGuard(unittest.TestCase):
+    """C21: the early-exit guard reads the system-wide focused element."""
+
+    def test_focused_axtextarea_in_db_browser_early_exits_without_enumeration(self):
+        """Guard reports an AXTextArea focused in DB Browser: skip, never enumerate."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        run.return_value = subprocess.CompletedProcess(
+            ["osascript"], 0, "wsda-focused-editor", ""
+        )
+        enum = mock.patch.object(agent, "_ensure_editor_focused_accessibility").start()
+        dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+        frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent._focus_editor()
+        self.assertTrue(run.called)
+        enum.assert_not_called()
+        dismiss.assert_not_called()
+        frontmost.assert_not_called()
+        click.assert_not_called()
+        self.assertIn("editor already focused; skipping", buf.getvalue())
+        self.assertIn("wsda-focused-editor", buf.getvalue())
+
+    def test_guard_failure_falls_through_to_full_path(self):
+        """Guard cannot confirm focus (other app focused): run the full path once."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        run.return_value = subprocess.CompletedProcess(
+            ["osascript"], 0, "wsda-focused-other|Terminal|AXTerminal", ""
+        )
+        enum = mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
+        ).start()
+        dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+        frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        with contextlib.redirect_stderr(io.StringIO()):
+            agent._focus_editor()
+        enum.assert_called_once()
+        dismiss.assert_called_once()
+        frontmost.assert_called_once()
+        click.assert_not_called()
+        self.assertIn("wsda-focused-other", run.return_value.stdout)
+
+
+class TestC21EnumerationRetry(unittest.TestCase):
+    """C21: the entire-contents enumeration retries before VLM fallback."""
+
+    def _dispatching_run(self, responses: Dict[str, list]):
+        """subprocess.run mock dispatching on script content: 'guard' vs 'enum'.
+
+        Each response is an Exception instance to raise or a stdout string.
+        """
+        queues = {k: list(v) for k, v in responses.items()}
+
+        def _run(argv, **kwargs):
+            script = argv[2]
+            kind = "enum" if "entire contents" in script else "guard"
+            item = queues.get(kind, []).pop(0) if queues.get(kind) else None
+            if isinstance(item, Exception):
+                raise item
+            out = item if isinstance(item, str) else (
+                "wsda-no-focused-el" if kind == "guard" else "wsda-no-text-area"
+            )
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        return _run
+
+    def _enum_call_count(self, run_mock) -> int:
+        return sum(
+            1 for c in run_mock.call_args_list if "entire contents" in c.args[0][2]
+        )
+
+    def test_two_timeouts_then_success_three_attempts_no_vlm(self) -> None:
+        """First two enumerations time out, third focuses: 3 attempts, no VLM clicks."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        responses = {
+            "guard": ["wsda-focused-other|Terminal|AXTerminal"],
+            "enum": [
+                subprocess.TimeoutExpired(["osascript"], 15),
+                subprocess.TimeoutExpired(["osascript"], 15),
+                "wsda-focused",
+            ],
+        }
+        run = mock.patch(
+            "compiler.vision_agent.subprocess.run",
+            side_effect=self._dispatching_run(responses),
+        ).start()
+        mock.patch.object(agent, "_log_ax_failure_context").start()
+        mock.patch.object(agent, "_dismiss_character_viewer").start()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        sleep = mock.patch("time.sleep").start()
+        with contextlib.redirect_stderr(io.StringIO()):
+            ok = agent._focus_editor()
+        self.assertIsNone(ok)
+        self.assertEqual(self._enum_call_count(run), 3)
+        click.assert_not_called()
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_all_attempts_fail_vlm_fallback_exactly_once(self):
+        """Every enumeration attempt fails: one VLM fallback cycle (2 clicks)."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        responses = {
+            "guard": ["wsda-no-focused-el"],
+            # Round 1 (fast path) and round 2 (post-VLM hard guarantee) all fail.
+            "enum": [subprocess.TimeoutExpired(["osascript"], 15)] * 6,
+        }
+        run = mock.patch(
+            "compiler.vision_agent.subprocess.run",
+            side_effect=self._dispatching_run(responses),
+        ).start()
+        mock.patch.object(agent, "_log_ax_failure_context").start()
+        mock.patch.object(agent, "_dismiss_character_viewer").start()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        mock.patch("time.sleep").start()
+        with contextlib.redirect_stderr(io.StringIO()):
+            agent._focus_editor()
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(self._enum_call_count(run), 6)
 
 
 class TestStageMatchesStory(unittest.TestCase):
@@ -2132,6 +2267,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC18ConsolidatedSegments))
     suite.addTests(loader.loadTestsFromTestCase(TestC19AppleScriptPaste))
     suite.addTests(loader.loadTestsFromTestCase(TestC20IdempotentFocus))
+    suite.addTests(loader.loadTestsFromTestCase(TestC21FocusedElementGuard))
+    suite.addTests(loader.loadTestsFromTestCase(TestC21EnumerationRetry))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

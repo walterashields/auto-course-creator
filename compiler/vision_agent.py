@@ -39,6 +39,162 @@ from .cost_tracker import CostTracker, get_tracker, tracked_create
 TARGET_LONG_EDGE = 1568
 DEFAULT_MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
 
+# C21: subprocess timeout for the ``entire contents`` AX enumeration. Was 10s
+# (C17); raised to 15s because the enumeration can stall under screen-recording
+# + TTS-audio load, and retries (see _ensure_editor_focused_accessibility)
+# give it three chances before falling back to VLM clicks.
+_AX_ENUM_TIMEOUT_SECONDS = 15.0
+_AX_ENUM_ATTEMPTS = 3
+_AX_ENUM_RETRY_DELAY = 1.0
+# The focused-element guard is a handful of single-attribute reads; it only
+# needs protection against a hung System Events, not enumeration-grade time.
+_AX_GUARD_TIMEOUT_SECONDS = 5.0
+
+
+def _ax_enumeration_script(process_name: str) -> str:
+    """AppleScript that finds the top-most AXTextArea of window 1 and focuses it.
+
+    C21 markers distinguish the failure modes instead of conflating them under
+    ``wsda-no-text-area``:
+      ``wsda-no-windows``   — the process reports zero windows
+      ``wsda-no-text-area`` — enumeration SUCCEEDED but no AXTextArea was found
+      ``wsda-ax-timeout``   — subprocess timeout (classified by the runner)
+      ``wsda-ax-error``     — osascript non-zero exit (classified by the runner)
+    """
+    return f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        set wc to count of windows
+        if wc is 0 then return "wsda-no-windows"
+        set ec to entire contents of window 1
+        set topTA to missing value
+        set minY to 99999
+        repeat with el in ec
+            if (role of el) is "AXTextArea" then
+                set pos to position of el
+                set y to item 2 of pos
+                if y < minY then
+                    set minY to y
+                    set topTA to el
+                end if
+            end if
+        end repeat
+        if topTA is missing value then return "wsda-no-text-area"
+        set value of attribute "AXFocused" of topTA to true
+        return "wsda-focused"
+    end tell
+end tell
+"""
+
+
+def _ax_focused_element_script(process_name: str) -> str:
+    """AppleScript that reads the system-wide focused element without any tree
+    enumeration: one AXFocusedUIElement attribute read per GUI process.
+
+    C21 replacement for the C20 entire-contents guard. Markers:
+      ``wsda-focused-editor`` — focused element is an AXTextArea of the target
+      ``wsda-focused-other|<app>|<role>`` — something else holds focus
+      ``wsda-no-focused-el``  — no process reported a focused element
+    Any runner-level failure marker means "could not tell"; callers fall
+    through to the full focus path.
+    """
+    return f"""\
+tell application "System Events"
+    set procs to every application process whose background only is false
+    repeat with p in procs
+        try
+            set fe to value of attribute "AXFocusedUIElement" of p
+            if fe is not missing value then
+                set r to role of fe
+                if r is "AXTextArea" and (name of p) is {json.dumps(process_name)} then
+                    return "wsda-focused-editor"
+                end if
+                return "wsda-focused-other|" & (name of p) & "|" & r
+            end if
+        end try
+    end repeat
+    return "wsda-no-focused-el"
+end tell
+"""
+
+
+def _ax_failure_context_script(process_name: str) -> str:
+    """Diagnostic AppleScript: window inventory of the target process plus the
+    system-wide focused element's role and owning app. C21: logged verbatim on
+    any AX failure so 'no text area' conflations are visible in the log."""
+    return f"""\
+tell application "System Events"
+    set focusedInfo to "none"
+    repeat with p in (every application process whose background only is false)
+        try
+            set fe to value of attribute "AXFocusedUIElement" of p
+            if fe is not missing value then
+                set focusedInfo to (name of p) & "/" & (role of fe)
+            end if
+        end try
+    end repeat
+    set ctx to "process not found"
+    try
+        tell process {json.dumps(process_name)}
+            set wc to count of windows
+            set ctx to "windows=" & wc
+            repeat with w in windows
+                try
+                    set t to name of w as string
+                on error
+                    set t to "?"
+                end try
+                try
+                    set sr to value of attribute "AXSubrole" of w as string
+                on error
+                    set sr to "?"
+                end try
+                set ctx to ctx & " | [" & t & " subrole=" & sr & "]"
+            end repeat
+        end tell
+    on error errMsg
+        set ctx to "error: " & errMsg
+    end try
+    return ctx & " || focused=" & focusedInfo
+end tell
+"""
+
+
+def _run_ax_script(
+    script: str, timeout: float
+) -> Tuple[str, float, str]:
+    """Run an AppleScript AX query and classify the outcome.
+
+    Returns ``(marker, elapsed_seconds, detail)`` where marker is the script's
+    own stdout marker on success, or a runner-level failure marker:
+    ``wsda-ax-timeout`` (detail names the timeout value) or ``wsda-ax-error``
+    (detail is stderr verbatim).
+    """
+    start = time.time()
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            "wsda-ax-timeout",
+            time.time() - start,
+            f"timeout after {timeout}s",
+        )
+    except Exception as exc:  # noqa: BLE001 - any launch failure is an AX error
+        return "wsda-ax-error", time.time() - start, repr(exc)
+    elapsed = time.time() - start
+    if result.returncode != 0:
+        return (
+            "wsda-ax-error",
+            elapsed,
+            (result.stderr or "").strip()[:400],
+        )
+    return (result.stdout or "").strip(), elapsed, ""
+
 
 def _default_profile() -> EnvironmentProfile:
     """Default DB Browser for SQLite profile for callers that do not inject one."""
@@ -626,68 +782,38 @@ class VisionAgent:
         # Re-activate the target app in case dismissal shifted focus.
         self._activate_target_app()
 
-    def _editor_is_focused_accessibility(self) -> bool:
+    def _focused_element_is_editor(self) -> bool:
         """
-        Read-only check: does the top-most AXTextArea already have AXFocused?
+        Cheap C21 guard: is the system-wide focused element the target editor?
 
-        C20: same ``entire contents`` role-filter path as
-        ``_ensure_editor_focused_accessibility``, but reads AXFocused instead
-        of setting it. When the editor already has focus, ``_focus_editor``
-        can exit before its dismissal cycle, making repeated focus calls
-        (typing beats, run_query, future callers) ~0.2s no-ops instead of
-        full Character-Viewer dismissal cycles.
+        Reads AXFocusedUIElement per GUI process — single attribute reads, no
+        tree enumeration — so it stays fast even under recording load where
+        ``entire contents`` stalls. Returns True only when the focused element
+        is an AXTextArea owned by the target process; any other outcome (other
+        app focused, nothing focused, query failure) returns False so the
+        caller falls through to the full focus path.
         """
         process_name = self.profile.focus_target or self.profile.app_name
-        script = f"""\
-tell application "System Events"
-    tell process {json.dumps(process_name)}
-        set ec to entire contents of window 1
-        set topTA to missing value
-        set minY to 99999
-        repeat with el in ec
-            if (role of el) is "AXTextArea" then
-                set pos to position of el
-                set y to item 2 of pos
-                if y < minY then
-                    set minY to y
-                    set topTA to el
-                end if
-            end if
-        end repeat
-        if topTA is missing value then return "wsda-no-text-area"
-        if (value of attribute "AXFocused" of topTA) is true then
-            return "wsda-already-focused"
-        end if
-        return "wsda-not-focused"
-    end tell
-end tell
-"""
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return (
-                result.returncode == 0
-                and (result.stdout or "").strip() == "wsda-already-focused"
-            )
-        except Exception as exc:
-            print(
-                f"  [FOCUS] AX focused-state read failed: {exc}",
-                file=sys.stderr,
-            )
-            return False
+        marker, elapsed, detail = _run_ax_script(
+            _ax_focused_element_script(process_name), _AX_GUARD_TIMEOUT_SECONDS
+        )
+        ok = marker == "wsda-focused-editor"
+        print(
+            f"  [FOCUS] guard: {marker} ({elapsed:.2f}s)"
+            + (f" detail={detail!r}" if detail else ""),
+            file=sys.stderr,
+        )
+        return ok
 
     def _focus_editor(self) -> None:
         """Focus the editor, falling back to VLM clicks when AX focus fails."""
-        # C20: idempotent focus. If the editor already holds AX focus, there is
-        # nothing to do: skip the frontmost check, the Character-Viewer
-        # dismissal cycle, and all AX writes. This makes _focus_editor safe to
-        # call any number of times per beat from any caller (typing beats,
-        # run_query, future paths) — one guard, no per-caller skip flags.
-        if self._editor_is_focused_accessibility():
+        # C20/C21: idempotent focus. If the editor already holds keyboard
+        # focus, there is nothing to do: skip the frontmost check, the
+        # Character-Viewer dismissal cycle, and all AX writes. The guard is a
+        # cheap focused-element read (C21), so this stays fast under recording
+        # load. One guard covers every caller (typing beats, run_query, future
+        # paths) — no per-caller skip flags.
+        if self._focused_element_is_editor():
             print(
                 "  [FOCUS] editor already focused; skipping focus cycle",
                 file=sys.stderr,
@@ -735,55 +861,49 @@ end tell
         the real tree, so we filter that by AXTextArea role and set AXFocused
         on the top-most text area (the editor; the lower one is the results
         pane). Returns True only when a text area was found and focused.
+
+        C21: the enumeration can stall under screen-recording + TTS-audio
+        load (C20 recording pass: every query failed while the identical dry
+        run succeeded). Timeout is 15s (was 10s) with up to 3 attempts, 1.0s
+        apart; every attempt logs its marker and elapsed, and any failure logs
+        the target's window inventory plus the system-wide focused element so
+        the failure modes stay distinguishable. Only after all attempts fail
+        does the caller fall back to VLM clicks.
         """
         process_name = self.profile.focus_target or self.profile.app_name
-        script = f"""\
-tell application "System Events"
-    tell process {json.dumps(process_name)}
-        set ec to entire contents of window 1
-        set topTA to missing value
-        set minY to 99999
-        repeat with el in ec
-            if (role of el) is "AXTextArea" then
-                set pos to position of el
-                set y to item 2 of pos
-                if y < minY then
-                    set minY to y
-                    set topTA to el
-                end if
-            end if
-        end repeat
-        if topTA is missing value then return "wsda-no-text-area"
-        set value of attribute "AXFocused" of topTA to true
-        return "wsda-focused"
-    end tell
-end tell
-"""
+        script = _ax_enumeration_script(process_name)
+        for attempt in range(1, _AX_ENUM_ATTEMPTS + 1):
+            marker, elapsed, detail = _run_ax_script(
+                script, _AX_ENUM_TIMEOUT_SECONDS
+            )
+            print(
+                f"  [FOCUS] AX attempt {attempt}/{_AX_ENUM_ATTEMPTS}: "
+                f"{marker} ({elapsed:.2f}s)"
+                + (f" detail={detail!r}" if detail else ""),
+                file=sys.stderr,
+            )
+            if marker == "wsda-focused":
+                return True
+            self._log_ax_failure_context(process_name, marker, elapsed)
+            if attempt < _AX_ENUM_ATTEMPTS:
+                time.sleep(_AX_ENUM_RETRY_DELAY)
+        return False
+
+    def _log_ax_failure_context(
+        self, process_name: str, marker: str, elapsed: float
+    ) -> None:
+        """C21: on any AX failure, log the target's window inventory and the
+        system-wide focused element so 'no text area' never again conflates
+        timeout, error, zero-windows, and true-empty-enumeration."""
+        ctx_marker, ctx_elapsed, ctx_detail = _run_ax_script(
+            _ax_failure_context_script(process_name), _AX_GUARD_TIMEOUT_SECONDS
+        )
+        detail = ctx_detail or ctx_marker
         print(
-            f"  [FOCUS] AX query: entire-contents role=AXTextArea filter on {process_name!r}",
+            f"  [FOCUS] AX context after {marker} ({elapsed:.2f}s): "
+            f"{detail} ({ctx_elapsed:.2f}s)",
             file=sys.stderr,
         )
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            stdout = (result.stdout or "").strip()
-            print(
-                f"  [FOCUS] AX result: rc={result.returncode} out={stdout!r} "
-                f"err={(result.stderr or '').strip()[:160]!r}",
-                file=sys.stderr,
-            )
-            if result.returncode == 0 and stdout == "wsda-focused":
-                return True
-        except Exception as exc:
-            print(
-                f"  [FOCUS] accessibility focus helper failed: {exc}",
-                file=sys.stderr,
-            )
-        return False
 
     def _activate_execute_tab_accessibility(self) -> bool:
         """
