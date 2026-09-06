@@ -1651,6 +1651,70 @@ class TestC22PyobjcRetry(unittest.TestCase):
         ).start()
 
 
+class TestC24EditorAutoClear(unittest.TestCase):
+    """C24: run-start editor hygiene — clean proceeds, dirty self-clears."""
+
+    def test_clean_editor_zero_keystrokes_proceeds(self) -> None:
+        """A clean editor logs wsda-editor-clean and never fires a keystroke."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(agent, "_editor_text_length", return_value=0).start()
+        clear = mock.patch.object(agent, "_clear_editor_once").start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent.ensure_editor_clean()
+        clear.assert_not_called()
+        run.assert_not_called()
+        self.assertIn("wsda-editor-clean", buf.getvalue())
+
+    def test_dirty_editor_one_clear_proceeds_when_re_read_zero(self) -> None:
+        """Dirty editor: exactly one clear sequence; re-read 0 proceeds."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        length = mock.patch.object(
+            agent, "_editor_text_length", side_effect=[500, 0]
+        ).start()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
+        ).start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        mock.patch("time.sleep").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent.ensure_editor_clean()
+        self.assertEqual(length.call_count, 2)
+        self.assertEqual(run.call_count, 1)  # one osascript: cmd+a + key 51
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], "osascript")
+        self.assertIn('keystroke "a" using command down', argv[2])
+        self.assertIn("key code 51", argv[2])
+        self.assertIn("wsda-editor-dirty:500chars", buf.getvalue())
+        self.assertIn("wsda-editor-cleared:500chars", buf.getvalue())
+
+    def test_dirty_editor_retry_once_then_halt_marker(self) -> None:
+        """First re-read still non-zero: one retry; still dirty => halt."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        length = mock.patch.object(
+            agent, "_editor_text_length", side_effect=[500, 300, 100]
+        ).start()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
+        ).start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        mock.patch("time.sleep").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            with self.assertRaises(RuntimeError) as ctx:
+                agent.ensure_editor_clean()
+        self.assertIn("wsda-editor-clear-fail", str(ctx.exception))
+        self.assertEqual(run.call_count, 2)  # clear tried exactly twice
+        self.assertEqual(length.call_count, 3)
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -2389,6 +2453,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcTraversal))
     suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcRetry))
     suite.addTests(loader.loadTestsFromTestCase(TestC23ClipboardInterlock))
+    suite.addTests(loader.loadTestsFromTestCase(TestC24EditorAutoClear))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

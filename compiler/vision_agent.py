@@ -1428,6 +1428,95 @@ end tell
             except Exception:
                 pass
 
+    def _editor_text_length(self) -> Optional[int]:
+        """C24: length of the top-most AXTextArea's value via the pyobjc AX
+        layer. None when the app/editor is unavailable or the read fails."""
+        process_name = self.profile.focus_target or self.profile.app_name
+        try:
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is None:
+                return None
+            app_el = ax_pyobjc.create_application(pid)
+            areas = ax_pyobjc.find_text_areas(app_el)
+            if not areas:
+                return None
+            top_el, _ = min(
+                areas, key=lambda t: t[1] if t[1] is not None else 1e9
+            )
+            value = ax_pyobjc.copy_attribute(top_el, "AXValue")
+            return len(value) if isinstance(value, str) else 0
+        except ax_pyobjc.AxCallError as exc:
+            print(f"  [EDITOR] length read failed: {exc}", file=sys.stderr)
+            return None
+
+    def _clear_editor_once(self) -> bool:
+        """C24: one deterministic clear attempt — focus via the pyobjc path,
+        select all (cmd+a), delete (key code 51), 0.3s settle. Returns False
+        when the editor could not be focused."""
+        if not self._ensure_editor_focused_accessibility():
+            return False
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to keystroke "a" using '
+                "command down\n"
+                'tell application "System Events" to key code 51',
+            ],
+            capture_output=True,
+            timeout=5,
+        )
+        time.sleep(0.3)
+        return True
+
+    def ensure_editor_clean(self) -> None:
+        """
+        C24 scratch-buffer hygiene at the start of EVERY run (dry-run or
+        recording). The pipeline owns the editor buffer during a run; its
+        canonical content is composed by the pipeline itself, so any
+        pre-existing content is contamination and is cleared deterministically:
+        log 'wsda-editor-dirty:<n>chars', focus via the pyobjc path, cmd+a,
+        key code 51, settle 0.3s, re-read. Require exactly 0; retry the clear
+        once; if still non-zero, halt with 'wsda-editor-clear-fail'. A clean
+        editor logs 'wsda-editor-clean' and proceeds; an unavailable editor
+        logs 'wsda-editor-unreadable' and proceeds (nothing to clear).
+        """
+        n = self._editor_text_length()
+        if n is None:
+            print(
+                "  [EDITOR] wsda-editor-unreadable (no text area); proceeding",
+                file=sys.stderr,
+            )
+            return
+        if n == 0:
+            print("  [EDITOR] wsda-editor-clean", file=sys.stderr)
+            return
+        original = n
+        print(f"  [EDITOR] wsda-editor-dirty:{n}chars", file=sys.stderr)
+        for attempt in (1, 2):
+            self._ensure_frontmost()
+            self._clear_editor_once()
+            n = self._editor_text_length()
+            if n == 0:
+                print(
+                    f"  [EDITOR] wsda-editor-cleared:{original}chars",
+                    file=sys.stderr,
+                )
+                return
+            print(
+                f"  [EDITOR] clear attempt {attempt} left {n}chars",
+                file=sys.stderr,
+            )
+        print(
+            f"  [EDITOR] wsda-editor-clear-fail: editor still holds {n} chars "
+            "after 2 clear attempts",
+            file=sys.stderr,
+        )
+        raise RuntimeError(
+            f"wsda-editor-clear-fail: editor still holds {n} chars after 2 "
+            "clear attempts"
+        )
+
     @staticmethod
     def _ensure_leading_separator(prior: str, text: str) -> str:
         """Prepend a newline when appending to non-empty content that does not

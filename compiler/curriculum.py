@@ -1226,6 +1226,22 @@ def run_course(
             ),
         )
     )
+    # C24: scratch-buffer hygiene — auto-clear any contamination from the SQL
+    # editor before every run (dry-run or recording). Self-healing: a dirty
+    # editor is cleared deterministically; only a clear failure halts the run.
+    from .vision_agent import VisionAgent
+
+    VisionAgent(
+        profile=EnvironmentProfile(
+            application=ordered_videos[0].application if ordered_videos else "unknown",
+            app_name=_application_to_app_name(
+                ordered_videos[0].application if ordered_videos else "unknown"
+            ),
+            focus_target=_application_to_app_name(
+                ordered_videos[0].application if ordered_videos else "unknown"
+            ),
+        )
+    ).ensure_editor_clean()
     for video in ordered_videos:
         db_path_str = video.exercise_artifact.get("db_path")
         if db_path_str and not Path(db_path_str).exists():
