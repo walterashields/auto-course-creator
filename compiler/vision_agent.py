@@ -626,8 +626,73 @@ class VisionAgent:
         # Re-activate the target app in case dismissal shifted focus.
         self._activate_target_app()
 
+    def _editor_is_focused_accessibility(self) -> bool:
+        """
+        Read-only check: does the top-most AXTextArea already have AXFocused?
+
+        C20: same ``entire contents`` role-filter path as
+        ``_ensure_editor_focused_accessibility``, but reads AXFocused instead
+        of setting it. When the editor already has focus, ``_focus_editor``
+        can exit before its dismissal cycle, making repeated focus calls
+        (typing beats, run_query, future callers) ~0.2s no-ops instead of
+        full Character-Viewer dismissal cycles.
+        """
+        process_name = self.profile.focus_target or self.profile.app_name
+        script = f"""\
+tell application "System Events"
+    tell process {json.dumps(process_name)}
+        set ec to entire contents of window 1
+        set topTA to missing value
+        set minY to 99999
+        repeat with el in ec
+            if (role of el) is "AXTextArea" then
+                set pos to position of el
+                set y to item 2 of pos
+                if y < minY then
+                    set minY to y
+                    set topTA to el
+                end if
+            end if
+        end repeat
+        if topTA is missing value then return "wsda-no-text-area"
+        if (value of attribute "AXFocused" of topTA) is true then
+            return "wsda-already-focused"
+        end if
+        return "wsda-not-focused"
+    end tell
+end tell
+"""
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return (
+                result.returncode == 0
+                and (result.stdout or "").strip() == "wsda-already-focused"
+            )
+        except Exception as exc:
+            print(
+                f"  [FOCUS] AX focused-state read failed: {exc}",
+                file=sys.stderr,
+            )
+            return False
+
     def _focus_editor(self) -> None:
         """Focus the editor, falling back to VLM clicks when AX focus fails."""
+        # C20: idempotent focus. If the editor already holds AX focus, there is
+        # nothing to do: skip the frontmost check, the Character-Viewer
+        # dismissal cycle, and all AX writes. This makes _focus_editor safe to
+        # call any number of times per beat from any caller (typing beats,
+        # run_query, future paths) — one guard, no per-caller skip flags.
+        if self._editor_is_focused_accessibility():
+            print(
+                "  [FOCUS] editor already focused; skipping focus cycle",
+                file=sys.stderr,
+            )
+            return
         print("  [TYPE BLOCK] focusing editor", file=sys.stderr)
         self._ensure_frontmost()
         # C18: dismiss the Character Viewer once per focus call (i.e. once per

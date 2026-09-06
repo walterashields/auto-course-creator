@@ -9,6 +9,7 @@ TTS audio.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import math
@@ -1339,6 +1340,64 @@ class TestC19AppleScriptPaste(unittest.TestCase):
             self.assertEqual(beat.planned_duration, 10.0)
 
 
+class TestC20IdempotentFocus(unittest.TestCase):
+    """C20: focus is idempotent — an already-focused editor skips the focus cycle."""
+
+    def _ax_state_mock(self, states: List[str]):
+        """subprocess.run mock answering AX scripts with the next queued state."""
+        queue = list(states)
+
+        def _run(argv, **kwargs):
+            out = queue.pop(0) if queue else "wsda-not-focused"
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        return mock.patch(
+            "compiler.vision_agent.subprocess.run", side_effect=_run
+        )
+
+    def test_focus_editor_early_exits_when_already_focused(self) -> None:
+        """Two focus calls with an already-focused editor: zero dismissal, zero AX writes."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        with self._ax_state_mock(["wsda-already-focused", "wsda-already-focused"]):
+            dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+            frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
+            ax_write = mock.patch.object(
+                agent, "_ensure_editor_focused_accessibility"
+            ).start()
+            click = mock.patch.object(agent, "find_and_click").start()
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                agent._focus_editor()
+                agent._focus_editor()
+        dismiss.assert_not_called()
+        frontmost.assert_not_called()
+        ax_write.assert_not_called()
+        click.assert_not_called()
+        self.assertEqual(buf.getvalue().count("editor already focused; skipping"), 2)
+
+    def test_second_focus_call_skips_duplicate_dismissal(self) -> None:
+        """First call runs one full cycle; the second early-exits with no dismissal."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        with self._ax_state_mock(["wsda-not-focused", "wsda-already-focused"]):
+            dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+            frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
+            ax_write = mock.patch.object(
+                agent, "_ensure_editor_focused_accessibility", return_value=True
+            ).start()
+            click = mock.patch.object(agent, "find_and_click").start()
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                agent._focus_editor()
+                agent._focus_editor()
+        dismiss.assert_called_once()
+        frontmost.assert_called_once()
+        ax_write.assert_called_once()
+        click.assert_not_called()
+        self.assertEqual(buf.getvalue().count("editor already focused; skipping"), 1)
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -2072,6 +2131,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC17NarrationSizing))
     suite.addTests(loader.loadTestsFromTestCase(TestC18ConsolidatedSegments))
     suite.addTests(loader.loadTestsFromTestCase(TestC19AppleScriptPaste))
+    suite.addTests(loader.loadTestsFromTestCase(TestC20IdempotentFocus))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
