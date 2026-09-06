@@ -12,6 +12,7 @@ a model that locates UI elements on the actual screen pixels.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -19,6 +20,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -39,6 +41,30 @@ from .cost_tracker import CostTracker, get_tracker, tracked_create
 
 TARGET_LONG_EDGE = 1568
 DEFAULT_MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
+
+
+class PasteInterlockError(RuntimeError):
+    """
+    C23: the clipboard could not be verified to hold the exact intended paste
+    text after all retries. Raised BEFORE any paste keystroke is fired, so
+    ambient clipboard content can never reach the editor. Propagates out of
+    execute_beat and halts the run.
+    """
+
+
+_PASTE_INTERLOCK_ATTEMPTS = 3
+
+
+def _clipboard_digest(text: str) -> str:
+    """SHA-256 of NFC-normalized text.
+
+    macOS may normalize clipboard text to NFD; NFC on both sides keeps the
+    comparison exact for the SQL-ASCII beat content while tolerating the
+    clipboard's Unicode normalization.
+    """
+    return hashlib.sha256(
+        unicodedata.normalize("NFC", text).encode("utf-8")
+    ).hexdigest()
 
 # C21: subprocess timeout for the ``entire contents`` AX enumeration. Was 10s
 # (C17); raised to 15s because the enumeration can stall under screen-recording
@@ -1247,6 +1273,60 @@ end tell
         if post_delay > 0:
             time.sleep(post_delay)
 
+    def _clipboard_matches(self, intended: str) -> bool:
+        """C23: read the live clipboard and compare digests with the text we
+        intend to paste."""
+        try:
+            result = subprocess.run(
+                ["pbpaste"], capture_output=True, timeout=5
+            )
+            actual = result.stdout.decode("utf-8", errors="replace")
+        except Exception:
+            return False
+        return _clipboard_digest(actual) == _clipboard_digest(intended)
+
+    def _verified_clipboard_paste(
+        self, text: str, paste_fn: Optional[Any] = None
+    ) -> None:
+        """
+        C23 clipboard read-back interlock: set the clipboard for ``text``,
+        read it back, and fire the paste keystroke ONLY on an exact SHA-256
+        match. On mismatch, retry set->verify up to 3 times; if it still
+        mismatches, log marker 'wsda-paste-interlock-fail' and raise
+        PasteInterlockError without ever pressing the paste hotkey. This is
+        the single sanctioned way to move clipboard content into the editor,
+        shared by every paste path (_paste_line, _paste_text, _append_text).
+        """
+        paste = paste_fn or self._hotkey_paste
+        digest = _clipboard_digest(text)
+        for attempt in range(1, _PASTE_INTERLOCK_ATTEMPTS + 1):
+            self._copy_to_clipboard(text)
+            time.sleep(0.05)
+            if self._clipboard_matches(text):
+                print(
+                    f"  [PASTE] wsda-paste-verified attempt={attempt} "
+                    f"sha256={digest[:12]}",
+                    file=sys.stderr,
+                )
+                paste()
+                return
+            print(
+                f"  [PASTE] clipboard mismatch after set "
+                f"(attempt {attempt}/{_PASTE_INTERLOCK_ATTEMPTS}); retrying",
+                file=sys.stderr,
+            )
+            time.sleep(0.1)
+        print(
+            "  [PASTE] wsda-paste-interlock-fail: clipboard never matched the "
+            f"intended text after {_PASTE_INTERLOCK_ATTEMPTS} attempts "
+            f"(intended sha256={digest[:12]}); paste keystroke NOT fired",
+            file=sys.stderr,
+        )
+        raise PasteInterlockError(
+            f"clipboard read-back never matched intended text after "
+            f"{_PASTE_INTERLOCK_ATTEMPTS} attempts (intended sha256={digest[:12]})"
+        )
+
     def _hotkey_paste(self) -> None:
         """
         Paste with a single AppleScript keystroke instead of a pyautogui storm.
@@ -1290,11 +1370,12 @@ end tell
         original clipboard inside this helper races the asynchronous paste and
         has been observed to paste stale content (e.g. a single 'v' or a prior
         query keyword) instead of the intended line.
+
+        C23: the set->paste sequence goes through the clipboard read-back
+        interlock; the keystroke fires only when the clipboard verifies.
         """
         text = line + ("\n" if add_newline else "")
-        self._copy_to_clipboard(text)
-        time.sleep(0.05)
-        self._hotkey_paste()
+        self._verified_clipboard_paste(text)
         time.sleep(0.05)
         # C18: flat fast-end cadence; the governor's escalation rule is that a
         # failed beat-end canonical check at this pace is the evidence to slow
@@ -1337,9 +1418,10 @@ end tell
         time.sleep(0.1)
         original_clipboard = self._read_clipboard()
         try:
-            self._copy_to_clipboard(text)
-            time.sleep(0.1)
-            self._safe_hotkey("command", "v", post_delay=0.4)
+            # C23: interlock — keystroke only fires on clipboard read-back match.
+            self._verified_clipboard_paste(
+                text, paste_fn=lambda: self._safe_hotkey("command", "v", post_delay=0.4)
+            )
         finally:
             try:
                 self._copy_to_clipboard(original_clipboard)
@@ -1380,9 +1462,11 @@ end tell
         time.sleep(0.1)
         original_clipboard = self._read_clipboard()
         try:
-            self._copy_to_clipboard(text_to_append)
-            time.sleep(0.1)
-            self._safe_hotkey("command", "v", post_delay=0.4)
+            # C23: interlock — keystroke only fires on clipboard read-back match.
+            self._verified_clipboard_paste(
+                text_to_append,
+                paste_fn=lambda: self._safe_hotkey("command", "v", post_delay=0.4),
+            )
         finally:
             try:
                 self._copy_to_clipboard(original_clipboard)

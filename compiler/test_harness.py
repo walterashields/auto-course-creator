@@ -1248,6 +1248,7 @@ class TestC18ConsolidatedSegments(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
         with (
             mock.patch.object(agent, "_copy_to_clipboard"),
+            mock.patch.object(agent, "_clipboard_matches", return_value=True),
             mock.patch.object(agent, "_safe_hotkey"),
             mock.patch("time.sleep") as mock_sleep,
         ):
@@ -1284,6 +1285,7 @@ class TestC19AppleScriptPaste(unittest.TestCase):
         run = mock.patch("compiler.vision_agent.subprocess.run").start()
         with (
             mock.patch.object(agent, "_copy_to_clipboard"),
+            mock.patch.object(agent, "_clipboard_matches", return_value=True),
             mock.patch("time.sleep"),
         ):
             agent._paste_line("SELECT")
@@ -1410,6 +1412,69 @@ class TestC20IdempotentFocus(unittest.TestCase):
         ax_write.assert_called_once()
         click.assert_not_called()
         self.assertEqual(buf.getvalue().count("editor already focused; skipping"), 1)
+
+
+class TestC23ClipboardInterlock(unittest.TestCase):
+    """C23: paste keystroke fires only when the clipboard read-back verifies."""
+
+    def test_match_fires_keystroke_once(self) -> None:
+        """Clipboard verifies on the first try: exactly one paste keystroke."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        copy = mock.patch.object(agent, "_copy_to_clipboard").start()
+        matches = mock.patch.object(agent, "_clipboard_matches", return_value=True).start()
+        keystroke = mock.patch.object(agent, "_hotkey_paste").start()
+        mock.patch("time.sleep").start()
+        with contextlib.redirect_stderr(io.StringIO()) as buf:
+            agent._verified_clipboard_paste("SELECT 1;\n")
+        keystroke.assert_called_once()
+        self.assertEqual(copy.call_count, 1)
+        self.assertEqual(matches.call_count, 1)
+        self.assertIn("wsda-paste-verified", buf.getvalue())
+
+    def test_persistent_mismatch_zero_keystrokes_raises(self) -> None:
+        """Clipboard never verifies: zero keystrokes, PasteInterlockError."""
+        from compiler.vision_agent import PasteInterlockError
+
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        copy = mock.patch.object(agent, "_copy_to_clipboard").start()
+        mock.patch.object(agent, "_clipboard_matches", return_value=False).start()
+        keystroke = mock.patch.object(agent, "_hotkey_paste").start()
+        mock.patch("time.sleep").start()
+        with contextlib.redirect_stderr(io.StringIO()) as buf:
+            with self.assertRaises(PasteInterlockError):
+                agent._verified_clipboard_paste("SELECT 1;\n")
+        keystroke.assert_not_called()
+        self.assertEqual(copy.call_count, 3)
+        self.assertIn("wsda-paste-interlock-fail", buf.getvalue())
+
+    def test_fail_then_match_fires_once_after_retry(self) -> None:
+        """First read-back mismatches, second matches: one retry, one keystroke."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        copy = mock.patch.object(agent, "_copy_to_clipboard").start()
+        matches = mock.patch.object(
+            agent, "_clipboard_matches", side_effect=[False, True]
+        ).start()
+        keystroke = mock.patch.object(agent, "_hotkey_paste").start()
+        mock.patch("time.sleep").start()
+        with contextlib.redirect_stderr(io.StringIO()):
+            agent._verified_clipboard_paste("SELECT 1;\n")
+        keystroke.assert_called_once()
+        self.assertEqual(copy.call_count, 2)
+        self.assertEqual(matches.call_count, 2)
+
+    def test_paste_line_routes_through_interlock(self) -> None:
+        """_paste_line uses the interlock: no direct _hotkey_paste call."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        interlock = mock.patch.object(agent, "_verified_clipboard_paste").start()
+        keystroke = mock.patch.object(agent, "_hotkey_paste").start()
+        mock.patch("time.sleep").start()
+        agent._paste_line("SELECT 1;")
+        interlock.assert_called_once()
+        keystroke.assert_not_called()
 
 
 class TestC21FocusedElementGuard(unittest.TestCase):
@@ -2323,6 +2388,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC21FocusedElementGuard))
     suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcTraversal))
     suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcRetry))
+    suite.addTests(loader.loadTestsFromTestCase(TestC23ClipboardInterlock))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
