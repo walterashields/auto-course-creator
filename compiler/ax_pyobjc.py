@@ -223,7 +223,48 @@ def _running_apps() -> List[Any]:
     return NSWorkspace.sharedWorkspace().runningApplications()
 
 
+def _pid_via_ps(name: str) -> Optional[int]:
+    """Authoritative pid lookup that does not depend on NSWorkspace freshness.
+
+    A process without a spinning runloop (the pipeline is plain Python) does
+    not receive NSWorkspace updates for apps launched AFTER it started
+    (observed C25: DB Browser launched by the readiness wait stayed invisible
+    to runningApplications() for 30+s while fully booted). ``ps`` reflects the
+    real process table. Matches the app binary path
+    ``<App>.app/Contents/MacOS/<name>`` to avoid matching osascript arguments.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,comm="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    needle = f"/MacOS/{name}"
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_s, comm = parts
+        if comm.endswith(needle) or comm == name:
+            return int(pid_s)
+    return None
+
+
 def app_pid_for_name(name: str) -> Optional[int]:
+    # ps first: NSWorkspace.runningApplications() is stale in a process
+    # without a spinning runloop — it kept returning the pre-relaunch pid for
+    # an entire run after stage prep killed and relaunched DB Browser, so
+    # every AX call targeted a dead pid (-25204) while System Events, which
+    # resolves by name, kept working (C25 trace: pid 27913 returned 23 times
+    # across the relaunch boundary).
+    pid = _pid_via_ps(name)
+    if pid is not None:
+        return pid
     for app in _running_apps():
         if app.localizedName() == name:
             return int(app.processIdentifier())
@@ -279,6 +320,43 @@ def find_text_areas(app_element: Any) -> List[Tuple[Any, Optional[float]]]:
         for child in children:
             stack.append((child, depth + 1))
     return found
+
+
+def press_execute_tab(app_element: Any) -> bool:
+    """Find the 'Execute SQL' AXRadioButton in any window and press it.
+
+    A freshly opened DB Browser window sits on a tab with no AXTextArea, so
+    the text-area enumeration cannot succeed until the editor's tab is shown
+    (C25 readiness wait). Same attribute-read traversal as find_text_areas;
+    returns True when the press action was invoked.
+    """
+    windows = copy_attribute(app_element, "AXWindows") or []
+    stack: List[Tuple[Any, int]] = [(w, 0) for w in windows]
+    visited = 0
+    while stack:
+        el, depth = stack.pop()
+        visited += 1
+        if visited > _MAX_ELEMENTS or depth > _MAX_DEPTH:
+            continue
+        try:
+            role = copy_attribute(el, "AXRole")
+        except AxCallError:
+            role = None
+        if role == "AXRadioButton":
+            try:
+                title = copy_attribute(el, "AXTitle")
+            except AxCallError:
+                title = None
+            if title == "Execute SQL":
+                press(el)
+                return True
+        try:
+            children = copy_attribute(el, "AXChildren") or []
+        except AxCallError:
+            children = []
+        for child in children:
+            stack.append((child, depth + 1))
+    return False
 
 
 def focused_element_info(app_element: Any) -> Optional[dict]:

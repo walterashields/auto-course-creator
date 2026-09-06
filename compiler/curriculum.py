@@ -1226,22 +1226,6 @@ def run_course(
             ),
         )
     )
-    # C24: scratch-buffer hygiene — auto-clear any contamination from the SQL
-    # editor before every run (dry-run or recording). Self-healing: a dirty
-    # editor is cleared deterministically; only a clear failure halts the run.
-    from .vision_agent import VisionAgent
-
-    VisionAgent(
-        profile=EnvironmentProfile(
-            application=ordered_videos[0].application if ordered_videos else "unknown",
-            app_name=_application_to_app_name(
-                ordered_videos[0].application if ordered_videos else "unknown"
-            ),
-            focus_target=_application_to_app_name(
-                ordered_videos[0].application if ordered_videos else "unknown"
-            ),
-        )
-    ).ensure_editor_clean()
     for video in ordered_videos:
         db_path_str = video.exercise_artifact.get("db_path")
         if db_path_str and not Path(db_path_str).exists():
@@ -1257,6 +1241,28 @@ def run_course(
                 from .discovery import _ensure_sample_db
 
                 video.exercise_artifact["db_path"] = str(_ensure_sample_db(discovery_output_dir))
+
+    # C25: app readiness — launch the target app if needed and poll the pyobjc
+    # AX layer until it answers (fresh processes reject AX IPC for seconds);
+    # then C24 scratch-buffer hygiene — auto-clear any contamination from the
+    # SQL editor. Both run before any AX-dependent step in every pass.
+    from .vision_agent import VisionAgent, wait_for_app_readiness
+
+    _preflight_profile = EnvironmentProfile(
+        application=ordered_videos[0].application if ordered_videos else "unknown",
+        app_name=_application_to_app_name(
+            ordered_videos[0].application if ordered_videos else "unknown"
+        ),
+        focus_target=_application_to_app_name(
+            ordered_videos[0].application if ordered_videos else "unknown"
+        ),
+    )
+    _preflight_db_path = (
+        ordered_videos[0].exercise_artifact.get("db_path") if ordered_videos else None
+    )
+    _preflight_agent = VisionAgent(profile=_preflight_profile)
+    wait_for_app_readiness(_preflight_agent, db_path=_preflight_db_path)
+    _preflight_agent.ensure_editor_clean()
 
     # Determine whether TTS is available.
     tts_available = bool(

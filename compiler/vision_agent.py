@@ -54,6 +54,115 @@ class PasteInterlockError(RuntimeError):
 
 _PASTE_INTERLOCK_ATTEMPTS = 3
 
+# C25: app-readiness polling after launch (AX boot transient).
+_APP_READY_TIMEOUT_SECONDS = 30.0
+_APP_READY_POLL_INTERVAL = 1.0
+
+
+def wait_for_app_readiness(
+    agent: "VisionAgent",
+    db_path: Optional[str] = None,
+    timeout: float = _APP_READY_TIMEOUT_SECONDS,
+    interval: float = _APP_READY_POLL_INTERVAL,
+) -> None:
+    """
+    C25: block until the target app answers AX queries, BEFORE any AX-dependent
+    step (auto-clear, stage prep, beats). A freshly launched process rejects
+    AX IPC with kAXErrorCannotComplete for several seconds (C24: an entire
+    dry-run burned VLM fallback and died this way); polling here turns that
+    transient into a bounded wait.
+
+    If the app is not running it is launched on ``db_path`` (same ``open -a``
+    mechanism discovery uses). Success requires an AXWindows read AND a
+    text-area enumeration to succeed. Two deviations from the directive text,
+    both required for the criterion to be reachable (verified live after the
+    first C25 dry-run timed out with AX healthy): (1) a running DB Browser
+    window with NO database open renders no SQL editor at all — zero
+    AXTextAreas on every tab — so when windows exist but the enumeration is
+    empty and no DB-open attempt has been made yet, ``open -a <app> <db_path>``
+    is issued once (marker 'wsda-db-open'); (2) a window on a non-Execute-SQL
+    tab also has zero AXTextAreas, so the 'Execute SQL' radio is pressed via
+    pyobjc (marker 'wsda-execute-tab-pressed'). Polling continues between
+    those actions; the success criterion is unchanged. Logs
+    'wsda-app-ready:<elapsed>s' on success; on timeout raises
+    RuntimeError('wsda-app-not-ready: ...') with zero beats executed.
+    """
+    process_name = agent.profile.focus_target or agent.profile.app_name
+    if ax_pyobjc.app_pid_for_name(process_name) is None:
+        if not db_path:
+            raise RuntimeError(
+                f"wsda-app-not-ready: {process_name} is not running and no "
+                "database path was provided to launch it"
+            )
+        print(
+            f"  [APP] {process_name} not running; launching on {db_path}",
+            file=sys.stderr,
+        )
+        subprocess.run(
+            ["open", "-a", process_name, str(db_path)],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                f'tell application "{process_name}" to activate',
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+    start = time.time()
+    db_open_attempted = False
+    while True:
+        try:
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is not None:
+                app_el = ax_pyobjc.create_application(pid)
+                windows = ax_pyobjc.copy_attribute(app_el, "AXWindows")
+                if windows:
+                    areas = ax_pyobjc.find_text_areas(app_el)
+                    if areas:
+                        elapsed = time.time() - start
+                        print(
+                            f"  [APP] wsda-app-ready:{elapsed:.1f}s",
+                            file=sys.stderr,
+                        )
+                        return
+                    if db_path and not db_open_attempted:
+                        # No editor on ANY tab: a database is not open in this
+                        # window. Opening the seed DB once; the next polls
+                        # press the Execute SQL radio as needed.
+                        db_open_attempted = True
+                        print(
+                            f"  [APP] wsda-db-open {db_path} "
+                            f"{time.time() - start:.1f}s",
+                            file=sys.stderr,
+                        )
+                        subprocess.run(
+                            ["open", "-a", process_name, str(db_path)],
+                            capture_output=True,
+                            timeout=30,
+                        )
+                    elif ax_pyobjc.press_execute_tab(app_el):
+                        # Windows up but no editor visible: the window is
+                        # sitting on a non-Execute-SQL tab. Press the tab's
+                        # radio so the next poll's enumeration can succeed.
+                        print(
+                            f"  [APP] wsda-execute-tab-pressed "
+                            f"{time.time() - start:.1f}s",
+                            file=sys.stderr,
+                        )
+        except ax_pyobjc.AxCallError:
+            pass
+        if time.time() - start >= timeout:
+            raise RuntimeError(
+                f"wsda-app-not-ready: {process_name} did not answer AX "
+                f"queries within {timeout:.0f}s"
+            )
+        time.sleep(interval)
+
 
 def _clipboard_digest(text: str) -> str:
     """SHA-256 of NFC-normalized text.
@@ -1477,17 +1586,23 @@ end tell
         pre-existing content is contamination and is cleared deterministically:
         log 'wsda-editor-dirty:<n>chars', focus via the pyobjc path, cmd+a,
         key code 51, settle 0.3s, re-read. Require exactly 0; retry the clear
-        once; if still non-zero, halt with 'wsda-editor-clear-fail'. A clean
-        editor logs 'wsda-editor-clean' and proceeds; an unavailable editor
-        logs 'wsda-editor-unreadable' and proceeds (nothing to clear).
+        once; if still non-zero, halt with 'wsda-editor-clear-fail'.
+
+        C25: an unreadable editor (AX error / no text area) HALTS the run with
+        'wsda-editor-unreadable' instead of proceeding — with AX dead the run
+        is guaranteed to fail the timing gate via the VLM slow path, so
+        proceeding only burns VLM cost on the way to a foregone failure.
         """
         n = self._editor_text_length()
         if n is None:
             print(
-                "  [EDITOR] wsda-editor-unreadable (no text area); proceeding",
+                "  [EDITOR] wsda-editor-unreadable (no text area); halting",
                 file=sys.stderr,
             )
-            return
+            raise RuntimeError(
+                "wsda-editor-unreadable: could not read the editor via AX; "
+                "the run would fall back to VLM focus on every beat"
+            )
         if n == 0:
             print("  [EDITOR] wsda-editor-clean", file=sys.stderr)
             return

@@ -33,7 +33,7 @@ from compiler.narrator import ScriptBeat
 from compiler.renderer import GraphRenderer
 from compiler.schemas import EnvironmentProfile
 from compiler.tts import TTSGenerator
-from compiler.vision_agent import VisionAgent, VisionAgentResult
+from compiler.vision_agent import VisionAgent, VisionAgentResult, wait_for_app_readiness
 from compiler import ax_pyobjc
 
 
@@ -1522,6 +1522,52 @@ class TestC21FocusedElementGuard(unittest.TestCase):
         self.assertIn("wsda-focused-other|OtherApp|AXTerminal", buf.getvalue())
 
 
+class TestC25PidFallback(unittest.TestCase):
+    """C25: app_pid_for_name falls back to ps when NSWorkspace is stale."""
+
+    def _fake_app(self, name: str, pid: int):
+        app = mock.MagicMock()
+        app.localizedName.return_value = name
+        app.processIdentifier.return_value = pid
+        return app
+
+    def test_ps_is_primary_nsworkspace_stale(self) -> None:
+        """ps wins even when NSWorkspace reports a different (stale) pid."""
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(
+            ax_pyobjc, "_running_apps",
+            return_value=[self._fake_app("DB Browser for SQLite", 111)],
+        ).start()
+        ps_out = "  28001 /Applications/DB Browser for SQLite.app/Contents/MacOS/DB Browser for SQLite\n"
+        mock.patch(
+            "subprocess.run", return_value=mock.MagicMock(stdout=ps_out),
+        ).start()
+        self.assertEqual(ax_pyobjc.app_pid_for_name("DB Browser for SQLite"), 28001)
+
+    def test_ps_fallback_when_nsworkspace_stale(self) -> None:
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(ax_pyobjc, "_running_apps", return_value=[]).start()
+        ps_out = (
+            "  100 /Applications/Safari.app/Contents/MacOS/Safari\n"
+            "  27913 /Applications/DB Browser for SQLite.app/Contents/MacOS/DB Browser for SQLite\n"
+            "28298 /usr/bin/osascript -e tell application \"DB Browser for SQLite\" to activate\n"
+        )
+        mock.patch(
+            "subprocess.run",
+            return_value=mock.MagicMock(stdout=ps_out),
+        ).start()
+        self.assertEqual(ax_pyobjc.app_pid_for_name("DB Browser for SQLite"), 27913)
+
+    def test_not_running_returns_none(self) -> None:
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(ax_pyobjc, "_running_apps", return_value=[]).start()
+        mock.patch(
+            "subprocess.run",
+            return_value=mock.MagicMock(stdout="  100 /Applications/Safari.app/Contents/MacOS/Safari\n"),
+        ).start()
+        self.assertIsNone(ax_pyobjc.app_pid_for_name("DB Browser for SQLite"))
+
+
 class TestC22PyobjcTraversal(unittest.TestCase):
     """C22: the direct AX API traversal finds the top-most AXTextArea."""
 
@@ -1713,6 +1759,119 @@ class TestC24EditorAutoClear(unittest.TestCase):
         self.assertIn("wsda-editor-clear-fail", str(ctx.exception))
         self.assertEqual(run.call_count, 2)  # clear tried exactly twice
         self.assertEqual(length.call_count, 3)
+
+
+class TestC25AppReadinessWait(unittest.TestCase):
+    """C25: app-readiness polling after launch; halt on timeout."""
+
+    def _fake_clock(self) -> List[Any]:
+        clock = [0.0]
+        mock.patch("time.time", side_effect=lambda: clock[0]).start()
+        mock.patch("time.sleep", side_effect=lambda s: clock.__setitem__(0, clock[0] + s)).start()
+        return clock
+
+    def test_poll_succeeds_on_attempt_n(self) -> None:
+        """Transient AX failures then success: proceeds, marker logged with elapsed."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        self._fake_clock()
+        pid_calls = [0]
+
+        def _pid(name):
+            pid_calls[0] += 1
+            return None if pid_calls[0] == 1 else 4242
+
+        pid = mock.patch.object(ax_pyobjc, "app_pid_for_name", side_effect=_pid).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        copy = mock.patch.object(
+            ax_pyobjc, "copy_attribute",
+            side_effect=[
+                ax_pyobjc.AxCallError("copy AXWindows", -25204),
+                ["w"],
+                ["w"],
+            ],
+        ).start()
+        find = mock.patch.object(
+            ax_pyobjc, "find_text_areas", side_effect=[[("ta", 5.0)]]
+        ).start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            wait_for_app_readiness(agent, db_path="/tmp/x.db")
+        self.assertIn("wsda-app-ready:1.0s", buf.getvalue())
+        self.assertEqual(copy.call_count, 2)
+        self.assertEqual(find.call_count, 1)
+        # Launch path fired because the first pid lookup returned None.
+        self.assertTrue(
+            any(c.args[0][:2] == ["open", "-a"] for c in run.call_args_list)
+        )
+
+    def test_all_polls_fail_halt_zero_beats(self) -> None:
+        """Every poll fails: RuntimeError with wsda-app-not-ready."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        self._fake_clock()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=4242).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        copy = mock.patch.object(
+            ax_pyobjc, "copy_attribute",
+            side_effect=ax_pyobjc.AxCallError("copy AXWindows", -25204),
+        ).start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            with self.assertRaises(RuntimeError) as ctx:
+                wait_for_app_readiness(agent, db_path="/tmp/x.db", timeout=3.0)
+        self.assertIn("wsda-app-not-ready", str(ctx.exception))
+        self.assertGreaterEqual(copy.call_count, 3)
+
+    def test_no_text_areas_presses_execute_tab(self) -> None:
+        """Windows up but no AXTextArea: opens DB once, presses Execute SQL
+        radio, then succeeds."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        self._fake_clock()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=4242).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        mock.patch.object(ax_pyobjc, "copy_attribute", return_value=["w"]).start()
+        find = mock.patch.object(
+            ax_pyobjc, "find_text_areas", side_effect=[[], [], [("ta", 5.0)]]
+        ).start()
+        press = mock.patch.object(ax_pyobjc, "press_execute_tab", return_value=True).start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            wait_for_app_readiness(agent, db_path="/tmp/x.db")
+        # Poll 1: no areas -> one-time DB open (no press yet). Poll 2: press.
+        # Poll 3: enumeration succeeds.
+        open_calls = [c for c in run.call_args_list if c.args[0][:2] == ["open", "-a"]]
+        self.assertEqual(len(open_calls), 1)
+        self.assertEqual(press.call_count, 1)
+        self.assertEqual(find.call_count, 3)
+        self.assertIn("wsda-db-open", buf.getvalue())
+        self.assertIn("wsda-execute-tab-pressed", buf.getvalue())
+        self.assertIn("wsda-app-ready:2.0s", buf.getvalue())
+
+    def test_no_text_areas_no_db_path_presses_tab(self) -> None:
+        """No db_path: skips the DB-open branch, presses the radio directly."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        self._fake_clock()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=4242).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        mock.patch.object(ax_pyobjc, "copy_attribute", return_value=["w"]).start()
+        mock.patch.object(
+            ax_pyobjc, "find_text_areas", side_effect=[[], [("ta", 5.0)]]
+        ).start()
+        press = mock.patch.object(ax_pyobjc, "press_execute_tab", return_value=True).start()
+        run = mock.patch("compiler.vision_agent.subprocess.run").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            wait_for_app_readiness(agent, db_path=None)
+        self.assertEqual(press.call_count, 1)
+        self.assertFalse(
+            any(c.args[0][:2] == ["open", "-a"] for c in run.call_args_list)
+        )
+        self.assertIn("wsda-app-ready:1.0s", buf.getvalue())
 
 
 class TestStageMatchesStory(unittest.TestCase):
@@ -2451,9 +2610,11 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC20IdempotentFocus))
     suite.addTests(loader.loadTestsFromTestCase(TestC21FocusedElementGuard))
     suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcTraversal))
+    suite.addTests(loader.loadTestsFromTestCase(TestC25PidFallback))
     suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcRetry))
     suite.addTests(loader.loadTestsFromTestCase(TestC23ClipboardInterlock))
     suite.addTests(loader.loadTestsFromTestCase(TestC24EditorAutoClear))
+    suite.addTests(loader.loadTestsFromTestCase(TestC25AppReadinessWait))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
