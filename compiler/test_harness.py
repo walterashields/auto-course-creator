@@ -34,6 +34,7 @@ from compiler.renderer import GraphRenderer
 from compiler.schemas import EnvironmentProfile
 from compiler.tts import TTSGenerator
 from compiler.vision_agent import VisionAgent, VisionAgentResult
+from compiler import ax_pyobjc
 
 
 # ---------------------------------------------------------------------------
@@ -1016,18 +1017,15 @@ class TestC17DeterministicDemo(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
         return agent
 
-    @staticmethod
-    def _ax_result(stdout: str) -> Any:
-        return mock.Mock(returncode=0, stdout=stdout + "\n", stderr="")
-
     def test_focus_editor_fast_path_skips_vlm_clicks(self) -> None:
         """When AX focus succeeds, no VLM click is paid."""
         agent = self._agent()
+        self.addCleanup(mock.patch.stopall)
+        _patch_focus_guard([{"element": "el", "pid": 999, "role": "AXTerminal"}])
         mock.patch.object(agent, "_ensure_frontmost").start()
         fac = mock.patch.object(agent, "find_and_click", return_value=True).start()
-        with mock.patch(
-            "compiler.vision_agent.subprocess.run",
-            return_value=self._ax_result("wsda-focused"),
+        with mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
         ):
             agent._focus_editor()
         fac.assert_not_called()
@@ -1035,13 +1033,14 @@ class TestC17DeterministicDemo(unittest.TestCase):
     def test_focus_editor_falls_back_to_vlm_when_no_text_area(self) -> None:
         """When the AX tree has no text area, both VLM clicks run (tab + editor)."""
         agent = self._agent()
+        self.addCleanup(mock.patch.stopall)
+        _patch_focus_guard([{"element": "el", "pid": 999, "role": "AXTerminal"}])
         mock.patch.object(agent, "_ensure_frontmost").start()
+        mock.patch.object(agent, "_log_ax_failure_context").start()
+        mock.patch.object(ax_pyobjc, "find_text_areas", return_value=[]).start()
+        mock.patch("time.sleep").start()
         fac = mock.patch.object(agent, "find_and_click", return_value=True).start()
-        with mock.patch(
-            "compiler.vision_agent.subprocess.run",
-            return_value=self._ax_result("wsda-no-text-area"),
-        ):
-            agent._focus_editor()
+        agent._focus_editor()
         self.assertEqual(fac.call_count, 2)
 
     def test_run_query_uses_cached_button_without_vlm(self) -> None:
@@ -1266,6 +1265,7 @@ class TestC18ConsolidatedSegments(unittest.TestCase):
         focus_ax = mock.patch.object(
             agent, "_ensure_editor_focused_accessibility", return_value=True
         ).start()
+        _patch_focus_guard([{"element": "el", "pid": 999, "role": "AXTerminal"}])
         self.addCleanup(mock.patch.stopall)
         agent._focus_editor()
         dismiss.assert_called_once()
@@ -1340,40 +1340,45 @@ class TestC19AppleScriptPaste(unittest.TestCase):
             self.assertEqual(beat.planned_duration, 10.0)
 
 
+def _patch_focus_guard(infos: List[Any]) -> None:
+    """Patch the C22 pyobjc guard seam: ax_pyobjc focused-element reads.
+
+    ``infos`` is consumed one dict (or None) per focused_element_info call.
+    """
+    queue = list(infos)
+
+    mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=4242).start()
+    mock.patch.object(ax_pyobjc, "create_application", return_value="app-el").start()
+    mock.patch.object(
+        ax_pyobjc, "focused_element_info",
+        side_effect=lambda app_el: queue.pop(0) if queue else None,
+    ).start()
+    mock.patch.object(ax_pyobjc, "app_name_for_pid", return_value="OtherApp").start()
+
+
 class TestC20IdempotentFocus(unittest.TestCase):
     """C20: focus is idempotent — an already-focused editor skips the focus cycle."""
-
-    def _ax_state_mock(self, states: List[str]):
-        """subprocess.run mock answering AX scripts with the next queued state.
-
-        C21: the first AX call in a focus path is the focused-element guard,
-        so the queue holds guard markers ("wsda-focused-editor" = early exit).
-        """
-        queue = list(states)
-
-        def _run(argv, **kwargs):
-            out = queue.pop(0) if queue else "wsda-no-focused-el"
-            return subprocess.CompletedProcess(argv, 0, out, "")
-
-        return mock.patch(
-            "compiler.vision_agent.subprocess.run", side_effect=_run
-        )
 
     def test_focus_editor_early_exits_when_already_focused(self) -> None:
         """Two focus calls with an already-focused editor: zero dismissal, zero AX writes."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        with self._ax_state_mock(["wsda-focused-editor", "wsda-focused-editor"]):
-            dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
-            frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
-            ax_write = mock.patch.object(
-                agent, "_ensure_editor_focused_accessibility"
-            ).start()
-            click = mock.patch.object(agent, "find_and_click").start()
-            buf = io.StringIO()
-            with contextlib.redirect_stderr(buf):
-                agent._focus_editor()
-                agent._focus_editor()
+        _patch_focus_guard(
+            [
+                {"element": "el", "pid": 4242, "role": "AXTextArea"},
+                {"element": "el", "pid": 4242, "role": "AXTextArea"},
+            ]
+        )
+        dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+        frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
+        ax_write = mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility"
+        ).start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent._focus_editor()
+            agent._focus_editor()
         dismiss.assert_not_called()
         frontmost.assert_not_called()
         ax_write.assert_not_called()
@@ -1384,19 +1389,22 @@ class TestC20IdempotentFocus(unittest.TestCase):
         """First call runs one full cycle; the second early-exits with no dismissal."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        with self._ax_state_mock(
-            ["wsda-focused-other|Terminal|AXTerminal", "wsda-focused-editor"]
-        ):
-            dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
-            frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
-            ax_write = mock.patch.object(
-                agent, "_ensure_editor_focused_accessibility", return_value=True
-            ).start()
-            click = mock.patch.object(agent, "find_and_click").start()
-            buf = io.StringIO()
-            with contextlib.redirect_stderr(buf):
-                agent._focus_editor()
-                agent._focus_editor()
+        _patch_focus_guard(
+            [
+                {"element": "el", "pid": 999, "role": "AXTerminal"},
+                {"element": "el", "pid": 4242, "role": "AXTextArea"},
+            ]
+        )
+        dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
+        frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
+        ax_write = mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
+        ).start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent._focus_editor()
+            agent._focus_editor()
         dismiss.assert_called_once()
         frontmost.assert_called_once()
         ax_write.assert_called_once()
@@ -1405,16 +1413,14 @@ class TestC20IdempotentFocus(unittest.TestCase):
 
 
 class TestC21FocusedElementGuard(unittest.TestCase):
-    """C21: the early-exit guard reads the system-wide focused element."""
+    """C21: the early-exit guard reads the app's focused element (C22: via AX API)."""
 
     def test_focused_axtextarea_in_db_browser_early_exits_without_enumeration(self):
         """Guard reports an AXTextArea focused in DB Browser: skip, never enumerate."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        run = mock.patch("compiler.vision_agent.subprocess.run").start()
-        run.return_value = subprocess.CompletedProcess(
-            ["osascript"], 0, "wsda-focused-editor", ""
-        )
+        _patch_focus_guard([{"element": "el", "pid": 4242, "role": "AXTextArea"}])
+        traverse = mock.patch.object(ax_pyobjc, "find_text_areas").start()
         enum = mock.patch.object(agent, "_ensure_editor_focused_accessibility").start()
         dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
         frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
@@ -1422,7 +1428,7 @@ class TestC21FocusedElementGuard(unittest.TestCase):
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
             agent._focus_editor()
-        self.assertTrue(run.called)
+        traverse.assert_not_called()
         enum.assert_not_called()
         dismiss.assert_not_called()
         frontmost.assert_not_called()
@@ -1434,94 +1440,119 @@ class TestC21FocusedElementGuard(unittest.TestCase):
         """Guard cannot confirm focus (other app focused): run the full path once."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        run = mock.patch("compiler.vision_agent.subprocess.run").start()
-        run.return_value = subprocess.CompletedProcess(
-            ["osascript"], 0, "wsda-focused-other|Terminal|AXTerminal", ""
-        )
+        _patch_focus_guard([{"element": "el", "pid": 999, "role": "AXTerminal"}])
         enum = mock.patch.object(
             agent, "_ensure_editor_focused_accessibility", return_value=True
         ).start()
         dismiss = mock.patch.object(agent, "_dismiss_character_viewer").start()
         frontmost = mock.patch.object(agent, "_ensure_frontmost").start()
         click = mock.patch.object(agent, "find_and_click").start()
-        with contextlib.redirect_stderr(io.StringIO()):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
             agent._focus_editor()
         enum.assert_called_once()
         dismiss.assert_called_once()
         frontmost.assert_called_once()
         click.assert_not_called()
-        self.assertIn("wsda-focused-other", run.return_value.stdout)
+        self.assertIn("wsda-focused-other|OtherApp|AXTerminal", buf.getvalue())
 
 
-class TestC21EnumerationRetry(unittest.TestCase):
-    """C21: the entire-contents enumeration retries before VLM fallback."""
+class TestC22PyobjcTraversal(unittest.TestCase):
+    """C22: the direct AX API traversal finds the top-most AXTextArea."""
 
-    def _dispatching_run(self, responses: Dict[str, list]):
-        """subprocess.run mock dispatching on script content: 'guard' vs 'enum'.
-
-        Each response is an Exception instance to raise or a stdout string.
-        """
-        queues = {k: list(v) for k, v in responses.items()}
-
-        def _run(argv, **kwargs):
-            script = argv[2]
-            kind = "enum" if "entire contents" in script else "guard"
-            item = queues.get(kind, []).pop(0) if queues.get(kind) else None
-            if isinstance(item, Exception):
-                raise item
-            out = item if isinstance(item, str) else (
-                "wsda-no-focused-el" if kind == "guard" else "wsda-no-text-area"
-            )
-            return subprocess.CompletedProcess(argv, 0, out, "")
-
-        return _run
-
-    def _enum_call_count(self, run_mock) -> int:
-        return sum(
-            1 for c in run_mock.call_args_list if "entire contents" in c.args[0][2]
+    def test_finds_top_most_text_area_and_focuses_it(self) -> None:
+        """Fake AX tree: top-most (smallest y) AXTextArea receives AXFocused."""
+        self.addCleanup(mock.patch.stopall)
+        tree = {
+            "app": {"AXWindows": ["w"]},
+            "w": {"AXRole": "AXWindow", "AXChildren": ["toolbar", "split"]},
+            "toolbar": {"AXRole": "AXGroup", "AXChildren": []},
+            "split": {"AXRole": "AXGroup", "AXChildren": ["ta_editor", "results"]},
+            "results": {"AXRole": "AXScrollArea", "AXChildren": ["ta_results"]},
+            "ta_editor": {"AXRole": "AXTextArea"},
+            "ta_results": {"AXRole": "AXTextArea"},
+        }
+        y_positions = {"ta_editor": 180.0, "ta_results": 724.0}
+        mock.patch.object(
+            ax_pyobjc, "copy_attribute",
+            side_effect=lambda el, name: tree.get(el, {}).get(name),
+        ).start()
+        mock.patch.object(
+            ax_pyobjc, "element_position",
+            side_effect=lambda el: (0.0, y_positions[el]) if el in y_positions else None,
+        ).start()
+        set_focused = mock.patch.object(ax_pyobjc, "set_focused").start()
+        found = ax_pyobjc.find_text_areas("app")
+        self.assertEqual(
+            sorted(el for el, _ in found), ["ta_editor", "ta_results"]
         )
+        top_el, top_y = min(found, key=lambda t: t[1] if t[1] is not None else 1e9)
+        self.assertEqual((top_el, top_y), ("ta_editor", 180.0))
 
-    def test_two_timeouts_then_success_three_attempts_no_vlm(self) -> None:
-        """First two enumerations time out, third focuses: 3 attempts, no VLM clicks."""
+        # Through the vision-agent path: the top-most area is what gets focused.
+        agent = VisionAgent()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=7).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        with contextlib.redirect_stderr(io.StringIO()):
+            ok = agent._ensure_editor_focused_accessibility()
+        self.assertTrue(ok)
+        set_focused.assert_called_once_with("ta_editor")
+
+    def test_traversal_error_and_empty_are_distinct_markers(self):
+        """AxCallError -> wsda-pyobjc-error; empty tree -> wsda-no-text-area."""
+        self.addCleanup(mock.patch.stopall)
+        agent = VisionAgent()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=7).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        mock.patch.object(agent, "_log_ax_failure_context").start()
+        mock.patch("time.sleep").start()
+        err = ax_pyobjc.AxCallError("copy AXWindows", -25204)
+        buf = io.StringIO()
+        with mock.patch.object(ax_pyobjc, "find_text_areas", side_effect=err):
+            with contextlib.redirect_stderr(buf):
+                self.assertFalse(agent._ensure_editor_focused_accessibility())
+        self.assertIn("wsda-pyobjc-error", buf.getvalue())
+        buf2 = io.StringIO()
+        with mock.patch.object(ax_pyobjc, "find_text_areas", return_value=[]):
+            with contextlib.redirect_stderr(buf2):
+                self.assertFalse(agent._ensure_editor_focused_accessibility())
+        self.assertIn("wsda-no-text-area", buf2.getvalue())
+
+
+class TestC22PyobjcRetry(unittest.TestCase):
+    """C22: the AX traversal retries before VLM fallback (C21 discipline)."""
+
+    def _patch_full_path(self, find_side_effect) -> Any:
+        _patch_focus_guard([{"element": "el", "pid": 999, "role": "AXTerminal"}])
+        find = mock.patch.object(
+            ax_pyobjc, "find_text_areas", side_effect=find_side_effect
+        ).start()
+        mock.patch.object(ax_pyobjc, "set_focused").start()
+        return find
+
+    def test_two_errors_then_success_three_attempts_no_vlm(self) -> None:
+        """First two traversals raise, third focuses: 3 attempts, no VLM clicks."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        responses = {
-            "guard": ["wsda-focused-other|Terminal|AXTerminal"],
-            "enum": [
-                subprocess.TimeoutExpired(["osascript"], 15),
-                subprocess.TimeoutExpired(["osascript"], 15),
-                "wsda-focused",
-            ],
-        }
-        run = mock.patch(
-            "compiler.vision_agent.subprocess.run",
-            side_effect=self._dispatching_run(responses),
-        ).start()
+        err = ax_pyobjc.AxCallError("copy AXWindows", -25204)
+        find = self._patch_full_path([err, err, [("ta", 50.0)]])
         mock.patch.object(agent, "_log_ax_failure_context").start()
         mock.patch.object(agent, "_dismiss_character_viewer").start()
         mock.patch.object(agent, "_ensure_frontmost").start()
         click = mock.patch.object(agent, "find_and_click").start()
         sleep = mock.patch("time.sleep").start()
         with contextlib.redirect_stderr(io.StringIO()):
-            ok = agent._focus_editor()
-        self.assertIsNone(ok)
-        self.assertEqual(self._enum_call_count(run), 3)
+            agent._focus_editor()
+        self.assertEqual(find.call_count, 3)
         click.assert_not_called()
         self.assertEqual(sleep.call_count, 2)
 
-    def test_all_attempts_fail_vlm_fallback_exactly_once(self):
-        """Every enumeration attempt fails: one VLM fallback cycle (2 clicks)."""
+    def test_zero_text_areas_after_retries_vlm_once(self):
+        """Traversal succeeds but finds nothing: VLM fallback exactly once."""
         agent = VisionAgent()
         self.addCleanup(mock.patch.stopall)
-        responses = {
-            "guard": ["wsda-no-focused-el"],
-            # Round 1 (fast path) and round 2 (post-VLM hard guarantee) all fail.
-            "enum": [subprocess.TimeoutExpired(["osascript"], 15)] * 6,
-        }
-        run = mock.patch(
-            "compiler.vision_agent.subprocess.run",
-            side_effect=self._dispatching_run(responses),
-        ).start()
+        # Round 1 (fast path) and round 2 (post-VLM hard guarantee) all empty.
+        find = self._patch_full_path([[], [], [], [], [], []])
         mock.patch.object(agent, "_log_ax_failure_context").start()
         mock.patch.object(agent, "_dismiss_character_viewer").start()
         mock.patch.object(agent, "_ensure_frontmost").start()
@@ -1530,7 +1561,29 @@ class TestC21EnumerationRetry(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             agent._focus_editor()
         self.assertEqual(click.call_count, 2)
-        self.assertEqual(self._enum_call_count(run), 6)
+        self.assertEqual(find.call_count, 6)
+
+    def test_pyobjc_raises_vlm_fallback_exactly_once(self):
+        """Every traversal raises: VLM fallback exactly once."""
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        err = ax_pyobjc.AxCallError("copy AXWindows", -25204)
+        find = self._patch_full_effect([err] * 6)
+        mock.patch.object(agent, "_log_ax_failure_context").start()
+        mock.patch.object(agent, "_dismiss_character_viewer").start()
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        click = mock.patch.object(agent, "find_and_click").start()
+        mock.patch("time.sleep").start()
+        with contextlib.redirect_stderr(io.StringIO()):
+            agent._focus_editor()
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(find.call_count, 6)
+
+    def _patch_full_effect(self, effects: List[Any]) -> Any:
+        _patch_focus_guard([{"element": "el", "pid": 999, "role": "AXTerminal"}])
+        return mock.patch.object(
+            ax_pyobjc, "find_text_areas", side_effect=list(effects)
+        ).start()
 
 
 class TestStageMatchesStory(unittest.TestCase):
@@ -2268,7 +2321,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC19AppleScriptPaste))
     suite.addTests(loader.loadTestsFromTestCase(TestC20IdempotentFocus))
     suite.addTests(loader.loadTestsFromTestCase(TestC21FocusedElementGuard))
-    suite.addTests(loader.loadTestsFromTestCase(TestC21EnumerationRetry))
+    suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcTraversal))
+    suite.addTests(loader.loadTestsFromTestCase(TestC22PyobjcRetry))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

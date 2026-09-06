@@ -3372,6 +3372,26 @@ class EndStateDiscovery:
                         agent.prepare_sql_editor()
                     else:
                         agent.dismiss_transient_ui()
+                    # C22: pre-focus the editor ONCE now, while the previous beat's
+                    # recorder has fully stopped and SCK is inactive — AX reads are
+                    # reliable in this window. Mid-beat focus calls then early-exit
+                    # via the SCK-surviving focused-element guard. Without this,
+                    # a focus call landing after recorder.start() had to fall back
+                    # to VLM clicks (System Events enumeration dies under SCK; C21
+                    # probe), inflating clips past the padding cap.
+                    if action.get("type") in ("type_segments", "run_query"):
+                        try:
+                            agent._focus_editor()
+                            print(
+                                f"  [FOCUS] wsda-pre-focus complete for {beat.beat_id}",
+                                file=sys.stderr,
+                            )
+                        except Exception as exc:
+                            print(
+                                f"  [FOCUS] wsda-pre-focus failed for {beat.beat_id} "
+                                f"(non-fatal): {exc}",
+                                file=sys.stderr,
+                            )
                     agent.recording = True
                     recorder.start()
                     # C13: start the beat's own TTS so recording is paced by speech.

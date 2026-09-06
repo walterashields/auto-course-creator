@@ -42,6 +42,7 @@ from .vision_agent import (
     _ax_focused_element_script,
     _run_ax_script,
 )
+from . import ax_pyobjc
 
 PROCESS_NAME = "DB Browser for SQLite"
 PROBE_INTERVAL_SECONDS = 2.0
@@ -49,6 +50,27 @@ CONDITION_SECONDS = 60.0
 REPORT_PATH = Path("output") / "ax_probe_report.json"
 
 CONDITIONS = ["A_idle", "B_sck_recorder", "C_audio", "D_sck_plus_audio"]
+
+
+def _pyobjc_enumeration_probe() -> Dict[str, Any]:
+    """C22: the direct AX API traversal (read-only; does not set focus)."""
+    start = time.time()
+    try:
+        pid = ax_pyobjc.app_pid_for_name(PROCESS_NAME)
+        if pid is None:
+            return {"marker": "wsda-pyobjc-error", "elapsed": 0.0,
+                    "detail": "target app not running"}
+        app_el = ax_pyobjc.create_application(pid)
+        areas = ax_pyobjc.find_text_areas(app_el)
+        elapsed = time.time() - start
+        if areas:
+            return {"marker": f"wsda-pyobjc-textareas:{len(areas)}",
+                    "elapsed": round(elapsed, 3), "detail": ""}
+        return {"marker": "wsda-pyobjc-empty", "elapsed": round(elapsed, 3),
+                "detail": ""}
+    except ax_pyobjc.AxCallError as exc:
+        return {"marker": "wsda-pyobjc-error", "elapsed": round(time.time() - start, 3),
+                "detail": str(exc)}
 
 
 def _find_cached_tts_mp3() -> Path:
@@ -101,18 +123,20 @@ def _probe_once(enum_script: str, guard_script: str) -> Dict[str, Any]:
     guard_marker, guard_elapsed, guard_detail = _run_ax_script(
         guard_script, _AX_GUARD_TIMEOUT_SECONDS
     )
+    pyobjc = _pyobjc_enumeration_probe()
     return {
         "t": time.strftime("%H:%M:%S"),
         "enum": {"marker": enum_marker, "elapsed": round(enum_elapsed, 3),
                  "detail": enum_detail},
         "guard": {"marker": guard_marker, "elapsed": round(guard_elapsed, 3),
                   "detail": guard_detail},
+        "pyobjc": pyobjc,
     }
 
 
 def _summarize(condition: str, probes: List[Dict[str, Any]]) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {"probes": len(probes), "enum": {}, "guard": {}}
-    for key in ("enum", "guard"):
+    summary: Dict[str, Any] = {"probes": len(probes), "enum": {}, "guard": {}, "pyobjc": {}}
+    for key in ("enum", "guard", "pyobjc"):
         markers: Dict[str, int] = {}
         elapseds: List[float] = []
         for p in probes:
@@ -188,7 +212,8 @@ def main() -> int:
                 print(
                     f"[AX PROBE] {condition} {probe['t']} "
                     f"enum={probe['enum']['marker']} ({probe['enum']['elapsed']}s) "
-                    f"guard={probe['guard']['marker']} ({probe['guard']['elapsed']}s)",
+                    f"guard={probe['guard']['marker']} ({probe['guard']['elapsed']}s) "
+                    f"pyobjc={probe['pyobjc']['marker']} ({probe['pyobjc']['elapsed']}s)",
                     file=sys.stderr,
                 )
         finally:
@@ -210,7 +235,9 @@ def main() -> int:
 
     print("\ncondition | probe | marker counts | p50 elapsed | max elapsed")
     for condition in CONDITIONS:
-        for key, label in (("enum", "enumeration"), ("guard", "focused-el")):
+        for key, label in (("enum", "osascript-enumeration"),
+                           ("guard", "focused-el"),
+                           ("pyobjc", "pyobjc-enumeration")):
             s = results["conditions"][condition]["summary"][key]
             counts = ", ".join(f"{m}:{c}" for m, c in s["marker_counts"].items())
             print(f"{condition} | {label} | {counts} | "

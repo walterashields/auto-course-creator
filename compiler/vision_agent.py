@@ -33,6 +33,7 @@ from PIL import Image
 pyautogui.FAILSAFE = False
 
 from .schemas import EnvironmentProfile
+from . import ax_pyobjc
 from .frame_analysis import detect_error_signature
 from .cost_tracker import CostTracker, get_tracker, tracked_create
 
@@ -784,26 +785,48 @@ class VisionAgent:
 
     def _focused_element_is_editor(self) -> bool:
         """
-        Cheap C21 guard: is the system-wide focused element the target editor?
+        Cheap C21/C22 guard: does the target app report an AXTextArea as its
+        focused element?
 
-        Reads AXFocusedUIElement per GUI process — single attribute reads, no
-        tree enumeration — so it stays fast even under recording load where
-        ``entire contents`` stalls. Returns True only when the focused element
-        is an AXTextArea owned by the target process; any other outcome (other
-        app focused, nothing focused, query failure) returns False so the
-        caller falls through to the full focus path.
+        C22: reads AXFocusedUIElement directly from the target's application
+        element via the AX API (ax_pyobjc) — a single attribute read, no tree
+        enumeration, no System Events. (The system-wide AXFocusedUIElement
+        read consistently returns kAXErrorCannotComplete from this process,
+        so the application element is used instead; it both finds the element
+        and confirms the target owns focus.) Returns True only when the
+        focused element is an AXTextArea owned by the target process; any
+        other outcome returns False so the caller falls through to the full
+        focus path.
         """
         process_name = self.profile.focus_target or self.profile.app_name
-        marker, elapsed, detail = _run_ax_script(
-            _ax_focused_element_script(process_name), _AX_GUARD_TIMEOUT_SECONDS
-        )
-        ok = marker == "wsda-focused-editor"
+        start = time.time()
+        marker, detail = "wsda-pyobjc-error", ""
+        try:
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is None:
+                marker, detail = "wsda-ax-error", "target app not running"
+            else:
+                app_el = ax_pyobjc.create_application(pid)
+                info = ax_pyobjc.focused_element_info(app_el)
+                if info is None:
+                    marker = "wsda-no-focused-el"
+                elif info.get("role") == "AXTextArea" and info.get("pid") == pid:
+                    marker = "wsda-focused-editor"
+                else:
+                    role = info.get("role") or "?"
+                    owner = ax_pyobjc.app_name_for_pid(info.get("pid") or -1)
+                    marker = (
+                        f"wsda-focused-other|{owner or info.get('pid') or '?'}|{role}"
+                    )
+        except ax_pyobjc.AxCallError as exc:
+            marker, detail = "wsda-pyobjc-error", str(exc)
+        elapsed = time.time() - start
         print(
             f"  [FOCUS] guard: {marker} ({elapsed:.2f}s)"
             + (f" detail={detail!r}" if detail else ""),
             file=sys.stderr,
         )
-        return ok
+        return marker == "wsda-focused-editor"
 
     def _focus_editor(self) -> None:
         """Focus the editor, falling back to VLM clicks when AX focus fails."""
@@ -854,28 +877,58 @@ class VisionAgent:
         """
         Set keyboard focus to the top-most text area in the target window.
 
-        DB Browser exposes the SQL editor as an AXTextArea, but its Qt AX tree
-        does not respond to System Events' class-filtered queries: ``every
-        text area of window 1`` always returns 0 elements (C17 probe of run
-        fe15840c7548 / live debug 2026-09-05). ``entire contents`` enumerates
-        the real tree, so we filter that by AXTextArea role and set AXFocused
-        on the top-most text area (the editor; the lower one is the results
-        pane). Returns True only when a text area was found and focused.
+        C22: uses the direct AX API (ax_pyobjc) — AXWindows/AXChildren
+        attribute reads plus a manual role-filtered traversal — instead of the
+        System Events ``entire contents`` enumeration, which returns a
+        genuinely EMPTY subtree for DB Browser's window while ScreenCaptureKit
+        is capturing (C21 probe: 0% success under conditions B/D, fast
+~0.17s).
+        The top-most AXTextArea is the editor; the lower one is the results
+        pane. Returns True only when a text area was found and focused.
 
-        C21: the enumeration can stall under screen-recording + TTS-audio
-        load (C20 recording pass: every query failed while the identical dry
-        run succeeded). Timeout is 15s (was 10s) with up to 3 attempts, 1.0s
-        apart; every attempt logs its marker and elapsed, and any failure logs
-        the target's window inventory plus the system-wide focused element so
-        the failure modes stay distinguishable. Only after all attempts fail
-        does the caller fall back to VLM clicks.
+        Keeps the C21 retry discipline: up to 3 attempts, 1.0s apart, every
+        attempt logs its marker + elapsed, and any failure logs the target's
+        window inventory plus the focused element. Markers: ``wsda-focused``
+        on success, ``wsda-no-text-area`` when the traversal succeeds but
+        finds no text area, ``wsda-pyobjc-error`` when the AX API raises.
+        Only after all attempts fail does the caller fall back to VLM clicks.
         """
         process_name = self.profile.focus_target or self.profile.app_name
-        script = _ax_enumeration_script(process_name)
-        for attempt in range(1, _AX_ENUM_ATTEMPTS + 1):
-            marker, elapsed, detail = _run_ax_script(
-                script, _AX_ENUM_TIMEOUT_SECONDS
+        pid = None
+        app_el = None
+        try:
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is None:
+                print(
+                    "  [FOCUS] AX attempt 0: wsda-ax-error detail='target app "
+                    f"not running' process={process_name!r}",
+                    file=sys.stderr,
+                )
+                return False
+            app_el = ax_pyobjc.create_application(pid)
+        except ax_pyobjc.AxCallError as exc:
+            print(
+                f"  [FOCUS] AX attempt 0: wsda-pyobjc-error detail={str(exc)!r}",
+                file=sys.stderr,
             )
+            return False
+        for attempt in range(1, _AX_ENUM_ATTEMPTS + 1):
+            start = time.time()
+            marker, detail = "wsda-pyobjc-error", ""
+            try:
+                areas = ax_pyobjc.find_text_areas(app_el)
+                if areas:
+                    # Top-most text area = editor; None positions sort last.
+                    top_el, top_y = min(
+                        areas, key=lambda t: t[1] if t[1] is not None else 1e9
+                    )
+                    ax_pyobjc.set_focused(top_el)
+                    marker = "wsda-focused"
+                else:
+                    marker = "wsda-no-text-area"
+            except ax_pyobjc.AxCallError as exc:
+                marker, detail = "wsda-pyobjc-error", str(exc)
+            elapsed = time.time() - start
             print(
                 f"  [FOCUS] AX attempt {attempt}/{_AX_ENUM_ATTEMPTS}: "
                 f"{marker} ({elapsed:.2f}s)"
