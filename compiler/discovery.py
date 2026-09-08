@@ -3468,6 +3468,10 @@ class EndStateDiscovery:
         run_start = time.time()
         # C26: per-beat recording timeline (instrumentation only; no behavior change).
         timeline: List[Dict[str, Any]] = []
+        # C27: beat retries and type_block stage prep read self.opening_state_history,
+        # but _prepare_opening_state only sets it when a state beat exists — default
+        # it here so the retry path cannot AttributeError on state-less scripts.
+        self.opening_state_history = opening_state_history or ""
 
         errors: List[str] = []
         if self.application not in SUPPORTED_APPLICATIONS:
