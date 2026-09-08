@@ -28,6 +28,7 @@ import cv2
 import numpy as np
 
 from compiler import discovery as discovery_module
+from compiler import vision_agent as vision_agent_module
 from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, _write_attempt_report, load_manifest
 from compiler.discovery import (
     BeatRecordingStop,
@@ -35,6 +36,8 @@ from compiler.discovery import (
     EndStateDiscovery,
     RECORDER_TAIL_SECONDS,
     _clip_has_off_app_interval,
+    _composite_window_frame,
+    _final_editor_read,
     _open_video_writer,
     _ScreenCaptureKitRecorder,
     delivery_floor_breach,
@@ -929,6 +932,8 @@ class TestRunQuery(unittest.TestCase):
             mock.patch.object(agent, "_ensure_frontmost"),
             mock.patch.object(agent, "_read_editor_content", return_value="SELECT 1;"),
             mock.patch.object(agent, "_result_pane_shows_error", return_value=False),
+            mock.patch.object(agent, "_results_pane_snapshot", return_value={"phash": (0,) * 64}),
+            mock.patch.object(agent, "_results_pane_changed", return_value=True),
             mock.patch("compiler.vision_agent.pyautogui.moveTo"),
             mock.patch("compiler.vision_agent.pyautogui.click"),
             mock.patch.object(agent, "press_key") as mock_press,
@@ -1066,6 +1071,8 @@ class TestC17DeterministicDemo(unittest.TestCase):
             mock.patch.object(agent, "_extract_uncommented_sql", return_value=("SELECT 1;", "")),
             mock.patch.object(agent, "_verify_statement_isolation", return_value=True),
             mock.patch.object(agent, "_result_pane_shows_error", return_value=False),
+            mock.patch.object(agent, "_results_pane_snapshot", return_value={"phash": (0,) * 64}),
+            mock.patch.object(agent, "_results_pane_changed", return_value=True),
             mock.patch("compiler.vision_agent.pyautogui.moveTo"),
             mock.patch("compiler.vision_agent.pyautogui.click"),
             mock.patch("time.sleep"),
@@ -2159,6 +2166,7 @@ class TestC29GroundingReadsRecorderFrame(unittest.TestCase):
         from PIL import Image
 
         rec = _ScreenCaptureKitRecorder("/tmp/wsda_c29_frame.mp4", fps=10, app_name="")
+        rec.app_name = "Fake App"  # provider composites via window bounds
         rec._latest_frame = np.full((800, 1280, 3), 200, np.uint8)
         agent = VisionAgent(model="test-model", output_dir="/tmp")
         agent.set_frame_provider(rec.latest_frame_provider())
@@ -2169,10 +2177,15 @@ class TestC29GroundingReadsRecorderFrame(unittest.TestCase):
             calls.append(1)
             return Image.new("RGB", (10, 10))
 
-        with mock.patch.object(VisionAgent, "_capture_screen", staticmethod(fake_capture)):
+        bounds = {"x": 0.0, "y": 56.0, "w": 1470.0, "h": 900.0}
+        with mock.patch.object(VisionAgent, "_capture_screen", staticmethod(fake_capture)), \
+             mock.patch.object(discovery_module, "_window_bounds", return_value=bounds), \
+             mock.patch.object(discovery_module.pyautogui, "size", return_value=(1470, 956)):
             agent.screenshot()
         self.assertEqual(calls, [])  # zero independent captures during recording
-        self.assertEqual(agent.last_raw_image.size, (1280, 800))
+        # C30: composited full-screen canvas, window at its real origin.
+        self.assertEqual(agent.last_raw_image.size, (1280, 832))
+        self.assertEqual(agent.last_raw_image.getpixel((10, 10)), (200, 200, 200))
 
         # Provider cleared (recorder stopped / dry-run): live capture returns.
         agent.set_frame_provider(None)
@@ -2293,6 +2306,116 @@ class TestC29EncodeOffDelivery(unittest.TestCase):
         # Encode (400ms/write, on the writer thread) never stalled the
         # delivery path: worst lock acquisition is orders of magnitude below.
         self.assertLess(max(feeder_ms), 50.0)
+
+
+class TestC30ProviderFrameGeometry(unittest.TestCase):
+    """C30: window-only provider frames are composited onto a full-screen
+    canvas at the window's real CGWindowList origin. Grounded logical
+    coordinates then match the screencapture full-screen path exactly —
+    uniform scale on both axes, menu-bar offset included."""
+
+    def test_known_origin_point_maps_like_full_screen(self) -> None:
+        frame = np.zeros((800, 1280, 3), np.uint8)
+        frame[100, 200] = (255, 255, 255)  # marker at window-frame px (200, 100)
+        bounds = {"x": 100.0, "y": 150.0, "w": 800.0, "h": 500.0}  # Quartz pts
+        screen_w, screen_h = 1440.0, 900.0
+        canvas = _composite_window_frame(frame, bounds, screen_w, screen_h)
+        ch, cw = canvas.shape[:2]
+        scale = 1280 / 800  # 1.6 px per point
+        # Canvas is the FULL SCREEN at uniform scale: aspect preserved.
+        self.assertEqual((cw, ch), (int(round(screen_w * scale)), int(round(screen_h * scale))))
+        self.assertAlmostEqual(cw / ch, screen_w / screen_h, places=3)
+        # Window origin: x=100pt -> 160px; top-left y = 900-150-500 = 250pt -> 400px.
+        ox, oy = 160, 400
+        self.assertEqual(tuple(canvas[oy + 100, ox + 200]), (255, 255, 255))
+        # Menu-bar region exists above the window origin.
+        self.assertGreater(oy, 0)
+        # Uniform scale maps both axes exactly (what screenshot() assumes);
+        # any logical point — menu bar, desktop, or in-window — round-trips.
+        scale_to_logical = screen_w / cw
+        for lx, ly in [(720.0, 10.0), (500.0, 450.0), (100.0, 880.0), (1400.0, 850.0)]:
+            ax, ay = lx / scale_to_logical, ly / scale_to_logical
+            self.assertAlmostEqual(ax * scale_to_logical, lx, places=6)
+            self.assertAlmostEqual(ay * scale_to_logical, ly, places=6)
+
+    def test_window_only_frame_without_composite_misses_by_tens_of_px(self) -> None:
+        # Pin the C29 regression: raw window frame (1.6:1) vs true screen
+        # aspect (~1.54) makes the width-derived scale wrong for Y by enough
+        # to miss a toolbar button; compositing restores uniformity.
+        screen_w, screen_h = 1470.0, 956.0
+        bad_scale = screen_w / 1280  # used for BOTH axes pre-C30
+        true_y_scale = screen_h / 800
+        err_px = 700 * abs(bad_scale - true_y_scale)
+        self.assertGreater(err_px, 20)  # the observed ~35px miss class
+        bounds = {"x": 0.0, "y": 56.0, "w": 1470.0, "h": 900.0}
+        canvas = _composite_window_frame(
+            np.zeros((800, 1280, 3), np.uint8), bounds, screen_w, screen_h
+        )
+        cw, ch = canvas.shape[1], canvas.shape[0]
+        # Uniform up to integer pixel rounding (<=2px on ~830px height).
+        self.assertAlmostEqual(screen_w / cw, screen_h / ch, delta=0.002)
+
+
+class TestC30FreshResultsRequired(unittest.TestCase):
+    """C30: run_query success requires a results-pane STATE CHANGE, and a
+    passing cheap check never overrides a failing VLM assess."""
+
+    def _agent(self) -> VisionAgent:
+        agent = VisionAgent(model="test-model", output_dir="/tmp")
+        agent._run_button_point = (139, 136)  # primed: no VLM locate
+        agent._ensure_frontmost = mock.Mock()
+        agent._read_editor_content = mock.Mock(return_value="SELECT 1;")
+        agent._extract_uncommented_sql = mock.Mock(return_value=("SELECT 1;", None))
+        agent._verify_statement_isolation = mock.Mock(return_value=True)
+        agent._result_pane_shows_error = mock.Mock(return_value=False)
+        agent._results_pane_snapshot = mock.Mock(return_value={"phash": (1,) * 64})
+        return agent
+
+    def test_identical_pane_snapshots_fail(self) -> None:
+        agent = self._agent()
+        agent._results_pane_changed = lambda before, timeout=4.0: False
+        with mock.patch.object(vision_agent_module.time, "sleep", return_value=None):
+            self.assertFalse(agent.run_query())
+
+    def test_changed_pane_snapshot_passes(self) -> None:
+        agent = self._agent()
+        agent._results_pane_changed = lambda before, timeout=4.0: True
+        with mock.patch.object(vision_agent_module.time, "sleep", return_value=None):
+            self.assertTrue(agent.run_query())
+
+    def test_cheap_pass_assess_fail_is_failure(self) -> None:
+        agent = self._agent()
+        agent._cheap_checks_ok = mock.Mock(return_value=(True, ""))
+        agent.assess_screen_state = mock.Mock(
+            return_value={
+                "objective": "o",
+                "intended_state": "i",
+                "description": "d",
+                "serves_objective": False,
+                "anomaly": "wrong state",
+                "anomaly_class": "wrong app state",
+                "corrective_action": None,
+            }
+        )
+        self.assertFalse(agent._assess_and_maybe_repair("o", "i"))
+
+
+class TestC30FinalReadResolvesFresh(unittest.TestCase):
+    """C30: a single empty final read never declares the editor empty — one
+    re-resolve + retry via the standard focus path recovers real content."""
+
+    def test_stale_empty_read_recovers_via_reresolve(self) -> None:
+        agent = mock.Mock()
+        agent._read_editor_content.side_effect = ["", "SELECT 1;"]
+        content = _final_editor_read(agent)
+        self.assertEqual(content, "SELECT 1;")
+        self.assertEqual(agent._focus_editor.call_count, 2)
+
+    def test_populated_first_read_skips_retry(self) -> None:
+        agent = mock.Mock()
+        agent._read_editor_content.return_value = "SELECT 1;"
+        self.assertEqual(_final_editor_read(agent), "SELECT 1;")
+        self.assertEqual(agent._focus_editor.call_count, 1)
 
 
 class TestStageMatchesStory(unittest.TestCase):
@@ -3044,6 +3167,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC29GroundingReadsRecorderFrame))
     suite.addTests(loader.loadTestsFromTestCase(TestC29CodecFallback))
     suite.addTests(loader.loadTestsFromTestCase(TestC29EncodeOffDelivery))
+    suite.addTests(loader.loadTestsFromTestCase(TestC30ProviderFrameGeometry))
+    suite.addTests(loader.loadTestsFromTestCase(TestC30FreshResultsRequired))
+    suite.addTests(loader.loadTestsFromTestCase(TestC30FinalReadResolvesFresh))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

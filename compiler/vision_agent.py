@@ -797,7 +797,13 @@ class VisionAgent:
             if assessment.get("serves_objective"):
                 self._log_assessment(assessment, action_taken="cheap checks passed; VLM confirms")
                 return True
-            # VLM says NO despite cheap checks passing; trust the VLM.
+            # C30 policy: cheap-pass + VLM-NO is a FAILURE, never an override.
+            # A passing cheap check never overrides a failing assess; the beat
+            # drops into the repair/retry path below.
+            print(
+                "[ASSESS] cheap checks passed but VLM says NO; treating as FAILURE",
+                file=sys.stderr,
+            )
         else:
             print(f"[ASSESS] cheap check failed: {reason}", file=sys.stderr)
             assessment = self.assess_screen_state(objective, intended_state)
@@ -2764,7 +2770,74 @@ end tell
         )
         return check.text.strip().upper().startswith("YES")
 
-    def run_query(self, current_statement: str = "") -> bool:
+    # C30: sum-abs-diff over the 8x8 gray pane signature below which the
+    # result pane counts as UNCHANGED. Rendering a results table shifts many
+    # cells by 50+ each; idle frames sit under ~5.
+    _PANE_CHANGE_THRESHOLD = 24
+
+    def _results_pane_snapshot(self) -> Dict[str, Any]:
+        """C30: visual signature of the results pane's current state.
+
+        Uses the shared recorder frame when a provider is active (zero extra
+        captures) and falls back to a live capture otherwise. The 8x8 gray
+        grid of the bottom (result-pane) strip combines row count, status
+        text, and rendered content into one pixel signature.
+        """
+        img = None
+        provider = getattr(self, "_frame_provider", None)
+        if provider is not None:
+            try:
+                img = provider()
+            except Exception:
+                img = None
+        if img is None:
+            try:
+                img = self._capture_screen()
+            except Exception:
+                img = None
+        if img is None:
+            return {"phash": None}
+        w, h = img.size
+        strip = (
+            img.crop((0, int(h * 0.55), w, h))
+            .convert("L")
+            .resize((8, 8), Image.BILINEAR)
+        )
+        return {"phash": tuple(strip.getdata())}
+
+    def _results_pane_changed(
+        self, before: Dict[str, Any], timeout: float = 4.0
+    ) -> bool:
+        """C30: require a STATE CHANGE of the results pane, not merely a state.
+
+        Stale stage-prep results once masked a missed Execute click (the pane
+        "showed results" because the PREVIOUS query's results were still up).
+        Polls until the signature differs or the timeout expires.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            after = self._results_pane_snapshot()
+            b, a = before.get("phash"), after.get("phash")
+            if b is not None and a is not None:
+                delta = sum(abs(x - y) for x, y in zip(b, a))
+                if delta >= self._PANE_CHANGE_THRESHOLD:
+                    print(
+                        f"  [RUN QUERY] fresh results confirmed (pane delta {delta})",
+                        file=sys.stderr,
+                    )
+                    return True
+            if time.monotonic() >= deadline:
+                print(
+                    "  [RUN QUERY] results pane UNCHANGED after Execute click; "
+                    "the run did not take effect",
+                    file=sys.stderr,
+                )
+                return False
+            time.sleep(0.5)
+
+    def run_query(
+        self, current_statement: str = "", require_fresh: bool = True
+    ) -> bool:
         """
         Execute the SQL in the active editor by clicking the Execute/Run toolbar button.
 
@@ -2777,6 +2850,12 @@ end tell
         the editor so that segmented beats that built up a query across multiple
         steps execute the full cumulative SQL. After execution, if the profile's
         error_signature appears, the buffer is repaired and the query re-run once.
+
+        C30: ``require_fresh`` (default True) demands a measurable STATE CHANGE
+        of the results pane after the click — success requires the pane to
+        differ from its pre-click snapshot, so stale results can never mask a
+        missed click. Callers that only need the pane populated (beat-level
+        SQL grounding) pass False.
         """
         self._ensure_frontmost()
         editor_statement, _ = self._extract_uncommented_sql(self._read_editor_content())
@@ -2800,6 +2879,9 @@ end tell
             return False
 
         print("  [RUN QUERY] locating Execute/Run toolbar button", file=sys.stderr)
+
+        # C30: snapshot BEFORE any click so success requires a state change.
+        pre_snapshot = self._results_pane_snapshot()
 
         run_button = self.profile.landmarks.get(
             "run_button",
@@ -2831,8 +2913,13 @@ end tell
             # the only mid-run signal we need; visual confirmation of populated
             # results is the beat-end assessment's job, not a VLM call here.
             if not self._result_pane_shows_error():
-                print("  [RUN QUERY] results visible", file=sys.stderr)
-                return True
+                # C30: "no error" is not "ran". The pane must CHANGE versus the
+                # pre-click snapshot, otherwise the click missed and the old
+                # results are still up.
+                if not require_fresh or self._results_pane_changed(pre_snapshot):
+                    print("  [RUN QUERY] results visible", file=sys.stderr)
+                    return True
+                return False
             print("  [RUN QUERY] error signature detected after run", file=sys.stderr)
 
         if not executed:
@@ -2843,7 +2930,9 @@ end tell
                 f"{result_tab} in {self.profile.app_name}",
             ):
                 time.sleep(1.0)
-                if not self._result_pane_shows_error():
+                if not self._result_pane_shows_error() and (
+                    not require_fresh or self._results_pane_changed(pre_snapshot)
+                ):
                     print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
                     return True
 

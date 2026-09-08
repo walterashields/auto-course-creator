@@ -401,6 +401,64 @@ def _find_window_id(app_name: str) -> Optional[int]:
     return None
 
 
+def _window_bounds(app_name: str) -> Optional[Dict[str, float]]:
+    """C30: return the on-screen bounds of ``app_name``'s window in Quartz
+    coordinates (points, origin bottom-left), or None when unavailable."""
+    try:
+        from Quartz import CoreGraphics
+
+        window_list = CoreGraphics.CGWindowListCopyWindowInfo(
+            CoreGraphics.kCGWindowListOptionOnScreenOnly,
+            CoreGraphics.kCGNullWindowID,
+        )
+        for entry in window_list:
+            owner = entry.get(CoreGraphics.kCGWindowOwnerName, "")
+            name = entry.get(CoreGraphics.kCGWindowName, "")
+            if owner == app_name or name == app_name:
+                b = entry[CoreGraphics.kCGWindowBounds]
+                return {
+                    "x": float(b["X"]),
+                    "y": float(b["Y"]),
+                    "w": float(b["Width"]),
+                    "h": float(b["Height"]),
+                }
+    except Exception as exc:
+        print(f"Warning: could not get window bounds for {app_name}: {exc}", file=sys.stderr)
+    return None
+
+
+def _composite_window_frame(
+    frame: np.ndarray,
+    bounds: Dict[str, float],
+    screen_w_pts: float,
+    screen_h_pts: float,
+) -> np.ndarray:
+    """C30: paste the window-only capture frame onto a full-screen canvas.
+
+    ``frame`` is the SCK window capture (``CAPTURE_WIDTH`` x ``CAPTURE_HEIGHT``
+    pixels, window content only, no menu bar). ``bounds`` is the window's
+    CGWindowList bounds in points (Quartz, origin bottom-left). The result is
+    a full-screen-sized image at a UNIFORM px-per-point scale, with the window
+    at its real origin — so ``VisionAgent.screenshot()``'s uniform
+    ``scale_to_logical`` (derived from width only) maps both axes exactly as
+    it does for a full-screen ``screencapture``, menu-bar offset included.
+    """
+    fh, fw = frame.shape[:2]
+    if bounds["w"] <= 0 or bounds["h"] <= 0:
+        return frame
+    scale = fw / bounds["w"]  # px per point (uniform for both axes)
+    canvas_w = int(round(screen_w_pts * scale))
+    canvas_h = int(round(screen_h_pts * scale))
+    origin_x = int(round(bounds["x"] * scale))
+    origin_y = int(round((screen_h_pts - bounds["y"] - bounds["h"]) * scale))
+    canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    y0, y1 = max(origin_y, 0), min(origin_y + fh, canvas_h)
+    x0, x1 = max(origin_x, 0), min(origin_x + fw, canvas_w)
+    if y1 > y0 and x1 > x0:
+        canvas[y0:y1, x0:x1] = frame[y0 - origin_y : y1 - origin_y, x0 - origin_x : x1 - origin_x]
+    return canvas
+
+
 def _load_sc_class(name: str) -> Any:
     """Import a ScreenCaptureKit class, falling back to objc.lookUpClass."""
     try:
@@ -609,6 +667,34 @@ def _timeline_table_row(tl: Dict[str, Any]) -> str:
     )
 
 
+def _final_editor_read(agent: "VisionAgent") -> str:
+    """C30: canonical end-of-run editor read.
+
+    The editor element is re-resolved via the standard focus path at read
+    time (never trust a stale element reference); if the value reads empty,
+    one re-resolve + retry runs before declaring empty — a single empty read
+    has been observed against a fully intact editor.
+    """
+    try:
+        agent._focus_editor()
+        content = agent._read_editor_content(focus=False) or ""
+    except Exception as exc:
+        print(f"Warning: could not read final editor content: {exc}", file=sys.stderr)
+        return ""
+    if content.strip():
+        return content
+    try:
+        print(
+            "  [READ-BACK] final read empty; re-resolving editor element once",
+            file=sys.stderr,
+        )
+        agent._focus_editor()
+        return agent._read_editor_content(focus=False) or ""
+    except Exception as exc:
+        print(f"Warning: final editor re-read failed: {exc}", file=sys.stderr)
+        return ""
+
+
 def _p50(samples: List[float]) -> float:
     """Median of a timing sample list (0.0 when empty)."""
     if not samples:
@@ -742,7 +828,21 @@ class _ScreenCaptureKitRecorder:
             frame = self._latest_frame
             if frame is None:
                 return None
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # C30: the frame is window-only; grounding needs full-screen
+            # geometry. Composite onto a full-screen canvas at the window's
+            # real origin. If bounds are unavailable, return None so the
+            # caller falls back to a live capture (correct geometry) rather
+            # than grounding on a mis-scaled image.
+            if not self.app_name:
+                return None
+            bounds = _window_bounds(self.app_name)
+            if bounds is None:
+                return None
+            screen_w, screen_h = pyautogui.size()
+            canvas = _composite_window_frame(
+                frame, bounds, float(screen_w), float(screen_h)
+            )
+            rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
             return Image.fromarray(rgb)
         return provide
 
@@ -3605,10 +3705,27 @@ class EndStateDiscovery:
         # C17: ground the Execute/Run toolbar button once, outside any recording
         # window, so run_query needs no mid-beat VLM locate call. Best effort:
         # run_query falls back to a per-beat locate when priming fails.
-        try:
-            agent.prime_run_button_cache()
-        except Exception as exc:
-            print(f"Warning: run-button priming failed: {exc}", file=sys.stderr)
+        # C30: priming is readiness-style — up to 3 attempts, 1.0s apart —
+        # before declaring the flake. A missed prime forces run_query onto the
+        # rarely-exercised mid-recording VLM locate path.
+        for priming_attempt in range(3):
+            try:
+                if agent.prime_run_button_cache():
+                    break
+            except Exception as exc:
+                print(
+                    f"Warning: run-button priming attempt {priming_attempt + 1} "
+                    f"raised: {exc}",
+                    file=sys.stderr,
+                )
+            if priming_attempt < 2:
+                time.sleep(1.0)
+        else:
+            print(
+                "Warning: run-button priming failed after 3 attempts; "
+                "run_query will locate the button per-beat",
+                file=sys.stderr,
+            )
         frontmost_log_path = self.output_dir / f"frontmost_{run_id}.log"
         if frontmost_log_path.exists():
             frontmost_log_path.unlink()
@@ -4268,7 +4385,13 @@ class EndStateDiscovery:
                             if sql_for_grounding:
                                 grounding_ok = False
                                 try:
-                                    _tl_readback(tl, "grounding_run_query", agent.run_query)
+                                    # C30: grounding only needs the pane populated;
+                                    # it may legitimately already show these exact
+                                    # results, so no freshness demand here.
+                                    _tl_readback(
+                                        tl, "grounding_run_query",
+                                        lambda: agent.run_query(require_fresh=False),
+                                    )
                                     pane_summary = _tl_readback(
                                         tl, "grounding_summarize", agent.summarize_result_pane
                                     )
@@ -4542,12 +4665,7 @@ class EndStateDiscovery:
         # Focus the editor first; the last action (e.g. clicking Execute) may have
         # moved keyboard focus to a button or the result pane, so a focus-less read
         # can return a non-editor value such as a button label.
-        final_editor_content = ""
-        try:
-            agent._focus_editor()
-            final_editor_content = agent._read_editor_content(focus=False) or ""
-        except Exception as exc:
-            print(f"Warning: could not read final editor content: {exc}", file=sys.stderr)
+        final_editor_content = _final_editor_read(agent)
 
         # Capture and lock the final end state.
         try:
