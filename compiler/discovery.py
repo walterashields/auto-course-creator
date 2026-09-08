@@ -3445,6 +3445,34 @@ class EndStateDiscovery:
         if opening_state_history:
             agent.type_block(opening_state_history)
 
+    def _capture_warmup(self, run_id: str) -> None:
+        """C28: sacrificial scratch capture so beat_001's stream is not the first."""
+        scratch = self.output_dir / f"{run_id}_warmup.mp4"
+        recorder = _ScreenCaptureKitRecorder(
+            str(scratch),
+            fps=10,
+            app_name=self.profile.app_name if self.profile else "",
+        )
+        recorder.start()
+        time.sleep(1.5)
+        recorder.stop()
+        try:
+            scratch.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _maybe_capture_warmup(self, run_id: str) -> bool:
+        """C28: run the warmup once per run; False means halt the run."""
+        if self.actions_only:
+            return True
+        try:
+            self._capture_warmup(run_id)
+        except Exception as exc:
+            print(f"wsda-capture-warmup-fail: {exc}", file=sys.stderr)
+            return False
+        print("wsda-capture-warmup:ok", file=sys.stderr)
+        return True
+
     def _execute_beats_with_agent(
         self,
         beats: List[ScriptBeat],
@@ -3610,6 +3638,12 @@ class EndStateDiscovery:
                 tts_clip_by_beat = {beat.beat_id: (path, dur) for beat, path, dur in tts_clips}
             except Exception as exc:
                 print(f"Warning: TTS pre-generation failed: {exc}; falling back to unpaced recording.", file=sys.stderr)
+
+        # C28: once-per-run sacrificial warmup capture. The first SCK stream
+        # after heavy stage prep under-delivers; probes show later streams are
+        # healthy, so beat_001's stream must never be the first.
+        if not self._maybe_capture_warmup(run_id):
+            return self._make_result(success=False, reason="wsda-capture-warmup-fail")
 
         # Ceiling: one pass per beat (bounded by len(beats)).
         for idx, beat in enumerate(beats):

@@ -2075,6 +2075,80 @@ class TestC27TeardownSettle(unittest.TestCase):
         )
 
 
+class TestC28CaptureWarmup(unittest.TestCase):
+    """C28: the once-per-run sacrificial warmup capture runs BEFORE beat_001's
+    recorder; a warmup failure halts the run with the wsda-capture-warmup-fail
+    marker and zero beats executed."""
+
+    def _discovery(self, events: List[str]) -> EndStateDiscovery:
+        d = EndStateDiscovery(objective="test", application="db_browser_sqlite")
+        d._launch_app = mock.Mock()
+        d._auto_fit_columns = mock.Mock()
+        d._assert_stage_resources = mock.Mock(return_value={"ok": True})
+        d._prepare_opening_state = mock.Mock()
+        d._wait_for_visual_stability = mock.Mock(return_value=True)
+        d._capture_warmup = mock.Mock(side_effect=lambda run_id: events.append("warmup"))
+        return d
+
+    def _run(self, d: EndStateDiscovery, events: List[str]) -> Any:
+        beat = ScriptBeat(
+            beat_id="beat_001",
+            kind="opening",
+            text="In this video we introduce the course.",
+            action={"type": "wait", "duration": 1.5},
+        )
+        recorder = mock.MagicMock()
+        recorder.delivery_summary = None
+        recorder._fallback = None
+        recorder.first_frame_time.return_value = None
+
+        def factory(*args: Any, **kwargs: Any) -> Any:
+            events.append("recorder")
+            return recorder
+
+        agent_cls = mock.MagicMock()
+        agent_cls.return_value._read_editor_content.return_value = ""
+
+        with mock.patch.multiple(
+            discovery_module,
+            _find_db_browser=mock.Mock(return_value="/tmp/DB Browser.app"),
+            _ensure_sample_db=mock.Mock(return_value=Path("/tmp/x.db")),
+            VisionAgent=agent_cls,
+            TTSGenerator=mock.Mock(side_effect=RuntimeError("no tts")),
+            _ScreenCaptureKitRecorder=mock.Mock(side_effect=factory),
+            _clip_has_off_app_interval=mock.Mock(return_value=False),
+            _capture_screenshot=mock.Mock(
+                return_value=("", 100, 100, 1.0, mock.MagicMock(), b"bytes")
+            ),
+        ):
+            return d._execute_beats_with_agent([beat], "summary", False)
+
+    def test_warmup_once_and_before_first_beat_recorder(self) -> None:
+        events: List[str] = []
+        d = self._discovery(events)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self._run(d, events)
+        self.assertTrue(result.success, err.getvalue())
+        # Warmup ran exactly once, strictly before the beat recorder existed.
+        self.assertEqual(d._capture_warmup.call_count, 1)
+        self.assertEqual(events, ["warmup", "recorder"])
+        self.assertIn("wsda-capture-warmup:ok", err.getvalue())
+
+    def test_warmup_exception_halts_zero_beats(self) -> None:
+        events: List[str] = []
+        d = self._discovery(events)
+        d._capture_warmup = mock.Mock(side_effect=RuntimeError("boom"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = self._run(d, events)
+        self.assertFalse(result.success)
+        self.assertEqual(result.attempts, 0)
+        self.assertEqual(d._capture_warmup.call_count, 1)
+        self.assertEqual(events, [])  # no beat recorder was ever constructed
+        self.assertIn("wsda-capture-warmup-fail", err.getvalue())
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -2820,6 +2894,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC27WallClockWriter))
     suite.addTests(loader.loadTestsFromTestCase(TestC27DeliveryFloor))
     suite.addTests(loader.loadTestsFromTestCase(TestC27TeardownSettle))
+    suite.addTests(loader.loadTestsFromTestCase(TestC28CaptureWarmup))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
