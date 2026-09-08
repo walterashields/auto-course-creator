@@ -26,7 +26,12 @@ import cv2
 import numpy as np
 
 from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, _write_attempt_report, load_manifest
-from compiler.discovery import EndStateDiscovery, _clip_has_off_app_interval
+from compiler.discovery import (
+    BeatRecordingStop,
+    EndStateDiscovery,
+    RECORDER_TAIL_SECONDS,
+    _clip_has_off_app_interval,
+)
 from compiler.frame_analysis import detect_error_signature, frozen_share_percent, run_acceptance_gates
 from compiler.lesson_builder import LessonBuilder
 from compiler.narrator import ScriptBeat
@@ -1874,6 +1879,80 @@ class TestC25AppReadinessWait(unittest.TestCase):
         self.assertIn("wsda-app-ready:1.0s", buf.getvalue())
 
 
+class TestC26StopInvariant(unittest.TestCase):
+    """C26: recorder stop is anchored to measured audio end + tail, HARD.
+
+    Fake clock: work pending at the deadline must not delay the stop; the
+    canonical gate still runs (post-stop) and its result is still reported.
+    """
+
+    class _Clock:
+        def __init__(self, t: float = 100.0):
+            self.t = t
+
+        def now(self) -> float:
+            return self.t
+
+        def sleep(self, s: float) -> None:
+            self.t += s
+
+    class _Recorder:
+        def __init__(self, clock: "TestC26StopInvariant._Clock"):
+            self.clock = clock
+            self.stopped_at: Optional[float] = None
+
+        def stop(self) -> None:
+            self.stopped_at = self.clock.now()
+
+    def test_stop_at_deadline_with_work_pending(self) -> None:
+        clock = self._Clock(100.0)
+        audio_end = 110.0
+        ctl = BeatRecordingStop(audio_end, now_fn=clock.now)
+        self.assertEqual(ctl.deadline, audio_end + RECORDER_TAIL_SECONDS)
+        clock.t = ctl.deadline  # at the deadline, deferred work still pending
+        rec = self._Recorder(clock)
+        events: List[Any] = []
+        results = ctl.stop_recorder(
+            rec,
+            pending_work=[
+                lambda: events.append(("gate", clock.now())) or True,
+                lambda: events.append(("post", clock.now())) or None,
+            ],
+        )
+        # HARD invariant: stop at audio_actual_end + 1.0s regardless of work.
+        self.assertEqual(rec.stopped_at, audio_end + RECORDER_TAIL_SECONDS)
+        # Deferred work executed strictly post-stop, in order; gate result kept.
+        self.assertEqual([e[0] for e in events], ["gate", "post"])
+        self.assertTrue(all(e[1] >= rec.stopped_at for e in events))
+        self.assertEqual(results, [True, None])
+
+    def test_gate_still_evaluated_when_stop_is_late(self) -> None:
+        clock = self._Clock(100.0)
+        ctl = BeatRecordingStop(110.0, now_fn=clock.now)
+        clock.t = 113.5  # 2.5s past the deadline, work pending
+        rec = self._Recorder(clock)
+        order: List[str] = []
+        results = ctl.stop_recorder(
+            rec, pending_work=[lambda: order.append("gate") or True]
+        )
+        self.assertEqual(rec.stopped_at, 113.5)
+        self.assertTrue(ctl.stop_flagged)  # lateness flags the beat
+        self.assertEqual(order, ["gate"])  # gate still evaluated, post-stop
+        self.assertEqual(results, [True])
+
+    def test_wait_until_deadline_never_overshoots(self) -> None:
+        clock = self._Clock(100.0)
+        ctl = BeatRecordingStop(110.25, now_fn=clock.now)
+        choreo_steps: List[float] = []
+        ctl.wait_until_deadline(
+            clock.sleep,
+            on_interval=lambda step: choreo_steps.append(step),
+        )
+        self.assertAlmostEqual(clock.t, 111.25, places=6)
+        self.assertAlmostEqual(sum(choreo_steps), 11.25, places=6)
+        self.assertLessEqual(max(choreo_steps, default=0.0), 0.1)
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -2615,6 +2694,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC23ClipboardInterlock))
     suite.addTests(loader.loadTestsFromTestCase(TestC24EditorAutoClear))
     suite.addTests(loader.loadTestsFromTestCase(TestC25AppReadinessWait))
+    suite.addTests(loader.loadTestsFromTestCase(TestC26StopInvariant))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

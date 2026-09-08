@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anthropic
 import cv2
@@ -243,6 +243,11 @@ class ScreenRecorder:
         self._stop_event = threading.Event()
         self._frame_shape: Optional[Tuple[int, int]] = None
         self._logical_size = pyautogui.size()
+        # C26: wall-clock time the first frame was written (timeline instrumentation).
+        self.first_frame_at: Optional[float] = None
+
+    def first_frame_time(self) -> Optional[float]:
+        return self.first_frame_at
 
     def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
         """Resize a frame to TARGET_WIDTH while keeping aspect ratio."""
@@ -313,6 +318,8 @@ class ScreenRecorder:
                         str(self.output_path), fourcc, self.fps, (w, h)
                     )
 
+                if self.first_frame_at is None:
+                    self.first_frame_at = time.time()
                 self._writer.write(frame)
 
                 elapsed = time.time() - start
@@ -384,6 +391,250 @@ def _load_sc_class(name: str) -> Any:
         raise ImportError(f"ScreenCaptureKit class {name!r} is not available: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# C26: beat recording timeline instrumentation (no behavior change)
+# ---------------------------------------------------------------------------
+
+#: Recorded tail after measured audio end before the recorder must stop.
+RECORDER_TAIL_SECONDS = 1.0
+#: Tolerance (seconds) before a stop counts as "past the deadline". Watcher
+#: latency (daemon-thread wake after afplay exits) already puts the achieved
+#: tail at ~1.1-1.2s; only genuine lateness (late read-back) should flag.
+STOP_DEADLINE_TOLERANCE = 0.5
+
+
+class BeatRecordingStop:
+    """HARD stop deadline for a beat recording, anchored to measured audio end.
+
+    C26 stop invariant: ``deadline = audio_actual_end + RECORDER_TAIL_SECONDS``.
+    The recorder is stopped at the deadline REGARDLESS of any read-back /
+    verify / settle work still pending — that work is invisible AX/VLM work
+    (nothing on screen needs recording) and runs after the stop. Its results
+    still gate the beat; lateness past the deadline flags the beat.
+
+    ``now_fn`` is injectable so tests can drive a fake clock.
+    """
+
+    def __init__(
+        self,
+        audio_actual_end: Optional[float],
+        now_fn: Callable[[], float] = time.time,
+    ):
+        self._audio_actual_end = audio_actual_end
+        self._now = now_fn
+        self.stop_flagged = False
+
+    @property
+    def deadline(self) -> Optional[float]:
+        if self._audio_actual_end is None:
+            return None
+        return self._audio_actual_end + RECORDER_TAIL_SECONDS
+
+    def seconds_until_deadline(self) -> float:
+        d = self.deadline
+        if d is None:
+            return 0.0
+        return d - self._now()
+
+    def wait_until_deadline(
+        self,
+        sleep_fn: Callable[[float], None],
+        on_interval: Optional[Callable[[float], None]] = None,
+    ) -> None:
+        """Sleep (or choreo-fill) until the deadline; never drifts past it."""
+        while True:
+            remaining = self.seconds_until_deadline()
+            if remaining <= 0.0:
+                return
+            step = min(remaining, 0.1)
+            if on_interval is not None:
+                on_interval(step)
+            sleep_fn(step)
+
+    def stop_recorder(
+        self,
+        recorder: Any,
+        pending_work: Optional[List[Callable[[], Any]]] = None,
+        on_stopped: Optional[Callable[[], None]] = None,
+    ) -> List[Any]:
+        """Stop the recorder NOW — at the deadline even if work is pending.
+
+        Runs ``pending_work`` strictly after the stop and returns their
+        results, so post-stop gates are still evaluated and reported.
+        ``on_stopped`` fires immediately after ``recorder.stop()`` returns
+        (i.e. when the file is finalized), before any pending work runs.
+        """
+        d = self.deadline
+        if d is not None and self._now() > d + STOP_DEADLINE_TOLERANCE:
+            self.stop_flagged = True
+        recorder.stop()
+        if on_stopped is not None:
+            on_stopped()
+        results: List[Any] = []
+        for fn in pending_work or []:
+            results.append(fn())
+        return results
+
+
+def _tl_readback(tl: Dict[str, Any], name: str, fn: Callable[[], Any]) -> Any:
+    """Time an invisible read-back/verify/settle call on the beat's timeline.
+
+    Appends {"name", "start", "done"} to tl["readbacks"]; re-raises so callers
+    keep their existing error handling.
+    """
+    start = time.time()
+    try:
+        return fn()
+    finally:
+        tl.setdefault("readbacks", []).append(
+            {"name": name, "start": start, "done": time.time()}
+        )
+
+
+def _watch_audio_end(proc: subprocess.Popen, tl: Dict[str, Any]) -> None:
+    """Record the measured (not scheduled) wall-clock end of the beat's audio."""
+    try:
+        proc.wait()
+    except Exception:
+        pass
+    tl["audio_actual_end"] = time.time()
+
+
+def _probe_clip_duration(path: Path) -> Optional[float]:
+    """Clip duration in seconds via ffprobe; None if unavailable."""
+    path = Path(path)
+    if shutil.which("ffprobe") is None or not path.exists():
+        return None
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        return float(out.stdout.strip())
+    except Exception:
+        return None
+
+
+def _timeline_phases(tl: Dict[str, Any]) -> Dict[str, Any]:
+    """Derive phase durations (seconds) from one beat-attempt timeline record."""
+
+    def _dur(a: Optional[float], b: Optional[float]) -> Optional[float]:
+        if a is None or b is None:
+            return None
+        return round(b - a, 3)
+
+    audio_end = tl.get("audio_actual_end")
+    readbacks = tl.get("readbacks") or []
+    rb_after_audio = 0.0
+    rb_total = 0.0
+    for rb in readbacks:
+        span = max(0.0, rb.get("done", 0.0) - rb.get("start", 0.0))
+        rb_total += span
+        if audio_end is not None:
+            # Portion of the interval strictly after measured audio end.
+            rb_after_audio += max(0.0, rb.get("done", 0.0) - max(rb.get("start", 0.0), audio_end))
+    audio_end_to_stop = _dur(audio_end, tl.get("recorder_stop_called"))
+    return {
+        "startup": _dur(tl.get("recorder_start_called"), tl.get("recorder_first_frame")),
+        "frame_to_audio": _dur(tl.get("recorder_first_frame"), tl.get("audio_start")),
+        "action_window": _dur(tl.get("audio_start"), tl.get("actions_done")),
+        "post_action_to_audio_end": _dur(tl.get("actions_done"), audio_end),
+        "audio_end_to_stop": audio_end_to_stop,
+        "readbacks_after_audio_end": round(rb_after_audio, 3),
+        "non_readback_after_audio_end": (
+            round(audio_end_to_stop - rb_after_audio, 3)
+            if audio_end_to_stop is not None
+            else None
+        ),
+        "readbacks_total": round(rb_total, 3),
+        "stop_flush": _dur(tl.get("recorder_stop_called"), tl.get("recorder_file_finalized")),
+        "recorder_span": _dur(tl.get("recorder_start_called"), tl.get("recorder_stop_called")),
+    }
+
+
+def _timeline_table_row(tl: Dict[str, Any]) -> str:
+    ph = tl.get("phases") or {}
+    clip = tl.get("clip_dur")
+    tts = tl.get("tts_dur")
+    excess = round(clip - (tts + 1.0), 3) if (clip is not None and tts is not None) else None
+
+    def _f(v: Any) -> str:
+        return f"{v:7.2f}" if isinstance(v, (int, float)) else "      -"
+
+    return (
+        f"{tl.get('beat_id', '?'):>10} r{tl.get('retry', 0)} "
+        f"| tts {_f(tts)} clip {_f(clip)} excess {_f(excess)} "
+        f"| startup {_f(ph.get('startup'))} "
+        f"frame->audio {_f(ph.get('frame_to_audio'))} "
+        f"actions {_f(ph.get('action_window'))} "
+        f"tail->ae {_f(ph.get('post_action_to_audio_end'))} "
+        f"ae->stop {_f(ph.get('audio_end_to_stop'))} "
+        f"(rb {_f(ph.get('readbacks_after_audio_end'))} "
+        f"other {_f(ph.get('non_readback_after_audio_end'))}) "
+        f"flush {_f(ph.get('stop_flush'))}"
+    )
+
+
+def _dump_beat_timeline(
+    run_id: str, timeline: List[Dict[str, Any]], run_start: float
+) -> None:
+    """Write output/beat_timeline_<runid>.json and print the phase table."""
+    if not timeline:
+        return
+    beats = []
+    for tl in timeline:
+        ph = _timeline_phases(tl)
+        clip = tl.get("clip_dur")
+        tts = tl.get("tts_dur")
+        beats.append(
+            {
+                "beat_id": tl.get("beat_id"),
+                "retry": tl.get("retry"),
+                "timestamps": {
+                    k: tl.get(k)
+                    for k in (
+                        "recorder_start_called", "recorder_first_frame",
+                        "pre_focus_done", "audio_start", "audio_actual_end",
+                        "actions_done", "recorder_stop_called",
+                        "recorder_file_finalized",
+                    )
+                },
+                "readbacks": tl.get("readbacks") or [],
+                "phases": ph,
+                "clip_dur": clip,
+                "tts_dur": tts,
+                "excess_over_tail_target": (
+                    round(clip - (tts + 1.0), 3)
+                    if (clip is not None and tts is not None)
+                    else None
+                ),
+            }
+        )
+    out_path = Path("output") / f"beat_timeline_{run_id}.json"
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(
+                {"run_id": run_id, "elapsed": round(time.time() - run_start, 3), "beats": beats},
+                indent=2,
+            )
+        )
+    except Exception as exc:
+        print(f"wsda-timeline: could not write {out_path}: {exc}", file=sys.stderr)
+    print("wsda-timeline: per-beat phase table (seconds)", file=sys.stderr)
+    for b in beats:
+        print("wsda-timeline: " + _timeline_table_row(
+            {"beat_id": b["beat_id"], "retry": b["retry"], "phases": b["phases"],
+             "clip_dur": b["clip_dur"], "tts_dur": b["tts_dur"]}
+        ), file=sys.stderr)
+    print(f"wsda-timeline: wrote {out_path}", file=sys.stderr)
+
+
 class _ScreenCaptureKitRecorder:
     """
     Window-targeted screen recorder using ScreenCaptureKit (macOS 12.3+).
@@ -408,6 +659,15 @@ class _ScreenCaptureKitRecorder:
         self._samples: List[Any] = []
         self._lock = threading.Lock()
         self._fallback: Optional[ScreenRecorder] = None
+        # C26: wall-clock time the first frame was written (timeline instrumentation).
+        self.first_frame_at: Optional[float] = None
+
+    def first_frame_time(self) -> Optional[float]:
+        if self.first_frame_at is not None:
+            return self.first_frame_at
+        if self._fallback is not None:
+            return self._fallback.first_frame_time()
+        return None
 
     def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -494,6 +754,8 @@ class _ScreenCaptureKitRecorder:
                         self._writer = cv2.VideoWriter(
                             str(self.output_path), fourcc, self.fps, (w, h)
                         )
+                    if self.first_frame_at is None:
+                        self.first_frame_at = time.time()
                     self._writer.write(frame)
             elapsed = time.time() - start
             sleep_time = max(0.0, interval - elapsed)
@@ -3083,6 +3345,8 @@ class EndStateDiscovery:
         """
         run_id = uuid.uuid4().hex[:12]
         run_start = time.time()
+        # C26: per-beat recording timeline (instrumentation only; no behavior change).
+        timeline: List[Dict[str, Any]] = []
 
         errors: List[str] = []
         if self.application not in SUPPORTED_APPLICATIONS:
@@ -3361,6 +3625,29 @@ class EndStateDiscovery:
                     )
                 audio_proc: Optional[subprocess.Popen] = None
                 audio_duration = 0.0
+                # C26: timeline record for this recording attempt.
+                tl: Dict[str, Any] = {
+                    "beat_id": beat.beat_id,
+                    "retry": retry,
+                    "kind": beat.kind,
+                    "action_type": action.get("type"),
+                    "skipped": skipped,
+                    "recorder_start_called": None,
+                    "recorder_first_frame": None,
+                    "pre_focus_done": None,
+                    "audio_start": None,
+                    "audio_actual_end": None,
+                    "actions_done": None,
+                    "readbacks": [],
+                    "recorder_stop_called": None,
+                    "recorder_file_finalized": None,
+                    "clip_dur": None,
+                    "tts_dur": None,
+                }
+                # C26: invisible read-back/verify work deferred to post-stop. The
+                # canonical gate still evaluates and still decides the beat.
+                deferred_gate: Optional[Callable[[], bool]] = None
+                deferred_post: List[Tuple[str, Callable[[], Any]]] = []
                 if not skipped:
                     # Stage prep before recording: clear editor for standalone typing
                     # beats, but keep the commented history in place for continuity
@@ -3392,13 +3679,16 @@ class EndStateDiscovery:
                                 f"(non-fatal): {exc}",
                                 file=sys.stderr,
                             )
+                    tl["pre_focus_done"] = time.time()
                     agent.recording = True
+                    tl["recorder_start_called"] = time.time()
                     recorder.start()
                     # C13: start the beat's own TTS so recording is paced by speech.
                     tts_info = tts_clip_by_beat.get(beat.beat_id)
                     if tts_info:
                         audio_path, audio_dur_ms = tts_info
                         audio_duration = audio_dur_ms / 1000.0
+                        tl["tts_dur"] = audio_duration
                         print(
                             f"  [TTS] playing {beat.beat_id} audio ({audio_duration:.2f}s)",
                             file=sys.stderr,
@@ -3408,6 +3698,12 @@ class EndStateDiscovery:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
+                        tl["audio_start"] = time.time()
+                        # C26: watcher thread records the measured audio end without
+                        # changing any beat behavior.
+                        threading.Thread(
+                            target=_watch_audio_end, args=(audio_proc, tl), daemon=True
+                        ).start()
                     else:
                         print(
                             f"  [TTS] no audio for {beat.beat_id}; recording unpaced",
@@ -3573,18 +3869,16 @@ class EndStateDiscovery:
                                 "frontmost, the SQL editor is focused, and the cumulative "
                                 "SQL block appears exactly as authored."
                             )
-                            if agent._assess_and_maybe_repair(
+                            # C26: the canonical read-back still gates the beat, but
+                            # it runs AFTER recorder stop — it is invisible VLM work
+                            # and the recorder must end at audio end + tail, not
+                            # after this verification.
+                            deferred_gate = lambda: agent._assess_and_maybe_repair(
                                 self.objective,
                                 intended_state,
                                 intended_text=cumulative_intended,
-                            ):
-                                beat_ok = True
-                            else:
-                                failed_reason = (
-                                    f"Beat {beat.beat_id} final assessment failed"
-                                )
-                                beat_failed = True
-                                break
+                            )
+                            beat_ok = True  # composition done; gate evaluates post-stop
                         else:
                             for attempt in range(max_attempts):
                                 if agent.execute_beat(action, fallback_text=beat_fallback):
@@ -3645,6 +3939,7 @@ class EndStateDiscovery:
 
                     if not is_demo_action:
                         beat_ok = True
+                    tl["actions_done"] = time.time()
 
                     if not beat_failed:
                         # C16: execute any remaining scheduled choreography during the
@@ -3673,11 +3968,11 @@ class EndStateDiscovery:
                                     )
 
                         if beat_ok and beat.kind == "demo":
-                            executed_demo_count += 1
-
-                            # Persist the verified cumulative editor content so the
+                            # Persist the composed cumulative editor content so the
                             # final byte-for-byte canonical match sees the full block,
-                            # not just the last segment.
+                            # not just the last segment. The last-good-editor marker
+                            # and demo count move to post-gate (C26): they commit
+                            # only when the post-stop canonical gate passes.
                             if action.get("type") in ("type_segments", "type_block", "append_block"):
                                 composed = agent._last_composed_text or ""
                                 if not composed and action.get("type") in ("type_block", "append_block"):
@@ -3686,12 +3981,16 @@ class EndStateDiscovery:
                                     if beat.observed_state is None:
                                         beat.observed_state = {}
                                     beat.observed_state["editor_content"] = composed
-                                    last_good_editor = composed
 
-                            # Stage prep after a successful action.
+                            # C26: stage prep is invisible VLM work; defer it to
+                            # post-stop so it never extends the recording.
                             if action.get("type") == "run_query":
-                                agent.scroll_result_pane_top()
-                            agent.dismiss_transient_ui()
+                                deferred_post.append(
+                                    ("scroll_result_pane_top", agent.scroll_result_pane_top)
+                                )
+                            deferred_post.append(
+                                ("dismiss_transient_ui", agent.dismiss_transient_ui)
+                            )
 
                         # C13: non-demo beats use choreography for motion. The old
                         # emphasis path remains only as a fallback for beats without
@@ -3722,10 +4021,14 @@ class EndStateDiscovery:
                                 # Keep recorder running while the UI settles so the clip
                                 # captures the settled end state rather than cutting off
                                 # while animations or loading are still in progress.
-                                self._wait_for_visual_stability(
-                                    interval_seconds=0.4,
-                                    timeout_seconds=4.0,
-                                    frontmost_log_path=frontmost_log_path,
+                                _tl_readback(
+                                    tl,
+                                    "visual_stability",
+                                    lambda: self._wait_for_visual_stability(
+                                        interval_seconds=0.4,
+                                        timeout_seconds=4.0,
+                                        frontmost_log_path=frontmost_log_path,
+                                    ),
                                 )
 
                             # --- SQL result grounding --------------------------------
@@ -3736,8 +4039,10 @@ class EndStateDiscovery:
                             if sql_for_grounding:
                                 grounding_ok = False
                                 try:
-                                    agent.run_query()
-                                    pane_summary = agent.summarize_result_pane()
+                                    _tl_readback(tl, "grounding_run_query", agent.run_query)
+                                    pane_summary = _tl_readback(
+                                        tl, "grounding_summarize", agent.summarize_result_pane
+                                    )
                                     if beat.observed_state is None:
                                         beat.observed_state = {}
                                     beat.observed_state["query_result"] = pane_summary
@@ -3757,33 +4062,84 @@ class EndStateDiscovery:
                                     beat_failed = True
                                     break
 
-                        # C13/C16: wait for the beat's TTS to finish, then record a 1.0s
-                        # tail. Demo beats included: every beat recording ends at TTS end +
-                        # 1.0s so long static frames cannot accumulate.
-                        if audio_proc is not None:
-                            elapsed = time.time() - clip_start
-                            wait_for_tts_end = max(0.0, audio_duration - elapsed)
-                            if wait_for_tts_end > 0.1:
+                        # C26: the stop deadline is anchored to MEASURED audio end:
+                        # audio_actual_end + RECORDER_TAIL_SECONDS, HARD. Read-back /
+                        # verify / settle work deferred during the beat runs AFTER
+                        # the stop and still gates the beat; it never extends the
+                        # recording.
+                        stop_ctl: Optional[BeatRecordingStop] = None
+                        if not skipped and audio_proc is not None:
+                            if tl.get("audio_actual_end") is None:
+                                # Watcher missed it (rare): reap directly.
+                                try:
+                                    audio_proc.wait(timeout=5.0)
+                                except subprocess.TimeoutExpired:
+                                    audio_proc.terminate()
+                                tl["audio_actual_end"] = time.time()
+                            stop_ctl = BeatRecordingStop(tl["audio_actual_end"])
+                            remaining = stop_ctl.seconds_until_deadline()
+                            if remaining > 0.1:
                                 # C14/C16: keep the cursor moving over named targets while
                                 # the narration finishes; a plain sleep would create a long
                                 # static run that fails the B3 anti-stall gate.
                                 if scheduled_choreo:
                                     agent.execute_choreography(
-                                        scheduled_choreo, max_duration=wait_for_tts_end
+                                        scheduled_choreo, max_duration=remaining
                                     )
                                 else:
-                                    time.sleep(wait_for_tts_end)
-                            try:
-                                audio_proc.wait(timeout=2.0)
-                            except subprocess.TimeoutExpired:
-                                audio_proc.terminate()
-                            time.sleep(1.0)
+                                    time.sleep(remaining)
+                            elif remaining < -0.25:
+                                print(
+                                    f"  [C26] {beat.beat_id}: stop deadline missed by "
+                                    f"{-remaining:.2f}s; stopping immediately",
+                                    file=sys.stderr,
+                                )
 
-                        # C16: every beat stops recording after the narration tail so
-                        # assessment/grounding does not append long static frames.
+                        # C16/C26: every beat stops recording at the narration tail so
+                        # assessment/grounding does not append long static frames. The
+                        # stop is HARD: pending deferred work runs after it.
                         if not skipped:
-                            recorder.stop()
+                            tl["recorder_stop_called"] = time.time()
+                            work: List[Callable[[], Any]] = []
+                            if deferred_gate is not None:
+                                work.append(deferred_gate)
+                            elif beat_ok:
+                                work.extend(fn for _, fn in deferred_post)
+                            ctl = stop_ctl if stop_ctl is not None else BeatRecordingStop(None)
+                            results = ctl.stop_recorder(
+                                recorder,
+                                work,
+                                on_stopped=lambda: tl.__setitem__(
+                                    "recorder_file_finalized", time.time()
+                                ),
+                            )
+                            if ctl.stop_flagged:
+                                print(
+                                    f"  [C26] {beat.beat_id}: recorder stopped past the "
+                                    f"audio-end deadline (late read-back); beat flagged",
+                                    file=sys.stderr,
+                                )
+                            tl["recorder_file_finalized"] = time.time()
+                            tl["recorder_first_frame"] = recorder.first_frame_time()
                             agent.recording = False
+
+                            # C26: post-stop gate evaluation — the canonical read-back
+                            # still runs and still decides the beat.
+                            if deferred_gate is not None:
+                                gate_ok = bool(results[0]) if results else False
+                                if gate_ok:
+                                    beat_ok = True
+                                    executed_demo_count += 1
+                                    composed = agent._last_composed_text or ""
+                                    if composed:
+                                        last_good_editor = composed
+                                    for name, fn in deferred_post:
+                                        _tl_readback(tl, name, fn)
+                                else:
+                                    failed_reason = (
+                                        f"Beat {beat.beat_id} final assessment failed"
+                                    )
+                                    beat_failed = True
                     else:
                         beat_ok = True
                 finally:
@@ -3793,9 +4149,23 @@ class EndStateDiscovery:
                                 audio_proc.terminate()
                             except Exception:
                                 pass
-                        recorder.stop()
+                        if tl["recorder_stop_called"] is None:
+                            tl["recorder_stop_called"] = time.time()
+                            recorder.stop()
+                            tl["recorder_file_finalized"] = time.time()
+                            tl["recorder_first_frame"] = recorder.first_frame_time()
+                        else:
+                            recorder.stop()
                         agent.recording = False
                 clip_end = time.time()
+                tl["clip_dur"] = _probe_clip_duration(clip_path)
+                timeline.append(tl)
+                if not skipped:
+                    print(
+                        "wsda-timeline: "
+                        + _timeline_table_row({**tl, "phases": _timeline_phases(tl)}),
+                        file=sys.stderr,
+                    )
 
                 if skipped:
                     break
@@ -3891,13 +4261,18 @@ class EndStateDiscovery:
                     )
 
             if failed_reason:
+                _dump_beat_timeline(run_id, timeline, run_start)
                 return self._make_result(success=False, reason=failed_reason)
 
         if failed_reason:
+            _dump_beat_timeline(run_id, timeline, run_start)
             return self._make_result(success=False, reason=failed_reason)
 
         if self.actions_only:
+            _dump_beat_timeline(run_id, timeline, run_start)
             return self._finish_action_timings(success=True)
+
+        _dump_beat_timeline(run_id, timeline, run_start)
 
         # TIDY end state: dismiss any open dropdown/modal before final capture.
         try:
