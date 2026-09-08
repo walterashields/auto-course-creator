@@ -67,6 +67,33 @@ MAX_SC_RECORDER_SAMPLES = 1_080_000     # ~3 hours at 10 fps
 MAX_TRIM_FRAMES = 1_000_000
 MAX_BEAT_RETRIES = max(1, int(os.environ.get("WSDA_MAX_ATTEMPTS", "3")))
 
+# C27: SCK capture size. The renderer scales everything to 1280px wide, so
+# 1280x800 looks attractive — but an A/B probe showed delivery collapse is
+# NOT resolution-dependent (1920x1200 collapsed on a leaked-stream run while
+# 1280x800 delivered 8.6fps on a clean one). Keep the long-proven 1920x1200;
+# the real fix for delivery collapse is synchronous stream teardown in stop()
+# plus a settle window before the next stream starts.
+CAPTURE_WIDTH = 1920
+CAPTURE_HEIGHT = 1200
+#: C27: minimum quiet time between SCK stream teardown and the next stream
+#: start. Back-to-back starts collapse delivery deterministically (alternating
+#: ~0.2fps / ~9fps); a >=2s gap keeps every stream at full delivery.
+SCK_TEARDOWN_SETTLE_SECONDS = 2.0
+# C27: per-beat delivered-fps floor. Below this the footage is choppy even
+# though the wall-clock writer keeps the clip length correct; the beat is
+# marked wsda-low-delivery and re-shot. (MSS fallback is pull-based and
+# cannot under-deliver, so only the SCK path reports delivery.)
+DELIVERY_FLOOR_FPS = 8.0
+
+
+def delivery_floor_breach(delivered_fps: Optional[float]) -> Optional[str]:
+    """C27: return the wsda-low-delivery marker when delivery is below the floor."""
+    if delivered_fps is None:
+        return None
+    if delivered_fps < DELIVERY_FLOOR_FPS:
+        return f"wsda-low-delivery {delivered_fps:.2f}fps<{DELIVERY_FLOOR_FPS:.0f}fps"
+    return None
+
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     _handler = logging.StreamHandler(sys.stderr)
@@ -576,7 +603,8 @@ def _timeline_table_row(tl: Dict[str, Any]) -> str:
         f"ae->stop {_f(ph.get('audio_end_to_stop'))} "
         f"(rb {_f(ph.get('readbacks_after_audio_end'))} "
         f"other {_f(ph.get('non_readback_after_audio_end'))}) "
-        f"flush {_f(ph.get('stop_flush'))}"
+        f"flush {_f(ph.get('stop_flush'))} "
+        f"deliv {_f((tl.get('delivery') or {}).get('delivered_fps'))}"
     )
 
 
@@ -608,6 +636,7 @@ def _dump_beat_timeline(
                 "phases": ph,
                 "clip_dur": clip,
                 "tts_dur": tts,
+                "delivery": tl.get("delivery"),
                 "excess_over_tail_target": (
                     round(clip - (tts + 1.0), 3)
                     if (clip is not None and tts is not None)
@@ -630,7 +659,8 @@ def _dump_beat_timeline(
     for b in beats:
         print("wsda-timeline: " + _timeline_table_row(
             {"beat_id": b["beat_id"], "retry": b["retry"], "phases": b["phases"],
-             "clip_dur": b["clip_dur"], "tts_dur": b["tts_dur"]}
+             "clip_dur": b["clip_dur"], "tts_dur": b["tts_dur"],
+             "delivery": b.get("delivery")}
         ), file=sys.stderr)
     print(f"wsda-timeline: wrote {out_path}", file=sys.stderr)
 
@@ -645,6 +675,9 @@ class _ScreenCaptureKitRecorder:
     """
 
     TARGET_WIDTH = 1280
+    # C27: shared across instances — the previous recorder's teardown must
+    # quiesce before a new SCK stream starts (see SCK_TEARDOWN_SETTLE_SECONDS).
+    _last_teardown_mono = 0.0
 
     def __init__(self, output_path: str, fps: int = 10, app_name: str = ""):
         self.output_path = Path(output_path)
@@ -661,6 +694,8 @@ class _ScreenCaptureKitRecorder:
         self._fallback: Optional[ScreenRecorder] = None
         # C26: wall-clock time the first frame was written (timeline instrumentation).
         self.first_frame_at: Optional[float] = None
+        # C27: per-second delivery telemetry, finalized when the writer exits.
+        self.delivery_summary: Optional[Dict[str, Any]] = None
 
     def first_frame_time(self) -> Optional[float]:
         if self.first_frame_at is not None:
@@ -732,36 +767,101 @@ class _ScreenCaptureKitRecorder:
             return None
 
     def _writer_loop(self) -> None:
+        # C27: wall-clock-anchored writer. Frames are emitted at the output
+        # fps keyed to monotonic time since start; each tick writes the latest
+        # delivered frame (duplicating the previous one when nothing new
+        # arrived), so clip duration == wall span at ANY delivery rate.
         interval = 1.0 / self.fps
-        sample_count = 0
+        start_mono = time.monotonic()
+        next_fire = start_mono + interval
+        tick = 0
+        written = 0
+        delivered = 0
+        last_frame: Optional[np.ndarray] = None
+        last_delivery_mono: Optional[float] = None
+        first_write_mono: Optional[float] = None
+        last_write_mono: Optional[float] = None
+        second_buckets: List[Dict[str, Any]] = []
+        bucket: Dict[str, Any] = {}
+        bucket_index = -1
         # Ceiling: MAX_SC_RECORDER_SAMPLES (~3h at 10fps); loud abort if exceeded.
-        while not self._stop_event.is_set() and sample_count < MAX_SC_RECORDER_SAMPLES:
-            sample_count += 1
-            start = time.time()
+        while tick < MAX_SC_RECORDER_SAMPLES:
+            now = time.monotonic()
+            stop_requested = self._stop_event.is_set()
+            if now < next_fire:
+                if stop_requested:
+                    break
+                self._stop_event.wait(next_fire - now)
+                now = time.monotonic()
+                stop_requested = self._stop_event.is_set()
+                if stop_requested and now < next_fire:
+                    break
+            sec = int(now - start_mono)
+            if sec != bucket_index:
+                if bucket_index >= 0:
+                    second_buckets.append(bucket)
+                bucket = {
+                    "frames_delivered": 0,
+                    "frames_written": 0,
+                    "age_sum_ms": 0.0,
+                    "age_n": 0,
+                }
+                bucket_index = sec
             sample = None
             with self._lock:
                 if self._samples:
-                    sample = self._samples.pop(0)
+                    n_new = len(self._samples)
+                    delivered += n_new
+                    bucket["frames_delivered"] += n_new
+                    sample = self._samples.pop()
+                    self._samples.clear()
+                    last_delivery_mono = time.monotonic()
             if sample is not None:
                 frame = self._sample_buffer_to_bgr(sample)
                 if frame is not None:
                     frame = self._resize_frame(frame)
-                    # C9: no synthetic cursor overlay; keep only real cursor motion.
-                    if self._writer is None:
-                        h, w = frame.shape[:2]
-                        self._frame_shape = (w, h)
-                        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                        self._writer = cv2.VideoWriter(
-                            str(self.output_path), fourcc, self.fps, (w, h)
-                        )
-                    if self.first_frame_at is None:
-                        self.first_frame_at = time.time()
-                    self._writer.write(frame)
-            elapsed = time.time() - start
-            sleep_time = max(0.0, interval - elapsed)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-        if sample_count >= MAX_SC_RECORDER_SAMPLES:
+                    last_frame = frame
+            if last_frame is not None:
+                if self._writer is None:
+                    h, w = last_frame.shape[:2]
+                    self._frame_shape = (w, h)
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    self._writer = cv2.VideoWriter(
+                        str(self.output_path), fourcc, self.fps, (w, h)
+                    )
+                if self.first_frame_at is None:
+                    self.first_frame_at = time.time()
+                self._writer.write(last_frame)
+                written += 1
+                bucket["frames_written"] += 1
+                if first_write_mono is None:
+                    first_write_mono = now
+                last_write_mono = now
+                if last_delivery_mono is not None:
+                    bucket["age_sum_ms"] += (now - last_delivery_mono) * 1000.0
+                    bucket["age_n"] += 1
+            tick += 1
+            next_fire += interval
+            if stop_requested:
+                break
+        if bucket_index >= 0:
+            second_buckets.append(bucket)
+        span = max((last_write_mono or time.monotonic()) - start_mono, 1e-6)
+        written_span = (
+            max(last_write_mono - first_write_mono, 0.0) + interval
+            if first_write_mono is not None
+            else 0.0
+        )
+        self.delivery_summary = {
+            "span_seconds": round(span, 3),
+            "frames_delivered": delivered,
+            "frames_written": written,
+            "delivered_fps": round(delivered / span, 3) if span else 0.0,
+            "written_fps": round(written / written_span, 3) if written_span else 0.0,
+            "expected_written": int(round(written_span * self.fps)),
+            "per_second": second_buckets,
+        }
+        if tick >= MAX_SC_RECORDER_SAMPLES:
             print(
                 f"[CIRCUIT BREAKER] _ScreenCaptureKitRecorder hit sample ceiling "
                 f"({MAX_SC_RECORDER_SAMPLES}); stopping writer loop.",
@@ -860,8 +960,8 @@ class _ScreenCaptureKitRecorder:
             config = SCStreamConfiguration.alloc().init()
             config.setCapturesAudio_(False)
             config.setPixelFormat_(kCVPixelFormatType_32BGRA)
-            config.setWidth_(1920)
-            config.setHeight_(1200)
+            config.setWidth_(CAPTURE_WIDTH)
+            config.setHeight_(CAPTURE_HEIGHT)
             config.setShowsCursor_(True)
             config.setMinimumFrameInterval_(CoreMedia.CMTimeMake(1, self.fps))
 
@@ -884,6 +984,11 @@ class _ScreenCaptureKitRecorder:
 
     def start(self) -> None:
         self._stop_event.clear()
+        # C27: settle after the previous recorder's teardown. Back-to-back SCK
+        # stream starts collapse delivery deterministically.
+        quiet = time.monotonic() - _ScreenCaptureKitRecorder._last_teardown_mono
+        if quiet < SCK_TEARDOWN_SETTLE_SECONDS:
+            time.sleep(SCK_TEARDOWN_SETTLE_SECONDS - quiet)
         if self._start_stream():
             self._thread = threading.Thread(target=self._writer_loop, daemon=True)
             self._thread.start()
@@ -902,14 +1007,30 @@ class _ScreenCaptureKitRecorder:
             return
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        if self._stream is not None:
+        # C27: release the SCK stream SYNCHRONOUSLY. Fire-and-forget teardown
+        # leaks the stream and its pixel buffers; with one recorder per beat,
+        # the leaked streams accumulate and WindowServer throttles delivery
+        # (observed: later recorders in one process collapsing to ~0.2fps,
+        # then the process SIGKILLed under memory pressure).
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            done = threading.Event()
+
+            def _teardown(_error):
+                done.set()
+
             try:
-                self._stream.stopCaptureWithCompletionHandler_(lambda error: None)
+                stream.stopCaptureWithCompletionHandler_(_teardown)
+                done.wait(timeout=2.0)
             except Exception:
                 pass
+        self._delegate = None
+        with self._lock:
+            self._samples.clear()
         if self._writer is not None:
             self._writer.release()
             self._writer = None
+        _ScreenCaptureKitRecorder._last_teardown_mono = time.monotonic()
 
 
 def test_window_capture_occlusion(
@@ -4159,6 +4280,11 @@ class EndStateDiscovery:
                         agent.recording = False
                 clip_end = time.time()
                 tl["clip_dur"] = _probe_clip_duration(clip_path)
+                tl["delivery"] = getattr(
+                    recorder, "delivery_summary", None
+                ) or getattr(
+                    getattr(recorder, "_fallback", None), "delivery_summary", None
+                )
                 timeline.append(tl)
                 if not skipped:
                     print(
@@ -4171,6 +4297,28 @@ class EndStateDiscovery:
                     break
 
                 if beat_ok:
+                    # C27: delivery-floor quality gate — the wall-clock writer
+                    # keeps clip length correct even at low delivery, but the
+                    # footage is choppy; re-shoot with a distinct marker.
+                    breach = delivery_floor_breach(
+                        (tl.get("delivery") or {}).get("delivered_fps")
+                    )
+                    if breach:
+                        print(
+                            f"[LOW-DELIVERY] {beat.beat_id} attempt {retry + 1}: "
+                            f"{breach}; re-shooting",
+                            file=sys.stderr,
+                        )
+                        if retry < MAX_BEAT_RETRIES - 1:
+                            beat_ok = False
+                            continue
+                        failed_reason = (
+                            f"[LOW-DELIVERY] {beat.beat_id} still {breach} "
+                            f"after {MAX_BEAT_RETRIES} attempts"
+                        )
+                        beat_failed = True
+                        break
+
                     if _clip_has_off_app_interval(
                         frontmost_log_path, clip_start, clip_end, self.profile.app_name
                     ):

@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -25,12 +27,16 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
+from compiler import discovery as discovery_module
 from compiler.curriculum import _dict_to_script_beat, _verify_video_frames_show_app, _write_attempt_report, load_manifest
 from compiler.discovery import (
     BeatRecordingStop,
+    DELIVERY_FLOOR_FPS,
     EndStateDiscovery,
     RECORDER_TAIL_SECONDS,
     _clip_has_off_app_interval,
+    _ScreenCaptureKitRecorder,
+    delivery_floor_breach,
 )
 from compiler.frame_analysis import detect_error_signature, frozen_share_percent, run_acceptance_gates
 from compiler.lesson_builder import LessonBuilder
@@ -1953,6 +1959,122 @@ class TestC26StopInvariant(unittest.TestCase):
         self.assertLessEqual(max(choreo_steps, default=0.0), 0.1)
 
 
+class TestC27WallClockWriter(unittest.TestCase):
+    """C27: the SCK writer is wall-clock anchored — output length equals wall
+    span at any delivery rate; ticks with no new delivery duplicate the latest
+    frame."""
+
+    def _run_writer(
+        self, output_path: Path, feed_schedule: List[Any]
+    ) -> Any:
+        """Start the writer loop; feed_schedule is [(time_offset, count), ...].
+        Returns (recorder, writer_thread); caller sets stop_event and joins."""
+        rec = _ScreenCaptureKitRecorder(str(output_path), fps=10, app_name="")
+        generation = [0]
+
+        def _fake_bgr(_sample):
+            generation[0] += 1
+            return np.full((80, 128, 3), generation[0] % 200 + 1, dtype=np.uint8)
+
+        rec._sample_buffer_to_bgr = _fake_bgr  # type: ignore[assignment]
+        t0 = time.monotonic()
+
+        def _feeder():
+            for offset, count in feed_schedule:
+                delay = t0 + offset - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                with rec._lock:
+                    rec._samples[:] = [object() for _ in range(count)]
+
+        threading.Thread(target=_feeder, daemon=True).start()
+        wt = threading.Thread(target=rec._writer_loop, daemon=True)
+        wt.start()
+        return rec, wt
+
+    def test_low_delivery_and_stall_keep_wall_clock_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "wc.mp4"
+            # Deliver at 2fps with a 3s total stall in [1.0, 4.0); stop ~4.05s.
+            rec, wt = self._run_writer(
+                out, [(0.0, 1), (0.5, 1), (4.0, 1)]
+            )
+            time.sleep(4.05)
+            rec._stop_event.set()
+            wt.join(timeout=10)
+            if rec._writer is not None:
+                rec._writer.release()
+            summary = rec.delivery_summary
+            cap = cv2.VideoCapture(str(out))
+            frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            self.assertIsNotNone(summary)
+            # Invariant: written frames == written span x fps exactly.
+            self.assertEqual(frames, summary["expected_written"])
+            # 2fps delivery over a ~4s span: only a few deliveries, never 40.
+            self.assertLessEqual(summary["frames_delivered"], 8)
+            # Duplication filled the gap: frame count is wall-anchored.
+            self.assertGreaterEqual(frames, 35)
+            self.assertLessEqual(frames, 42)
+
+            # Stall-window frames are pixel-identical duplicates of the last
+            # pre-stall frame (ticks 1.0s..3.7s => indices 9..37 at 10fps).
+            cap = cv2.VideoCapture(str(out))
+            ok, prev = cap.read()
+            idx = 0
+            duplicates = 0
+            while ok:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                idx += 1
+                if 9 <= idx <= 37 and np.array_equal(prev, frame):
+                    duplicates += 1
+                prev = frame
+            cap.release()
+            self.assertEqual(duplicates, 29)
+
+
+class TestC27DeliveryFloor(unittest.TestCase):
+    """C27: delivered fps below the floor flags wsda-low-delivery; at/above
+    (or unknown, e.g. MSS fallback) it does not."""
+
+    def test_below_floor_flags(self) -> None:
+        marker = delivery_floor_breach(DELIVERY_FLOOR_FPS - 0.1)
+        self.assertIsNotNone(marker)
+        self.assertIn("wsda-low-delivery", marker)
+
+    def test_at_or_above_floor_passes(self) -> None:
+        self.assertIsNone(delivery_floor_breach(DELIVERY_FLOOR_FPS))
+        self.assertIsNone(delivery_floor_breach(DELIVERY_FLOOR_FPS + 2.5))
+        self.assertIsNone(delivery_floor_breach(None))
+
+
+class TestC27TeardownSettle(unittest.TestCase):
+    """C27: a new SCK stream waits out the teardown settle window."""
+
+    def test_start_waits_after_recent_teardown(self) -> None:
+        rec = _ScreenCaptureKitRecorder("/tmp/wsda_settle_test.mp4", fps=10, app_name="")
+        sleeps: List[float] = []
+        # A teardown just happened: quiet time ~0, so start must settle.
+        _ScreenCaptureKitRecorder._last_teardown_mono = time.monotonic()
+        try:
+            with mock.patch.object(
+                discovery_module.time, "sleep", side_effect=lambda s: sleeps.append(s)
+            ):
+                with mock.patch.object(rec, "_start_stream", return_value=True):
+                    rec.start()
+            rec._stop_event.set()
+            if rec._thread is not None:
+                rec._thread.join(timeout=3)
+        finally:
+            _ScreenCaptureKitRecorder._last_teardown_mono = 0.0
+        self.assertTrue(sleeps)
+        self.assertGreaterEqual(
+            sleeps[0], discovery_module.SCK_TEARDOWN_SETTLE_SECONDS - 0.6
+        )
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -2695,6 +2817,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC24EditorAutoClear))
     suite.addTests(loader.loadTestsFromTestCase(TestC25AppReadinessWait))
     suite.addTests(loader.loadTestsFromTestCase(TestC26StopInvariant))
+    suite.addTests(loader.loadTestsFromTestCase(TestC27WallClockWriter))
+    suite.addTests(loader.loadTestsFromTestCase(TestC27DeliveryFloor))
+    suite.addTests(loader.loadTestsFromTestCase(TestC27TeardownSettle))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
