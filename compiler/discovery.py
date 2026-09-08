@@ -67,14 +67,15 @@ MAX_SC_RECORDER_SAMPLES = 1_080_000     # ~3 hours at 10 fps
 MAX_TRIM_FRAMES = 1_000_000
 MAX_BEAT_RETRIES = max(1, int(os.environ.get("WSDA_MAX_ATTEMPTS", "3")))
 
-# C27: SCK capture size. The renderer scales everything to 1280px wide, so
-# 1280x800 looks attractive — but an A/B probe showed delivery collapse is
-# NOT resolution-dependent (1920x1200 collapsed on a leaked-stream run while
-# 1280x800 delivered 8.6fps on a clean one). Keep the long-proven 1920x1200;
-# the real fix for delivery collapse is synchronous stream teardown in stop()
-# plus a settle window before the next stream starts.
-CAPTURE_WIDTH = 1920
-CAPTURE_HEIGHT = 1200
+# C29: capture natively at 1280x800 (16:10, same aspect as the former
+# 1920x1200). The recorder always resized to TARGET_WIDTH=1280 before writing
+# and the renderer scales to 1280px anyway, so capturing at 1920 was pure
+# cost: ~56% more SCK scaling work and a 15ms BGRA->BGR convert per frame on
+# the writer thread. C27's A/B probe showed delivery collapse is NOT
+# resolution-dependent (it was leaked-stream churn, fixed by synchronous
+# teardown + settle), so the smaller config carries no delivery risk.
+CAPTURE_WIDTH = 1280
+CAPTURE_HEIGHT = 800
 #: C27: minimum quiet time between SCK stream teardown and the next stream
 #: start. Back-to-back starts collapse delivery deterministically (alternating
 #: ~0.2fps / ~9fps); a >=2s gap keeps every stream at full delivery.
@@ -608,6 +609,34 @@ def _timeline_table_row(tl: Dict[str, Any]) -> str:
     )
 
 
+def _p50(samples: List[float]) -> float:
+    """Median of a timing sample list (0.0 when empty)."""
+    if not samples:
+        return 0.0
+    ordered = sorted(samples)
+    return round(ordered[len(ordered) // 2], 2)
+
+
+def _open_video_writer(
+    output_path: Path, fps: int, frame_size: Tuple[int, int]
+) -> "cv2.VideoWriter":
+    """C29: open the clip writer, preferring hardware H.264 (avc1/AVFoundation).
+
+    mp4v (MPEG-4 Part 2, software) pegged a core for the whole recording;
+    avc1 encodes on the media engine and drops writer-thread CPU to near
+    zero. H.264 in an .mp4 container is strictly more compatible with the
+    renderer's ffmpeg concat. If avc1 cannot open (older OpenCV backend),
+    fall back to mp4v with a logged marker.
+    """
+    avcc = cv2.VideoWriter_fourcc(*"avc1")
+    writer = cv2.VideoWriter(str(output_path), avcc, fps, frame_size)
+    if writer is not None and writer.isOpened():
+        return writer
+    print("wsda-codec:avc1-unavailable; falling back to mp4v", file=sys.stderr)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    return cv2.VideoWriter(str(output_path), fourcc, fps, frame_size)
+
+
 def _dump_beat_timeline(
     run_id: str, timeline: List[Dict[str, Any]], run_start: float
 ) -> None:
@@ -696,6 +725,26 @@ class _ScreenCaptureKitRecorder:
         self.first_frame_at: Optional[float] = None
         # C27: per-second delivery telemetry, finalized when the writer exits.
         self.delivery_summary: Optional[Dict[str, Any]] = None
+        # C29: latest written frame, shared with VLM grounding while recording
+        # so grounding never invokes a second capture API (screencapture/mss)
+        # concurrent with the SCK stream. Written only by the writer thread;
+        # the reference swap is atomic under the GIL.
+        self._latest_frame: Optional[np.ndarray] = None
+
+    def latest_frame_provider(self) -> Callable[[], Optional[Image.Image]]:
+        """C29: return a callable yielding the latest frame as a PIL RGB image.
+
+        Wired into VisionAgent.screenshot() during recording so every VLM
+        grounding call shares the ONE capture per beat. Returns None when no
+        frame has been written yet (caller falls back to a real capture).
+        """
+        def provide() -> Optional[Image.Image]:
+            frame = self._latest_frame
+            if frame is None:
+                return None
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            return Image.fromarray(rgb)
+        return provide
 
     def first_frame_time(self) -> Optional[float]:
         if self.first_frame_at is not None:
@@ -784,6 +833,11 @@ class _ScreenCaptureKitRecorder:
         second_buckets: List[Dict[str, Any]] = []
         bucket: Dict[str, Any] = {}
         bucket_index = -1
+        # C29: per-frame pixel-work timing (convert+resize vs encode), reported
+        # as p50/max in delivery_summary. Proves encode sits off the delivery
+        # path and quantifies writer-thread load.
+        convert_ms_samples: List[float] = []
+        encode_ms_samples: List[float] = []
         # Ceiling: MAX_SC_RECORDER_SAMPLES (~3h at 10fps); loud abort if exceeded.
         while tick < MAX_SC_RECORDER_SAMPLES:
             now = time.monotonic()
@@ -817,21 +871,25 @@ class _ScreenCaptureKitRecorder:
                     self._samples.clear()
                     last_delivery_mono = time.monotonic()
             if sample is not None:
+                convert_t0 = time.monotonic()
                 frame = self._sample_buffer_to_bgr(sample)
                 if frame is not None:
                     frame = self._resize_frame(frame)
                     last_frame = frame
+                    self._latest_frame = frame
+                convert_ms_samples.append((time.monotonic() - convert_t0) * 1000.0)
             if last_frame is not None:
                 if self._writer is None:
                     h, w = last_frame.shape[:2]
                     self._frame_shape = (w, h)
-                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                    self._writer = cv2.VideoWriter(
-                        str(self.output_path), fourcc, self.fps, (w, h)
+                    self._writer = _open_video_writer(
+                        self.output_path, self.fps, (w, h)
                     )
                 if self.first_frame_at is None:
                     self.first_frame_at = time.time()
+                encode_t0 = time.monotonic()
                 self._writer.write(last_frame)
+                encode_ms_samples.append((time.monotonic() - encode_t0) * 1000.0)
                 written += 1
                 bucket["frames_written"] += 1
                 if first_write_mono is None:
@@ -860,6 +918,10 @@ class _ScreenCaptureKitRecorder:
             "written_fps": round(written / written_span, 3) if written_span else 0.0,
             "expected_written": int(round(written_span * self.fps)),
             "per_second": second_buckets,
+            "convert_ms_p50": _p50(convert_ms_samples),
+            "convert_ms_max": round(max(convert_ms_samples), 2) if convert_ms_samples else 0.0,
+            "encode_ms_p50": _p50(encode_ms_samples),
+            "encode_ms_max": round(max(encode_ms_samples), 2) if encode_ms_samples else 0.0,
         }
         if tick >= MAX_SC_RECORDER_SAMPLES:
             print(
@@ -3842,6 +3904,14 @@ class EndStateDiscovery:
                     agent.recording = True
                     tl["recorder_start_called"] = time.time()
                     recorder.start()
+                    # C29: one capture per beat — every VLM grounding call
+                    # reads the recorder's latest frame instead of invoking a
+                    # second capture API (screencapture CLI) concurrent with
+                    # the SCK stream. MSS fallback has no provider: grounding
+                    # keeps the live-capture path there.
+                    agent.set_frame_provider(
+                        getattr(recorder, "latest_frame_provider", lambda: None)()
+                    )
                     # C13: start the beat's own TTS so recording is paced by speech.
                     tts_info = tts_clip_by_beat.get(beat.beat_id)
                     if tts_info:
@@ -4316,6 +4386,8 @@ class EndStateDiscovery:
                         else:
                             recorder.stop()
                         agent.recording = False
+                        # C29: recording over — grounding returns to live capture.
+                        agent.set_frame_provider(None)
                 clip_end = time.time()
                 tl["clip_dur"] = _probe_clip_duration(clip_path)
                 tl["delivery"] = getattr(

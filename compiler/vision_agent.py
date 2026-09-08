@@ -23,7 +23,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import anthropic
 import cv2
@@ -414,6 +414,9 @@ class VisionAgent:
         # C17: cached Execute/Run toolbar button point (logical coordinates),
         # primed once at stage prep so run_query needs no mid-beat VLM call.
         self._run_button_point: Optional[Tuple[int, int]] = None
+        # C29: during recording, screenshot() reads the recorder's latest
+        # frame through this provider instead of capturing independently.
+        self._frame_provider: Optional[Callable[[], Optional[Image.Image]]] = None
         # Last successful find_and_click point (logical), for caching.
         self._last_click_point: Optional[Tuple[int, int]] = None
 
@@ -421,9 +424,34 @@ class VisionAgent:
     # Core screenshot / scaling helpers
     # ------------------------------------------------------------------
 
+    def set_frame_provider(
+        self, provider: Optional[Callable[[], Optional[Image.Image]]]
+    ) -> None:
+        """C29: share the recorder's latest frame for grounding while recording.
+
+        Set by the beat loop right after the beat recorder starts; cleared when
+        the recorder stops. While set, screenshot() performs no independent
+        capture, so VLM grounding never runs a second capture API concurrent
+        with the SCK stream. None restores the live-capture path (dry-run).
+        """
+        self._frame_provider = provider
+
     def screenshot(self) -> str:
         """Capture the screen, resize for the API, and return base64 PNG."""
-        raw_img = self._capture_screen()
+        # C29: while a recorder is running, grounding shares the recorder's
+        # latest frame — ONE capture per beat instead of a second capture API
+        # (screencapture CLI / mss) firing concurrent with the SCK stream.
+        # The provider returns None when no frame is available (e.g. SCK
+        # fallback path), and dry-run keeps the provider unset entirely.
+        raw_img = None
+        provider = getattr(self, "_frame_provider", None)
+        if provider is not None:
+            try:
+                raw_img = provider()
+            except Exception as exc:
+                print(f"Warning: recorder frame provider failed: {exc}; using live capture", file=sys.stderr)
+        if raw_img is None:
+            raw_img = self._capture_screen()
         self.last_raw_image = raw_img
         raw_w, raw_h = raw_img.size
 

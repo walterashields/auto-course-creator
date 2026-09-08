@@ -35,6 +35,7 @@ from compiler.discovery import (
     EndStateDiscovery,
     RECORDER_TAIL_SECONDS,
     _clip_has_off_app_interval,
+    _open_video_writer,
     _ScreenCaptureKitRecorder,
     delivery_floor_breach,
 )
@@ -2149,6 +2150,151 @@ class TestC28CaptureWarmup(unittest.TestCase):
         self.assertIn("wsda-capture-warmup-fail", err.getvalue())
 
 
+class TestC29GroundingReadsRecorderFrame(unittest.TestCase):
+    """C29: while recording, VLM grounding reads the recorder's latest frame
+    and NEVER invokes an independent capture API; with the provider unset
+    (dry-run) the live-capture path stays."""
+
+    def test_screenshot_uses_recorder_frame(self) -> None:
+        from PIL import Image
+
+        rec = _ScreenCaptureKitRecorder("/tmp/wsda_c29_frame.mp4", fps=10, app_name="")
+        rec._latest_frame = np.full((800, 1280, 3), 200, np.uint8)
+        agent = VisionAgent(model="test-model", output_dir="/tmp")
+        agent.set_frame_provider(rec.latest_frame_provider())
+
+        calls: List[int] = []
+
+        def fake_capture() -> Image.Image:
+            calls.append(1)
+            return Image.new("RGB", (10, 10))
+
+        with mock.patch.object(VisionAgent, "_capture_screen", staticmethod(fake_capture)):
+            agent.screenshot()
+        self.assertEqual(calls, [])  # zero independent captures during recording
+        self.assertEqual(agent.last_raw_image.size, (1280, 800))
+
+        # Provider cleared (recorder stopped / dry-run): live capture returns.
+        agent.set_frame_provider(None)
+        with mock.patch.object(VisionAgent, "_capture_screen", staticmethod(fake_capture)):
+            agent.screenshot()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(agent.last_raw_image.size, (10, 10))
+
+    def test_no_frame_yet_falls_back_to_live_capture(self) -> None:
+        from PIL import Image
+
+        rec = _ScreenCaptureKitRecorder("/tmp/wsda_c29_frame2.mp4", fps=10, app_name="")
+        agent = VisionAgent(model="test-model", output_dir="/tmp")
+        agent.set_frame_provider(rec.latest_frame_provider())  # no frame written yet
+
+        calls: List[int] = []
+
+        def fake_capture() -> Image.Image:
+            calls.append(1)
+            return Image.new("RGB", (10, 10))
+
+        with mock.patch.object(VisionAgent, "_capture_screen", staticmethod(fake_capture)):
+            agent.screenshot()
+        self.assertEqual(len(calls), 1)
+
+
+class TestC29CodecFallback(unittest.TestCase):
+    """C29: writer prefers avc1 (hardware H.264); if it cannot open, falls
+    back to mp4v with a logged marker."""
+
+    def test_avc1_used_when_available(self) -> None:
+        tmp = Path(tempfile.mkdtemp()) / "c29_avc1.mp4"
+        opened = mock.MagicMock()
+        opened.isOpened.return_value = True
+        with mock.patch.object(
+            discovery_module.cv2, "VideoWriter", return_value=opened
+        ) as vw:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                writer = _open_video_writer(tmp, 10, (1280, 800))
+        self.assertIs(writer, opened)
+        vw.assert_called_once()
+        fourcc_arg = vw.call_args[0][1]
+        self.assertEqual(fourcc_arg, cv2.VideoWriter_fourcc(*"avc1"))
+        self.assertNotIn("wsda-codec:avc1-unavailable", err.getvalue())
+
+    def test_avc1_failure_falls_back_to_mp4v_with_marker(self) -> None:
+        tmp = Path(tempfile.mkdtemp()) / "c29_mp4v.mp4"
+        refused = mock.MagicMock()
+        refused.isOpened.return_value = False
+        opened = mock.MagicMock()
+        opened.isOpened.return_value = True
+
+        def fake_writer(path: str, fourcc: int, fps: int, size: Any) -> Any:
+            if fourcc == cv2.VideoWriter_fourcc(*"avc1"):
+                return refused
+            return opened
+
+        with mock.patch.object(
+            discovery_module.cv2, "VideoWriter", side_effect=fake_writer
+        ) as vw:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                writer = _open_video_writer(tmp, 10, (1280, 800))
+        self.assertIs(writer, opened)
+        self.assertEqual(vw.call_count, 2)
+        self.assertIn("wsda-codec:avc1-unavailable", err.getvalue())
+
+
+class TestC29EncodeOffDelivery(unittest.TestCase):
+    """C29: the delivery path (latest-sample swap under the lock) never blocks
+    on encode — a catastrophically slow encoder leaves feeder latency tiny."""
+
+    def test_slow_encoder_delivery_unaffected(self) -> None:
+        rec = _ScreenCaptureKitRecorder("/tmp/wsda_c29_slow.mp4", fps=10, app_name="")
+        rec._sample_buffer_to_bgr = lambda s: np.zeros((64, 64, 3), np.uint8)
+
+        class SlowWriter:
+            def __init__(self) -> None:
+                self.writes = 0
+
+            def isOpened(self) -> bool:
+                return True
+
+            def write(self, frame: np.ndarray) -> None:
+                self.writes += 1
+                time.sleep(0.4)  # 4x slower than the 0.1s tick budget
+
+            def release(self) -> None:
+                pass
+
+        slow = SlowWriter()
+        feeder_ms: List[float] = []
+
+        def feeder() -> None:
+            end = time.monotonic() + 3.0
+            while time.monotonic() < end:
+                t0 = time.monotonic()
+                with rec._lock:
+                    rec._samples[:] = [object()]
+                feeder_ms.append((time.monotonic() - t0) * 1000.0)
+                time.sleep(0.05)
+
+        with mock.patch.object(
+            discovery_module, "_open_video_writer", return_value=slow
+        ):
+            wt = threading.Thread(target=rec._writer_loop, daemon=True)
+            wt.start()
+            ft = threading.Thread(target=feeder, daemon=True)
+            ft.start()
+            ft.join(timeout=10)
+            rec._stop_event.set()
+            wt.join(timeout=10)
+
+        self.assertFalse(ft.is_alive())
+        self.assertGreaterEqual(slow.writes, 1)
+        self.assertIsNotNone(rec.delivery_summary)
+        # Encode (400ms/write, on the writer thread) never stalled the
+        # delivery path: worst lock acquisition is orders of magnitude below.
+        self.assertLess(max(feeder_ms), 50.0)
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -2895,6 +3041,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC27DeliveryFloor))
     suite.addTests(loader.loadTestsFromTestCase(TestC27TeardownSettle))
     suite.addTests(loader.loadTestsFromTestCase(TestC28CaptureWarmup))
+    suite.addTests(loader.loadTestsFromTestCase(TestC29GroundingReadsRecorderFrame))
+    suite.addTests(loader.loadTestsFromTestCase(TestC29CodecFallback))
+    suite.addTests(loader.loadTestsFromTestCase(TestC29EncodeOffDelivery))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
