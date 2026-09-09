@@ -284,7 +284,92 @@ _MAX_DEPTH = 64
 _MAX_ELEMENTS = 20000
 
 
-def find_text_areas(app_element: Any) -> List[Tuple[Any, Optional[float]]]:
+def _window_title(window_element: Any) -> Optional[str]:
+    try:
+        title = copy_attribute(window_element, "AXTitle")
+    except AxCallError:
+        return None
+    return title if isinstance(title, str) else None
+
+
+def window_is_modal(window_element: Any) -> bool:
+    """C33: True when the window is a modal dialog or sheet (AXDialog subrole
+    or role, or AXSheet role) — never a valid editor-identity window."""
+    try:
+        subrole = copy_attribute(window_element, "AXSubrole")
+    except AxCallError:
+        subrole = None
+    if subrole == "AXDialog":
+        return True
+    try:
+        role = copy_attribute(window_element, "AXRole")
+    except AxCallError:
+        role = None
+    return role in ("AXDialog", "AXSheet")
+
+
+def _select_editor_windows(windows: List[Any], title_hints) -> List[Any]:
+    """C33: keep only windows whose AXTitle contains a hint (the main window
+    carries the app name and the .db filename; modal dialogs carry neither).
+    Falls back to non-modal windows when no title matches, then to all."""
+    matched = [
+        w for w in windows
+        if (t := _window_title(w)) is not None
+        and any(h in t for h in title_hints)
+    ]
+    if matched:
+        return matched
+    non_modal = [w for w in windows if not window_is_modal(w)]
+    return non_modal or list(windows)
+
+
+def frontmost_modal(app_element: Any) -> Optional[Tuple[Any, str]]:
+    """C33: (window_element, title) when the app's FRONTMOST window is a
+    modal dialog/sheet, else None. AXWindows is returned front-to-back, so
+    index 0 is the frontmost."""
+    windows = copy_attribute(app_element, "AXWindows") or []
+    if not windows:
+        return None
+    front = windows[0]
+    if not window_is_modal(front):
+        return None
+    return (front, _window_title(front) or "")
+
+
+def press_button(window_element: Any, title: str) -> bool:
+    """C33: AXPress the AXButton whose AXTitle == title inside one window
+    subtree. Returns False when no such button exists (the caller falls
+    back, e.g. to Esc)."""
+    stack: List[Any] = [window_element]
+    visited = 0
+    while stack:
+        el = stack.pop()
+        visited += 1
+        if visited > _MAX_ELEMENTS:
+            return False
+        try:
+            role = copy_attribute(el, "AXRole")
+        except AxCallError:
+            role = None
+        if role == "AXButton":
+            try:
+                btn_title = copy_attribute(el, "AXTitle")
+            except AxCallError:
+                btn_title = None
+            if btn_title == title:
+                press(el)
+                return True
+        try:
+            children = copy_attribute(el, "AXChildren") or []
+        except AxCallError:
+            children = []
+        stack.extend(children)
+    return False
+
+
+def find_text_areas(
+    app_element: Any, title_hints: Optional[Tuple[str, ...]] = None
+) -> List[Tuple[Any, Optional[float]]]:
     """Traverse AXWindows/AXChildren from an application element and collect
     every AXTextArea with its vertical position (None when unreadable).
 
@@ -292,8 +377,16 @@ def find_text_areas(app_element: Any) -> List[Tuple[Any, Optional[float]]]:
     exactly what survives ScreenCaptureKit capture (C21 probe). Raises
     AxCallError only when the top-level window read itself fails; per-element
     read errors are tolerated (element skipped).
+
+    C33: when ``title_hints`` is given, only windows whose AXTitle contains a
+    hint are traversed — editor identity must come from the MAIN window, never
+    a modal dialog's field. With 'Edit table definition' frontmost, the
+    dialog's read-only SQL preview is the top-most AXTextArea app-wide and
+    poisons both the length read and the focus path (C32b halt).
     """
     windows = copy_attribute(app_element, "AXWindows") or []
+    if title_hints:
+        windows = _select_editor_windows(windows, title_hints)
     found: List[Tuple[Any, Optional[float]]] = []
     # Stack of (element, depth); windows first.
     stack: List[Tuple[Any, int]] = [(w, 0) for w in windows]

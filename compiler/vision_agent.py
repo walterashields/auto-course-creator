@@ -60,6 +60,25 @@ _APP_READY_TIMEOUT_SECONDS = 30.0
 _APP_READY_POLL_INTERVAL = 1.0
 
 
+def _main_window_title_hints(
+    profile: EnvironmentProfile, db_path: Optional[str] = None
+) -> Tuple[str, ...]:
+    """C33: title substrings that identify the MAIN window for editor
+    resolution. The main window's title carries the app name and the .db
+    filename; modal dialogs ('Edit table definition') carry neither, so
+    hint-scoped text-area enumeration can never pick a dialog field."""
+    hints: List[str] = []
+    hint = (profile.window_title_hint or "").strip()
+    if hint:
+        hints.append(hint)
+    if db_path:
+        name = Path(db_path).name
+        if name:
+            hints.append(name)
+    hints.append(".db")
+    return tuple(hints)
+
+
 def wait_for_app_readiness(
     agent: "VisionAgent",
     db_path: Optional[str] = None,
@@ -123,7 +142,12 @@ def wait_for_app_readiness(
                 app_el = ax_pyobjc.create_application(pid)
                 windows = ax_pyobjc.copy_attribute(app_el, "AXWindows")
                 if windows:
-                    areas = ax_pyobjc.find_text_areas(app_el)
+                    areas = ax_pyobjc.find_text_areas(
+                        app_el,
+                        title_hints=_main_window_title_hints(
+                            agent.profile, db_path
+                        ),
+                    )
                     if areas:
                         elapsed = time.time() - start
                         print(
@@ -1087,9 +1111,13 @@ class VisionAgent:
             start = time.time()
             marker, detail = "wsda-pyobjc-error", ""
             try:
-                areas = ax_pyobjc.find_text_areas(app_el)
+                areas = ax_pyobjc.find_text_areas(
+                    app_el, title_hints=_main_window_title_hints(self.profile)
+                )
                 if areas:
                     # Top-most text area = editor; None positions sort last.
+                    # C33: areas come from the main window only — a frontmost
+                    # modal dialog's field can never receive editor focus.
                     top_el, top_y = min(
                         areas, key=lambda t: t[1] if t[1] is not None else 1e9
                     )
@@ -1582,7 +1610,9 @@ end tell
             if pid is None:
                 return None
             app_el = ax_pyobjc.create_application(pid)
-            areas = ax_pyobjc.find_text_areas(app_el)
+            areas = ax_pyobjc.find_text_areas(
+                app_el, title_hints=_main_window_title_hints(self.profile)
+            )
             if not areas:
                 return None
             top_el, _ = min(
@@ -1613,6 +1643,50 @@ end tell
         )
         time.sleep(0.3)
         return True
+
+    def dismiss_modal_dialogs(self, max_modals: int = 3) -> None:
+        """C33 stage prep: a run must start from a clean main window. When the
+        target app's frontmost window is a modal (AXDialog/AXSheet), press its
+        Cancel button via AX (fallback: Esc via System Events), log
+        'wsda-modal-dismissed:<title>', and re-check — up to 3 stacked
+        modals. Any modal that will not dismiss halts the run:
+        'wsda-modal-stuck:<title>'."""
+        process_name = self.profile.focus_target or self.profile.app_name
+        try:
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is None:
+                return
+            app_el = ax_pyobjc.create_application(pid)
+        except ax_pyobjc.AxCallError as exc:
+            print(f"  [MODAL] wsda-modal-check-error detail={exc!r}", file=sys.stderr)
+            return
+        remaining: Optional[Tuple[Any, str]] = None
+        for _ in range(max_modals):
+            modal = ax_pyobjc.frontmost_modal(app_el)
+            if modal is None:
+                return
+            el, title = modal
+            try:
+                pressed = ax_pyobjc.press_button(el, "Cancel")
+            except ax_pyobjc.AxCallError:
+                pressed = False
+            if not pressed:
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        'tell application "System Events" to key code 53',
+                    ],
+                    capture_output=True,
+                    timeout=5,
+                )
+            time.sleep(0.4)
+            remaining = ax_pyobjc.frontmost_modal(app_el)
+            if remaining is not None and remaining[1] == title:
+                raise RuntimeError(f"wsda-modal-stuck:{title}")
+            print(f"  [MODAL] wsda-modal-dismissed:{title}", file=sys.stderr)
+        if remaining is not None:
+            raise RuntimeError(f"wsda-modal-stuck:{remaining[1]}")
 
     def ensure_editor_clean(self) -> None:
         """

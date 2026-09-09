@@ -3357,6 +3357,178 @@ class TestTargetContentConsistency(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestC33ModalDismissal(unittest.TestCase):
+    """C33: stage prep dismisses frontmost modal dialogs before the
+    editor-clean checkpoint; an undismissable modal halts the run."""
+
+    def _modal_seq(self, items):
+        """frontmost_modal side effect: pops the scripted sequence, then None
+        (no more modals) once exhausted — models a clean dismissal."""
+        queue = list(items)
+
+        def _next(*args, **kwargs):
+            return queue.pop(0) if queue else None
+
+        return _next
+
+    def _agent_with_modals(self, front_effect, press_result):
+        agent = VisionAgent()
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=7).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        mock.patch.object(
+            ax_pyobjc, "frontmost_modal", side_effect=front_effect
+        ).start()
+        press = mock.patch.object(
+            ax_pyobjc, "press_button", return_value=press_result
+        ).start()
+        mock.patch("compiler.vision_agent.subprocess.run").start()
+        mock.patch("time.sleep").start()
+        return agent, press
+
+    def test_frontmost_dialog_cancel_pressed_marker_proceeds(self) -> None:
+        """AXDialog frontmost: Cancel pressed via AX, marker logged, returns."""
+        agent, press = self._agent_with_modals(
+            self._modal_seq([("dlg", "Edit table definition")]), True
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent.dismiss_modal_dialogs()
+        press.assert_called_once_with("dlg", "Cancel")
+        self.assertIn("wsda-modal-dismissed:Edit table definition", buf.getvalue())
+        self.assertNotIn("wsda-modal-stuck", buf.getvalue())
+
+    def test_undismissable_dialog_halts_with_stuck_marker(self) -> None:
+        """Cancel missing and Esc ineffective: RuntimeError wsda-modal-stuck."""
+        self.addCleanup(mock.patch.stopall)
+        agent = VisionAgent()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=7).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        mock.patch.object(
+            ax_pyobjc, "frontmost_modal",
+            return_value=("dlg", "Edit table definition"),
+        ).start()
+        mock.patch.object(ax_pyobjc, "press_button", return_value=False).start()
+        mock.patch("compiler.vision_agent.subprocess.run").start()
+        mock.patch("time.sleep").start()
+        with self.assertRaises(RuntimeError) as ctx:
+            with contextlib.redirect_stderr(io.StringIO()):
+                agent.dismiss_modal_dialogs()
+        self.assertIn("wsda-modal-stuck:Edit table definition", str(ctx.exception))
+
+    def test_stacked_modals_dismissed_up_to_three(self) -> None:
+        """Three stacked modals: three Cancel presses, three markers, no halt.
+        Each dismissal reveals the next modal on the re-check, so the scripted
+        sequence repeats each modal (loop-top read + post-dismissal re-check)."""
+        agent, press = self._agent_with_modals(
+            self._modal_seq(
+                [("d1", "One"), ("d2", "Two"), ("d2", "Two"),
+                 ("d3", "Three"), ("d3", "Three"), None]
+            ),
+            True,
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            agent.dismiss_modal_dialogs()
+        self.assertEqual(press.call_count, 3)
+        for title in ("One", "Two", "Three"):
+            self.assertIn(f"wsda-modal-dismissed:{title}", buf.getvalue())
+
+
+class TestC33EditorResolvedFromMainWindow(unittest.TestCase):
+    """C33: with a modal dialog's text area and the main-window editor both
+    present, length reads and clears target the main-window editor only."""
+
+    def _two_window_tree(self):
+        """Dialog window holds the top-most (smallest-y) AXTextArea; the main
+        window (title carries the app name and .db filename) holds the editor
+        lower down — the pre-C33 poisoned configuration."""
+        tree = {
+            "app": {"AXWindows": ["dlg", "main"]},
+            "dlg": {
+                "AXRole": "AXWindow",
+                "AXSubrole": "AXDialog",
+                "AXTitle": "Edit table definition",
+                "AXChildren": ["dlg_ta"],
+            },
+            "dlg_ta": {"AXRole": "AXTextArea"},
+            "main": {
+                "AXRole": "AXWindow",
+                "AXSubrole": "AXStandardWindow",
+                "AXTitle": "DB Browser for SQLite - /tmp/wsda_music.db",
+                "AXChildren": ["editor"],
+            },
+            "editor": {"AXRole": "AXTextArea"},
+        }
+        y_positions = {"dlg_ta": 100.0, "editor": 400.0}
+        return tree, y_positions
+
+    def test_hint_scoped_traversal_excludes_dialog_text_area(self) -> None:
+        """title_hints restrict traversal to the main window; without hints
+        the dialog's preview is the poisonous top-most pick (pre-C33)."""
+        self.addCleanup(mock.patch.stopall)
+        tree, y_positions = self._two_window_tree()
+        mock.patch.object(
+            ax_pyobjc, "copy_attribute",
+            side_effect=lambda el, name: tree.get(el, {}).get(name),
+        ).start()
+        mock.patch.object(
+            ax_pyobjc, "element_position",
+            side_effect=lambda el: (0.0, y_positions[el]) if el in y_positions else None,
+        ).start()
+        scoped = ax_pyobjc.find_text_areas(
+            "app", title_hints=("DB Browser for SQLite", ".db")
+        )
+        self.assertEqual([el for el, _ in scoped], ["editor"])
+        unscoped = ax_pyobjc.find_text_areas("app")
+        top_el, _ = min(unscoped, key=lambda t: t[1] if t[1] is not None else 1e9)
+        self.assertEqual(top_el, "dlg_ta")
+
+    def test_length_read_and_clear_target_main_window_editor(self) -> None:
+        """_editor_text_length reads the editor's 9 chars, never the dialog's
+        21; ensure_editor_clean clears the editor and proceeds."""
+        self.addCleanup(mock.patch.stopall)
+        tree, y_positions = self._two_window_tree()
+        state = {"editor": "SELECT 1;", "dlg_ta": "x" * 21}
+
+        def _copy(el, name):
+            if name == "AXValue" and el in state:
+                return state[el]
+            return tree.get(el, {}).get(name)
+
+        mock.patch.object(ax_pyobjc, "copy_attribute", side_effect=_copy).start()
+        mock.patch.object(
+            ax_pyobjc, "element_position",
+            side_effect=lambda el: (0.0, y_positions[el]) if el in y_positions else None,
+        ).start()
+        mock.patch.object(ax_pyobjc, "app_pid_for_name", return_value=7).start()
+        mock.patch.object(ax_pyobjc, "create_application", return_value="app").start()
+        agent = VisionAgent()  # default profile: window_title_hint set
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            n = agent._editor_text_length()
+        self.assertEqual(n, 9)
+
+        mock.patch.object(agent, "_ensure_frontmost").start()
+        mock.patch.object(
+            agent, "_ensure_editor_focused_accessibility", return_value=True
+        ).start()
+        mock.patch("time.sleep").start()
+
+        def _keystroke(*args, **kwargs):
+            state["editor"] = ""
+
+        mock.patch(
+            "compiler.vision_agent.subprocess.run", side_effect=_keystroke
+        ).start()
+        buf2 = io.StringIO()
+        with contextlib.redirect_stderr(buf2):
+            agent.ensure_editor_clean()
+        self.assertIn("wsda-editor-dirty:9chars", buf2.getvalue())
+        self.assertIn("wsda-editor-cleared:9chars", buf2.getvalue())
+        self.assertEqual(state["dlg_ta"], "x" * 21)
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -3405,6 +3577,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC31CompositeClamp))
     suite.addTests(loader.loadTestsFromTestCase(TestC31SnapshotUsesProvider))
     suite.addTests(loader.loadTestsFromTestCase(TestC31TracebackLogged))
+    suite.addTests(loader.loadTestsFromTestCase(TestC33ModalDismissal))
+    suite.addTests(loader.loadTestsFromTestCase(TestC33EditorResolvedFromMainWindow))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

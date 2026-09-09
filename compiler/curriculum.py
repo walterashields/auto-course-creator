@@ -1246,8 +1246,10 @@ def run_course(
 
     # C25: app readiness — launch the target app if needed and poll the pyobjc
     # AX layer until it answers (fresh processes reject AX IPC for seconds);
-    # then C24 scratch-buffer hygiene — auto-clear any contamination from the
-    # SQL editor. Both run before any AX-dependent step in every pass.
+    # C33: dismiss any frontmost modal dialog ('Edit table definition') so the
+    # run starts from a clean main window; then C24 scratch-buffer hygiene —
+    # auto-clear any contamination from the SQL editor. All run before any
+    # AX-dependent step in every pass.
     from .vision_agent import VisionAgent, wait_for_app_readiness
 
     _preflight_profile = EnvironmentProfile(
@@ -1264,6 +1266,7 @@ def run_course(
     )
     _preflight_agent = VisionAgent(profile=_preflight_profile)
     wait_for_app_readiness(_preflight_agent, db_path=_preflight_db_path)
+    _preflight_agent.dismiss_modal_dialogs()
     _preflight_agent.ensure_editor_clean()
 
     # Determine whether TTS is available.
