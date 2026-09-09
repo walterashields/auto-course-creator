@@ -8,6 +8,7 @@ CourseManifest and VideoManifest schemas plus the multi-video pipeline.
 from __future__ import annotations
 
 import argparse
+import atexit
 import difflib
 import json
 import logging
@@ -1814,7 +1815,31 @@ def _dry_run_video(
 # ---------------------------------------------------------------------------
 
 
+def _capture_hygiene_snapshot(label: str) -> None:
+    """C32b: capture-hygiene observability — log capture-related processes.
+
+    Runs the same ps check as the C32a delivery probe (replayd /
+    screencapture / ScreenCapture, plus python/Terminal capture-pipeline
+    processes). Observational only — kills nothing. Registered at run start
+    and at process exit (run end): lingering capture processes after a run
+    are leaks and must be zero (the system ``replayd`` daemon excepted).
+    """
+    out = subprocess.run(
+        ["bash", "-c",
+         "ps aux | grep -i -E 'replayd|screencapture|ScreenCapture' | grep -v grep; "
+         "echo ---; ps aux | grep -i -E 'python|Terminal' | grep -v grep | "
+         "grep -i -E 'capture|record|screen|discover|curriculum|live_video'"],
+        capture_output=True, text=True, timeout=15,
+    )
+    lines = [ln for ln in out.stdout.strip().splitlines() if ln.strip()]
+    print(f"[CAPTURE-HYGIENE] {label}: {len(lines)} matching process line(s)", file=sys.stderr)
+    for ln in lines:
+        print(f"[CAPTURE-HYGIENE] {label}: {ln}", file=sys.stderr)
+
+
 def main() -> int:
+    _capture_hygiene_snapshot("run-start")
+    atexit.register(_capture_hygiene_snapshot, "run-end")
     parser = argparse.ArgumentParser(description="Build all videos for a course.")
     parser.add_argument(
         "--output-dir",
