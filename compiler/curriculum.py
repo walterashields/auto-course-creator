@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -1622,6 +1623,7 @@ def run_course(
             screenshot_paths: List[str] = []
             attempts = 0
             vlm_assessment = str(exc)
+            error_traceback = traceback.format_exc()
             local_discovery_result = locals().get("discovery_result")
             if local_discovery_result is not None:
                 actual = getattr(local_discovery_result, "final_editor_content", None)
@@ -1640,6 +1642,7 @@ def run_course(
                 vlm_assessment=vlm_assessment,
                 screenshot_paths=screenshot_paths,
                 attempts=attempts,
+                error_traceback=error_traceback,
             )
             raise
 
@@ -1721,6 +1724,7 @@ def _write_attempt_report(
     screenshot_paths: List[str],
     attempts: int = 0,
     output_path: Optional[str] = None,
+    error_traceback: Optional[str] = None,
 ) -> Path:
     """Write the C10 attempt report to output/attempt_report.json."""
     report_path = Path(output_path or "output/attempt_report.json")
@@ -1740,6 +1744,7 @@ def _write_attempt_report(
         "actual_editor_content": actual_editor_content,
         "diff": diff,
         "vlm_assessment": vlm_assessment or "",
+        "traceback": error_traceback or "",
         "cost_summary": get_tracker().summary(),
         "screenshot_paths": screenshot_paths,
         "loop_ceilings": _LOOP_CEILINGS,
@@ -1925,6 +1930,7 @@ def main() -> int:
                 )
             except Exception as exc:
                 print(f"[ITERATION] experiment {experiment} failed: {exc}", file=sys.stderr)
+                traceback.print_exc()
                 consecutive_passes = 0
                 continue
 
@@ -1997,6 +2003,7 @@ def main() -> int:
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        traceback.print_exc()
         return 1
 
     print(json.dumps(results, indent=2))

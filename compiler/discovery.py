@@ -401,30 +401,92 @@ def _find_window_id(app_name: str) -> Optional[int]:
     return None
 
 
+#: C31 sanity bounds for a candidate window rect (Quartz points). The target
+#: app window is wide (DB Browser ~1470x922, aspect ~1.6) and never tiny; a
+#: small utility window owned by the same process must never be picked.
+_BOUNDS_MIN_AREA_PTS2 = 400 * 300
+_BOUNDS_MIN_ASPECT = 1.2
+_BOUNDS_MAX_ASPECT = 2.5
+
+
+def _rect_passes_bounds_sanity(w: float, h: float) -> bool:
+    if w <= 0 or h <= 0:
+        return False
+    if w * h < _BOUNDS_MIN_AREA_PTS2:
+        return False
+    aspect = w / h
+    return _BOUNDS_MIN_ASPECT <= aspect <= _BOUNDS_MAX_ASPECT
+
+
 def _window_bounds(app_name: str) -> Optional[Dict[str, float]]:
-    """C30: return the on-screen bounds of ``app_name``'s window in Quartz
-    coordinates (points, origin bottom-left), or None when unavailable."""
+    """C31: validated on-screen bounds of ``app_name``'s window in Quartz
+    coordinates (points, origin bottom-left), or None when unavailable.
+
+    A candidate must be owned by the app's pid (ps-first resolution, C25) AND
+    pass sanity (min area, wide aspect, layer 0); the largest passing
+    candidate wins. No candidate passes => None + a 'wsda-bounds-rejected'
+    marker logging every candidate rect, and the caller falls back to the
+    live-capture path."""
     try:
         from Quartz import CoreGraphics
 
+        from .ax_pyobjc import app_pid_for_name
+
+        pid = app_pid_for_name(app_name)
+        if pid is None:
+            print(
+                f"wsda-bounds-rejected: no pid for {app_name!r}",
+                file=sys.stderr,
+            )
+            return None
         window_list = CoreGraphics.CGWindowListCopyWindowInfo(
             CoreGraphics.kCGWindowListOptionOnScreenOnly,
             CoreGraphics.kCGNullWindowID,
         )
+        candidates: List[Tuple[float, float, float, float]] = []
+        rejected: List[Tuple[float, float, float, float]] = []
         for entry in window_list:
-            owner = entry.get(CoreGraphics.kCGWindowOwnerName, "")
-            name = entry.get(CoreGraphics.kCGWindowName, "")
-            if owner == app_name or name == app_name:
-                b = entry[CoreGraphics.kCGWindowBounds]
-                return {
-                    "x": float(b["X"]),
-                    "y": float(b["Y"]),
-                    "w": float(b["Width"]),
-                    "h": float(b["Height"]),
-                }
+            entry_pid = entry.get(CoreGraphics.kCGWindowOwnerPID)
+            if entry_pid is None or int(entry_pid) != int(pid):
+                continue
+            if int(entry.get(CoreGraphics.kCGWindowLayer, 0)) != 0:
+                continue
+            b = entry[CoreGraphics.kCGWindowBounds]
+            rect = (
+                float(b["X"]),
+                float(b["Y"]),
+                float(b["Width"]),
+                float(b["Height"]),
+            )
+            if _rect_passes_bounds_sanity(rect[2], rect[3]):
+                candidates.append(rect)
+            else:
+                rejected.append(rect)
+        if candidates:
+            if rejected:
+                print(
+                    f"wsda-bounds-rejected: {len(rejected)} candidate(s) failed "
+                    f"sanity: {rejected}",
+                    file=sys.stderr,
+                )
+            x, y, w, h = max(candidates, key=lambda r: r[2] * r[3])
+            return {"x": x, "y": y, "w": w, "h": h}
+        print(
+            f"wsda-bounds-rejected: no sane window for {app_name!r} "
+            f"(pid={pid}); candidates={rejected}",
+            file=sys.stderr,
+        )
     except Exception as exc:
         print(f"Warning: could not get window bounds for {app_name}: {exc}", file=sys.stderr)
     return None
+
+
+#: C31: a grounding frame must never exceed full-screen size. Garbage bounds
+#: (e.g. a transient utility-window match, C30's 12376x19221 crash) become a
+#: graceful fallback, never a runaway canvas.
+_COMPOSITE_MIN_SCALE = 0.2
+_COMPOSITE_MAX_SCALE = 4.0
+_COMPOSITE_MAX_CANVAS_PIXELS = 4_000_000
 
 
 def _composite_window_frame(
@@ -432,7 +494,7 @@ def _composite_window_frame(
     bounds: Dict[str, float],
     screen_w_pts: float,
     screen_h_pts: float,
-) -> np.ndarray:
+) -> Optional[np.ndarray]:
     """C30: paste the window-only capture frame onto a full-screen canvas.
 
     ``frame`` is the SCK window capture (``CAPTURE_WIDTH`` x ``CAPTURE_HEIGHT``
@@ -442,13 +504,33 @@ def _composite_window_frame(
     at its real origin — so ``VisionAgent.screenshot()``'s uniform
     ``scale_to_logical`` (derived from width only) maps both axes exactly as
     it does for a full-screen ``screencapture``, menu-bar offset included.
+
+    C31: returns None (+ a 'wsda-composite-clamped' marker) when the implied
+    scale or canvas size is impossible for a real full-screen composite, so
+    the caller falls back to the live-capture path instead of materializing a
+    giant image downstream.
     """
     fh, fw = frame.shape[:2]
     if bounds["w"] <= 0 or bounds["h"] <= 0:
-        return frame
+        print("wsda-composite-clamped: non-positive bounds", file=sys.stderr)
+        return None
     scale = fw / bounds["w"]  # px per point (uniform for both axes)
+    if not (_COMPOSITE_MIN_SCALE <= scale <= _COMPOSITE_MAX_SCALE):
+        print(
+            f"wsda-composite-clamped: scale={scale:.3f} outside "
+            f"[{_COMPOSITE_MIN_SCALE}, {_COMPOSITE_MAX_SCALE}]",
+            file=sys.stderr,
+        )
+        return None
     canvas_w = int(round(screen_w_pts * scale))
     canvas_h = int(round(screen_h_pts * scale))
+    if canvas_w * canvas_h > _COMPOSITE_MAX_CANVAS_PIXELS:
+        print(
+            f"wsda-composite-clamped: canvas {canvas_w}x{canvas_h} "
+            f"exceeds {_COMPOSITE_MAX_CANVAS_PIXELS} px",
+            file=sys.stderr,
+        )
+        return None
     origin_x = int(round(bounds["x"] * scale))
     origin_y = int(round((screen_h_pts - bounds["y"] - bounds["h"]) * scale))
     canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
@@ -841,6 +923,15 @@ class _ScreenCaptureKitRecorder:
             screen_w, screen_h = pyautogui.size()
             canvas = _composite_window_frame(
                 frame, bounds, float(screen_w), float(screen_h)
+            )
+            if canvas is None:
+                return None
+            print(
+                "wsda-composite:"
+                f"x={bounds['x']:.0f},y={bounds['y']:.0f},"
+                f"w={bounds['w']:.0f},h={bounds['h']:.0f} "
+                f"scale={canvas.shape[1] / float(screen_w):.3f}",
+                file=sys.stderr,
             )
             rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
             return Image.fromarray(rgb)

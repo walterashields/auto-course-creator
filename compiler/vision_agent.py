@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -448,8 +449,9 @@ class VisionAgent:
         if provider is not None:
             try:
                 raw_img = provider()
-            except Exception as exc:
-                print(f"Warning: recorder frame provider failed: {exc}; using live capture", file=sys.stderr)
+            except Exception:
+                print("Warning: recorder frame provider failed; using live capture", file=sys.stderr)
+                traceback.print_exc()
         if raw_img is None:
             raw_img = self._capture_screen()
         self.last_raw_image = raw_img
@@ -2779,24 +2781,38 @@ end tell
         """C30: visual signature of the results pane's current state.
 
         Uses the shared recorder frame when a provider is active (zero extra
-        captures) and falls back to a live capture otherwise. The 8x8 gray
-        grid of the bottom (result-pane) strip combines row count, status
+        captures) and falls back to a live capture otherwise (dry-run). The 8x8
+        gray grid of the bottom (result-pane) strip combines row count, status
         text, and rendered content into one pixel signature.
+
+        C31: while a provider is set (mid-recording) this reads the provider
+        ONLY — never a live screencapture, which would reintroduce the C29
+        second-capture-path interference class. Provider returning None means
+        the pane is UNVERIFIABLE this attempt (retry path), not an excuse to
+        capture independently.
         """
-        img = None
         provider = getattr(self, "_frame_provider", None)
         if provider is not None:
+            img = None
             try:
                 img = provider()
             except Exception:
-                img = None
-        if img is None:
+                traceback.print_exc()
+            if img is None:
+                print(
+                    "  [RUN QUERY] results pane UNVERIFIABLE mid-recording "
+                    "(no provider frame)",
+                    file=sys.stderr,
+                )
+                return {"phash": None, "unverifiable": True}
+        else:
             try:
                 img = self._capture_screen()
             except Exception:
+                traceback.print_exc()
                 img = None
-        if img is None:
-            return {"phash": None}
+            if img is None:
+                return {"phash": None}
         w, h = img.size
         strip = (
             img.crop((0, int(h * 0.55), w, h))
@@ -2816,6 +2832,13 @@ end tell
         """
         deadline = time.monotonic() + timeout
         while True:
+            if before.get("unverifiable"):
+                print(
+                    "  [RUN QUERY] results pane UNVERIFIABLE (no pre-click "
+                    "provider frame); cannot confirm a state change",
+                    file=sys.stderr,
+                )
+                return False
             after = self._results_pane_snapshot()
             b, a = before.get("phash"), after.get("phash")
             if b is not None and a is not None:
@@ -2882,6 +2905,15 @@ end tell
 
         # C30: snapshot BEFORE any click so success requires a state change.
         pre_snapshot = self._results_pane_snapshot()
+        if pre_snapshot.get("unverifiable"):
+            # C31: mid-recording with no provider frame there is no way to
+            # prove freshness; abort cleanly so the beat retry path re-runs.
+            print(
+                "  [RUN QUERY] aborting for retry: results pane unverifiable "
+                "mid-recording",
+                file=sys.stderr,
+            )
+            return False
 
         run_button = self.profile.landmarks.get(
             "run_button",

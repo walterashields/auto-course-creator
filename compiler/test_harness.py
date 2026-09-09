@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -40,8 +41,10 @@ from compiler.discovery import (
     _final_editor_read,
     _open_video_writer,
     _ScreenCaptureKitRecorder,
+    _window_bounds,
     delivery_floor_breach,
 )
+from compiler import curriculum as curriculum_module
 from compiler.frame_analysis import detect_error_signature, frozen_share_percent, run_acceptance_gates
 from compiler.lesson_builder import LessonBuilder
 from compiler.narrator import ScriptBeat
@@ -2418,6 +2421,234 @@ class TestC30FinalReadResolvesFresh(unittest.TestCase):
         self.assertEqual(agent._focus_editor.call_count, 1)
 
 
+class TestC31BoundsValidation(unittest.TestCase):
+    """C31: _window_bounds accepts only a candidate owned by the target pid
+    that passes sanity (min area, wide aspect, layer 0), largest preferred.
+    Otherwise None + 'wsda-bounds-rejected' (all candidate rects logged) and
+    the caller falls back to the live-capture path."""
+
+    _PID = 4321
+
+    def _entry(self, pid, rect, layer=0):
+        x, y, w, h = rect
+        return {
+            "kCGWindowOwnerPID": pid,
+            "kCGWindowLayer": layer,
+            "kCGWindowOwnerName": "DB Browser for SQLite",
+            "kCGWindowName": "window",
+            "kCGWindowBounds": {"X": x, "Y": y, "Width": w, "Height": h},
+        }
+
+    def _bounds(self, entries, pid=_PID):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch(
+            "Quartz.CoreGraphics.CGWindowListCopyWindowInfo",
+            return_value=entries,
+        ), mock.patch(
+            "compiler.ax_pyobjc.app_pid_for_name", return_value=pid
+        ):
+            bounds = _window_bounds("DB Browser for SQLite")
+        return bounds, err.getvalue()
+
+    def test_tiny_utility_window_rejected_main_window_accepted(self) -> None:
+        entries = [
+            self._entry(self._PID, (0, 34, 1470, 922)),   # main window, sane
+            self._entry(self._PID, (10, 900, 120, 80)),   # utility window, tiny
+            self._entry(self._PID, (0, 0, 600, 400), layer=1),  # overlay layer
+        ]
+        bounds, log = self._bounds(entries)
+        self.assertEqual(
+            bounds, {"x": 0.0, "y": 34.0, "w": 1470.0, "h": 922.0}
+        )
+        self.assertIn("wsda-bounds-rejected", log)  # rejected rect logged
+        self.assertIn("(10.0, 900.0, 120.0, 80.0)", log)
+
+    def test_no_sane_candidate_returns_none_with_marker(self) -> None:
+        entries = [self._entry(self._PID, (10, 900, 120, 80))]
+        bounds, log = self._bounds(entries)
+        self.assertIsNone(bounds)
+        self.assertIn("wsda-bounds-rejected", log)
+
+    def test_wrong_pid_rejected_even_with_matching_name(self) -> None:
+        # C30's crash class: a same-named/owned window that is not the app
+        # pid's main window must never be picked.
+        entries = [self._entry(9999, (0, 34, 1470, 922))]
+        bounds, log = self._bounds(entries)
+        self.assertIsNone(bounds)
+        self.assertIn("wsda-bounds-rejected", log)
+
+    def test_largest_sane_candidate_wins(self) -> None:
+        entries = [
+            self._entry(self._PID, (0, 34, 1400, 900)),
+            self._entry(self._PID, (0, 34, 1470, 922)),
+        ]
+        bounds, _ = self._bounds(entries)
+        self.assertEqual(bounds["w"], 1470.0)
+
+
+class TestC31CompositeClamp(unittest.TestCase):
+    """C31: _composite_window_frame clamps impossible composites (garbage
+    scale or canvas) to None + 'wsda-composite-clamped' — never a giant
+    image, never a raise."""
+
+    def test_garbage_scale_returns_none_with_marker(self) -> None:
+        frame = np.zeros((800, 1280, 3), np.uint8)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            out = _composite_window_frame(
+                frame, {"x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0}, 1470.0, 956.0
+            )
+        self.assertIsNone(out)
+        self.assertIn("wsda-composite-clamped", err.getvalue())
+
+    def test_giant_canvas_returns_none(self) -> None:
+        frame = np.zeros((800, 1280, 3), np.uint8)
+        err = io.StringIO()
+        # scale = 1280/320 = 4.0 (allowed) but 8000x2400 = 19.2M px canvas.
+        with contextlib.redirect_stderr(err):
+            out = _composite_window_frame(
+                frame, {"x": 0.0, "y": 0.0, "w": 320.0, "h": 200.0}, 2000.0, 600.0
+            )
+        self.assertIsNone(out)
+        self.assertIn("wsda-composite-clamped", err.getvalue())
+
+    def test_valid_composite_unaffected(self) -> None:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            canvas = _composite_window_frame(
+                np.zeros((800, 1280, 3), np.uint8),
+                {"x": 0.0, "y": 56.0, "w": 1470.0, "h": 900.0},
+                1470.0,
+                956.0,
+            )
+        self.assertIsNotNone(canvas)
+        self.assertEqual(canvas.shape, (832, 1280, 3))
+        self.assertNotIn("wsda-composite-clamped", err.getvalue())
+
+
+class TestC31SnapshotUsesProvider(unittest.TestCase):
+    """C31: mid-recording, _results_pane_snapshot reads the recorder's
+    provider frame ONLY — zero live-capture calls. Provider returning None
+    means UNVERIFIABLE (retry path), and run_query aborts before clicking."""
+
+    def _agent_with_provider(self, frame):
+        from PIL import Image
+
+        agent = VisionAgent(model="test-model", output_dir="/tmp")
+        agent._frame_provider = lambda: frame
+        return agent
+
+    def test_mid_recording_reads_provider_only(self) -> None:
+        from PIL import Image
+
+        agent = self._agent_with_provider(Image.new("RGB", (1280, 832), (90, 90, 90)))
+        calls: List[int] = []
+
+        def fake_capture():
+            calls.append(1)
+            return Image.new("RGB", (10, 10))
+
+        with mock.patch.object(
+            VisionAgent, "_capture_screen", staticmethod(fake_capture)
+        ):
+            snap = agent._results_pane_snapshot()
+        self.assertEqual(calls, [])  # zero screencapture calls mid-recording
+        self.assertFalse(snap.get("unverifiable", False))
+        self.assertEqual(set(snap["phash"]), {90})
+
+    def test_provider_none_is_unverifiable_no_live_capture(self) -> None:
+        agent = self._agent_with_provider(None)
+        calls: List[int] = []
+
+        def fake_capture():
+            calls.append(1)
+            return None
+
+        with mock.patch.object(
+            VisionAgent, "_capture_screen", staticmethod(fake_capture)
+        ):
+            snap = agent._results_pane_snapshot()
+        self.assertEqual(calls, [])
+        self.assertTrue(snap["unverifiable"])
+
+    def test_run_query_aborts_for_retry_without_clicking(self) -> None:
+        agent = self._agent_with_provider(None)
+        agent._ensure_frontmost = mock.Mock()
+        agent._read_editor_content = mock.Mock(return_value="SELECT 1;")
+        agent._extract_uncommented_sql = mock.Mock(return_value=("SELECT 1;", None))
+        agent._verify_statement_isolation = mock.Mock(return_value=True)
+        with mock.patch.object(vision_agent_module.pyautogui, "click") as click:
+            self.assertFalse(agent.run_query())
+        click.assert_not_called()
+
+
+class TestC31TracebackLogged(unittest.TestCase):
+    """C31: failures in the run path log the FULL traceback — no str(exc)-only
+    catches anywhere the governor has to diagnose from."""
+
+    def test_attempt_report_carries_full_traceback(self) -> None:
+        from compiler.curriculum import CourseManifest, VideoManifest
+
+        manifest = CourseManifest(
+            course_id="test_course",
+            title="Test",
+            description="Test",
+            target_audience="Test",
+            videos=[
+                VideoManifest(
+                    video_id="video_1_1",
+                    title="Test Video",
+                    learning_objective="Test",
+                    discovery_objective="Test",
+                    application="db_browser_sqlite",
+                    format_tier="short",
+                )
+            ],
+        )
+        try:
+            raise RuntimeError("gate B2 failed")
+        except RuntimeError:
+            tb = traceback.format_exc()
+        tmpdir = tempfile.mkdtemp()
+        try:
+            report_path = Path(tmpdir) / "attempt_report.json"
+            _write_attempt_report(
+                manifest=manifest,
+                video_id="video_1_1",
+                error="gate B2 failed",
+                expected_editor_content="SELECT 1;",
+                actual_editor_content=None,
+                vlm_assessment="v",
+                screenshot_paths=[],
+                output_path=str(report_path),
+                error_traceback=tb,
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertIn("Traceback (most recent call last)", report["traceback"])
+            self.assertIn("RuntimeError: gate B2 failed", report["traceback"])
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_iteration_failure_logs_full_traceback(self) -> None:
+        err = io.StringIO()
+        argv = [
+            "prog",
+            "--only-video",
+            "video_1_1",
+            "--max-iterations",
+            "1",
+            "--output-mode",
+            "auto",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            curriculum_module, "run_course", side_effect=ValueError("boom")
+        ), contextlib.redirect_stderr(err):
+            rc = curriculum_module.main()
+        self.assertEqual(rc, 1)
+        self.assertIn("Traceback (most recent call last)", err.getvalue())
+        self.assertIn("ValueError: boom", err.getvalue())
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -3170,6 +3401,10 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC30ProviderFrameGeometry))
     suite.addTests(loader.loadTestsFromTestCase(TestC30FreshResultsRequired))
     suite.addTests(loader.loadTestsFromTestCase(TestC30FinalReadResolvesFresh))
+    suite.addTests(loader.loadTestsFromTestCase(TestC31BoundsValidation))
+    suite.addTests(loader.loadTestsFromTestCase(TestC31CompositeClamp))
+    suite.addTests(loader.loadTestsFromTestCase(TestC31SnapshotUsesProvider))
+    suite.addTests(loader.loadTestsFromTestCase(TestC31TracebackLogged))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
