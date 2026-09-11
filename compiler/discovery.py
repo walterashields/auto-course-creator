@@ -86,6 +86,14 @@ SCK_TEARDOWN_SETTLE_SECONDS = 2.0
 # cannot under-deliver, so only the SCK path reports delivery.)
 DELIVERY_FLOOR_FPS = 8.0
 
+# C34: capture backend switch. 'sck' (default) = push-based ScreenCaptureKit
+# window stream; 'mss' = pull-based mss grabs of the validated window bounds
+# behind the same wall-clock writer. The mss backend cannot under-deliver
+# (every tick grabs or duplicates), so its quality gate counts grab failures
+# instead of delivered fps (MSS_GRAB_FAILURE_FLOOR_PER_SECOND).
+_CAPTURE_BACKEND = os.environ.get("WSDA_CAPTURE_BACKEND", "sck").strip().lower()
+MSS_GRAB_FAILURE_FLOOR_PER_SECOND = 2
+
 
 def delivery_floor_breach(delivered_fps: Optional[float]) -> Optional[str]:
     """C27: return the wsda-low-delivery marker when delivery is below the floor."""
@@ -94,6 +102,33 @@ def delivery_floor_breach(delivered_fps: Optional[float]) -> Optional[str]:
     if delivered_fps < DELIVERY_FLOOR_FPS:
         return f"wsda-low-delivery {delivered_fps:.2f}fps<{DELIVERY_FLOOR_FPS:.0f}fps"
     return None
+
+
+def mss_floor_breach(summary: Optional[Dict[str, Any]]) -> Optional[str]:
+    """C34: mss quality gate — flag when any second had more than
+    MSS_GRAB_FAILURE_FLOOR_PER_SECOND failed grabs (a failed grab duplicates
+    the previous frame, so >2/s means the footage stutters on stale pixels)."""
+    if not summary:
+        return None
+    worst = 0
+    for bucket in summary.get("per_second") or []:
+        worst = max(worst, int(bucket.get("grabs_failed", 0)))
+    if worst > MSS_GRAB_FAILURE_FLOOR_PER_SECOND:
+        return (
+            f"wsda-mss-grab-fail {worst}failed/s>"
+            f"{MSS_GRAB_FAILURE_FLOOR_PER_SECOND}/s"
+        )
+    return None
+
+
+def _delivery_breach(delivery: Optional[Dict[str, Any]]) -> Optional[str]:
+    """C34: route the quality gate by backend — SCK under-delivery vs mss
+    grab failures. Unknown/missing delivery never flags (no recorder data)."""
+    if not delivery:
+        return None
+    if delivery.get("backend") == "mss":
+        return mss_floor_breach(delivery)
+    return delivery_floor_breach(delivery.get("delivered_fps"))
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -1284,6 +1319,320 @@ class _ScreenCaptureKitRecorder:
             self._writer.release()
             self._writer = None
         _ScreenCaptureKitRecorder._last_teardown_mono = time.monotonic()
+
+
+class _MssWindowRecorder:
+    """C34: pull-based mss capture of the target window's validated bounds,
+    behind the SAME wall-clock-anchored writer as the SCK recorder.
+
+    Why: the SCK stream is push-based — WindowServer decides when samples
+    arrive, and on static window content it can coalesce into a total stall
+    (C31/C33: healthy seconds 0-9, zero delivery seconds 10-13, identical
+    pre- and post-reboot). This backend PULLS: every writer tick grabs the
+    window's current pixels via mss, or duplicates the latest good frame on
+    failure. There is no delivery queue and no coalescing, so the failure
+    mode cannot occur.
+
+    Fidelity contract with the SCK path:
+    - same output size (TARGET_WIDTH=1280 resize) and avc1 writer;
+    - same per-second telemetry schema, plus ``grabs_failed`` per bucket and
+      a ``backend: "mss"`` marker; the quality gate switches to grab failures
+      (>2 failed grabs/s) via _delivery_breach;
+    - mss grabs exclude the cursor, so a cursor sprite is composited at the
+      polled pyautogui position every grabbed frame — same sprite the SCK
+      path draws;
+    - same stop invariant and first_frame_time for the beat timeline.
+
+    Accepted difference vs SCK: an overlapping window appears in the grab
+    (preflight's overlay check already guarantees a clean stage).
+    """
+
+    TARGET_WIDTH = 1280
+
+    def __init__(
+        self,
+        output_path: str,
+        fps: int = 10,
+        app_name: str = "",
+        grab_fn: Optional[Callable[[Dict[str, int]], np.ndarray]] = None,
+        cursor_fn: Optional[Callable[[], Tuple[float, float]]] = None,
+        bounds_fn: Optional[Callable[[], Optional[Dict[str, float]]]] = None,
+        logical_size_fn: Optional[Callable[[], Tuple[int, int]]] = None,
+    ):
+        self.output_path = Path(output_path)
+        self.fps = fps
+        self.app_name = app_name
+        self._writer: Optional[cv2.VideoWriter] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._frame_shape: Optional[Tuple[int, int]] = None
+        # C26: wall-clock time the first frame was written (timeline instrumentation).
+        self.first_frame_at: Optional[float] = None
+        # C27-schema per-second telemetry, finalized when the writer exits.
+        self.delivery_summary: Optional[Dict[str, Any]] = None
+        # C29: latest written frame, shared with VLM grounding while recording.
+        self._latest_frame: Optional[np.ndarray] = None
+        # Interface parity with the SCK recorder (never set on this backend).
+        self._fallback: Optional[ScreenRecorder] = None
+        self._max_ticks = MAX_SC_RECORDER_SAMPLES
+        # C34: bounds re-resolved at every start() (one recorder per beat).
+        self._bounds: Optional[Dict[str, float]] = None
+        # Injectable seams for tests; None => production implementations.
+        self._grab_fn = grab_fn
+        self._cursor_fn = cursor_fn or pyautogui.position
+        self._bounds_fn = bounds_fn or (
+            (lambda: _window_bounds(app_name)) if app_name else (lambda: None)
+        )
+        self._logical_size_fn = logical_size_fn or pyautogui.size
+        # Test override for the points->pixels scale; None => derive from the
+        # mss monitor dimensions at first grab.
+        self._scale: Optional[float] = None
+
+    def first_frame_time(self) -> Optional[float]:
+        return self.first_frame_at
+
+    def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+        if w <= self.TARGET_WIDTH:
+            return frame
+        scale = self.TARGET_WIDTH / w
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        new_w = new_w - (new_w % 2)
+        new_h = new_h - (new_h % 2)
+        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    def _draw_cursor(self, frame: np.ndarray) -> np.ndarray:
+        """C34: composite the cursor sprite at the polled position. The frame
+        is window-only (mss excludes the cursor), so the pipeline-drawn
+        cursor must be painted in — same sprite geometry as the SCK path."""
+        bounds = self._bounds
+        if not bounds:
+            return frame
+        try:
+            cursor_x, cursor_y = self._cursor_fn()
+        except Exception:
+            return frame
+        logical_w, logical_h = self._logical_size_fn()
+        if logical_w == 0 or logical_h == 0:
+            return frame
+        frame_h, frame_w = frame.shape[:2]
+        rel_x = float(cursor_x) - bounds["x"]
+        rel_y = float(cursor_y) - (logical_h - bounds["y"] - bounds["h"])
+        x = int(round(rel_x / bounds["w"] * frame_w))
+        y = int(round(rel_y / bounds["h"] * frame_h))
+        x = max(0, min(x, frame_w - 1))
+        y = max(0, min(y, frame_h - 1))
+        cv2.circle(frame, (x, y), 8, (0, 0, 0), 2)
+        cv2.circle(frame, (x, y), 5, (255, 0, 255), -1)
+        return frame
+
+    def _mss_region(self, sct: Any) -> Dict[str, int]:
+        """Convert the validated Quartz bounds (points, bottom-left origin)
+        into an mss grab region (physical pixels, top-left origin)."""
+        bounds = self._bounds or {}
+        logical_w, logical_h = self._logical_size_fn()
+        scale = self._scale
+        if scale is None:
+            scale = sct.monitors[0]["width"] / float(logical_w)
+        return {
+            "left": int(round(bounds["x"] * scale)),
+            "top": int(round((logical_h - bounds["y"] - bounds["h"]) * scale)),
+            "width": max(1, int(round(bounds["w"] * scale))),
+            "height": max(1, int(round(bounds["h"] * scale))),
+        }
+
+    def latest_frame_provider(self) -> Callable[[], Optional[Image.Image]]:
+        """C29 parity: share the latest grabbed window frame with VLM
+        grounding, composited onto a full-screen canvas. Identical logic to
+        the SCK recorder's provider."""
+        def provide() -> Optional[Image.Image]:
+            frame = self._latest_frame
+            if frame is None:
+                return None
+            if not self.app_name:
+                return None
+            bounds = _window_bounds(self.app_name)
+            if bounds is None:
+                return None
+            screen_w, screen_h = pyautogui.size()
+            canvas = _composite_window_frame(
+                frame, bounds, float(screen_w), float(screen_h)
+            )
+            if canvas is None:
+                return None
+            rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+            return Image.fromarray(rgb)
+        return provide
+
+    def _writer_loop(self) -> None:
+        # C34: same wall-clock anchoring as the SCK writer — frames are
+        # emitted at the output fps keyed to monotonic time; each tick PULLS
+        # current pixels (or duplicates the latest good frame on failure).
+        interval = 1.0 / self.fps
+        start_mono = time.monotonic()
+        next_fire = start_mono + interval
+        tick = 0
+        written = 0
+        grabbed = 0
+        failed = 0
+        last_frame: Optional[np.ndarray] = None
+        last_grab_mono: Optional[float] = None
+        first_write_mono: Optional[float] = None
+        last_write_mono: Optional[float] = None
+        second_buckets: List[Dict[str, Any]] = []
+        bucket: Dict[str, Any] = {}
+        bucket_index = -1
+        convert_ms_samples: List[float] = []
+        encode_ms_samples: List[float] = []
+        region: Optional[Dict[str, int]] = None
+        sct: Any = None
+        try:
+            if self._grab_fn is None:
+                sct = mss.MSS()
+            while tick < self._max_ticks:
+                now = time.monotonic()
+                stop_requested = self._stop_event.is_set()
+                if now < next_fire:
+                    if stop_requested:
+                        break
+                    self._stop_event.wait(next_fire - now)
+                    now = time.monotonic()
+                    stop_requested = self._stop_event.is_set()
+                    if stop_requested and now < next_fire:
+                        break
+                sec = int(now - start_mono)
+                if sec != bucket_index:
+                    if bucket_index >= 0:
+                        second_buckets.append(bucket)
+                    bucket = {
+                        "frames_delivered": 0,
+                        "frames_written": 0,
+                        "grabs_failed": 0,
+                        "age_sum_ms": 0.0,
+                        "age_n": 0,
+                    }
+                    bucket_index = sec
+                # PULL: current pixels for this tick.
+                convert_t0 = time.monotonic()
+                frame: Optional[np.ndarray] = None
+                try:
+                    if region is None:
+                        region = (
+                            {"left": 0, "top": 0, "width": 0, "height": 0}
+                            if self._grab_fn is not None
+                            else self._mss_region(sct)
+                        )
+                    if self._grab_fn is not None:
+                        arr = self._grab_fn(region)
+                    else:
+                        arr = np.array(sct.grab(region))
+                    frame = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+                    frame = self._resize_frame(frame)
+                    frame = self._draw_cursor(frame)
+                    grabbed += 1
+                    bucket["frames_delivered"] += 1
+                    last_frame = frame
+                    self._latest_frame = frame
+                    last_grab_mono = time.monotonic()
+                except Exception as exc:
+                    failed += 1
+                    bucket["grabs_failed"] += 1
+                    if failed == 1 or failed % 50 == 0:
+                        print(
+                            f"Warning: mss grab failed ({failed} so far): {exc}",
+                            file=sys.stderr,
+                        )
+                convert_ms_samples.append((time.monotonic() - convert_t0) * 1000.0)
+                if last_frame is not None:
+                    if self._writer is None:
+                        h, w = last_frame.shape[:2]
+                        self._frame_shape = (w, h)
+                        self._writer = _open_video_writer(
+                            self.output_path, self.fps, (w, h)
+                        )
+                    if self.first_frame_at is None:
+                        self.first_frame_at = time.time()
+                    encode_t0 = time.monotonic()
+                    self._writer.write(last_frame)
+                    encode_ms_samples.append((time.monotonic() - encode_t0) * 1000.0)
+                    written += 1
+                    bucket["frames_written"] += 1
+                    if first_write_mono is None:
+                        first_write_mono = now
+                    last_write_mono = now
+                    if last_grab_mono is not None:
+                        bucket["age_sum_ms"] += (now - last_grab_mono) * 1000.0
+                        bucket["age_n"] += 1
+                tick += 1
+                next_fire += interval
+                if stop_requested:
+                    break
+        finally:
+            if sct is not None:
+                try:
+                    sct.close()
+                except Exception:
+                    pass
+        if bucket_index >= 0:
+            second_buckets.append(bucket)
+        span = max((last_write_mono or time.monotonic()) - start_mono, 1e-6)
+        written_span = (
+            max(last_write_mono - first_write_mono, 0.0) + interval
+            if first_write_mono is not None
+            else 0.0
+        )
+        self.delivery_summary = {
+            "backend": "mss",
+            "span_seconds": round(span, 3),
+            "frames_delivered": grabbed,
+            "frames_written": written,
+            "grabs_failed": failed,
+            "delivered_fps": round(grabbed / span, 3) if span else 0.0,
+            "written_fps": round(written / written_span, 3) if written_span else 0.0,
+            "expected_written": int(round(written_span * self.fps)),
+            "per_second": second_buckets,
+            "convert_ms_p50": _p50(convert_ms_samples),
+            "convert_ms_max": round(max(convert_ms_samples), 2) if convert_ms_samples else 0.0,
+            "encode_ms_p50": _p50(encode_ms_samples),
+            "encode_ms_max": round(max(encode_ms_samples), 2) if encode_ms_samples else 0.0,
+        }
+        if tick >= self._max_ticks:
+            print(
+                f"[CIRCUIT BREAKER] _MssWindowRecorder hit tick ceiling "
+                f"({self._max_ticks}); stopping writer loop.",
+                file=sys.stderr,
+            )
+
+    def start(self) -> None:
+        self._stop_event.clear()
+        self._bounds = self._bounds_fn()
+        if self._bounds is None:
+            raise RuntimeError(
+                f"wsda-mss-no-bounds: no validated window bounds for "
+                f"{self.app_name!r}; cannot pull-capture"
+            )
+        self._thread = threading.Thread(target=self._writer_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+        _ScreenCaptureKitRecorder._last_teardown_mono = time.monotonic()
+
+
+def _make_window_recorder(
+    output_path: str, fps: int = 10, app_name: str = ""
+) -> Any:
+    """C34: window recorder factory — WSDA_CAPTURE_BACKEND=sck|mss (default sck)."""
+    if _CAPTURE_BACKEND == "mss":
+        print("wsda-capture-backend:mss", file=sys.stderr)
+        return _MssWindowRecorder(str(output_path), fps=fps, app_name=app_name)
+    return _ScreenCaptureKitRecorder(str(output_path), fps=fps, app_name=app_name)
 
 
 def test_window_capture_occlusion(
@@ -2787,7 +3136,7 @@ class EndStateDiscovery:
             step_video_path = self.output_dir / f"{run_id}_step_{step_idx}.mp4"
             recorder: Any = ScreenRecorder(str(step_video_path), fps=10)
             if self.profile and self.profile.app_name:
-                recorder = _ScreenCaptureKitRecorder(
+                recorder = _make_window_recorder(
                     str(step_video_path), fps=10, app_name=self.profile.app_name
                 )
             recorder.start()
@@ -3701,7 +4050,7 @@ class EndStateDiscovery:
     def _capture_warmup(self, run_id: str) -> None:
         """C28: sacrificial scratch capture so beat_001's stream is not the first."""
         scratch = self.output_dir / f"{run_id}_warmup.mp4"
-        recorder = _ScreenCaptureKitRecorder(
+        recorder = _make_window_recorder(
             str(scratch),
             fps=10,
             app_name=self.profile.app_name if self.profile else "",
@@ -4049,7 +4398,7 @@ class EndStateDiscovery:
 
                 recorder: Any = ScreenRecorder(str(clip_path), fps=10)
                 if self.profile and self.profile.app_name:
-                    recorder = _ScreenCaptureKitRecorder(
+                    recorder = _make_window_recorder(
                         str(clip_path), fps=10, app_name=self.profile.app_name
                     )
                 audio_proc: Optional[subprocess.Popen] = None
@@ -4621,12 +4970,9 @@ class EndStateDiscovery:
                     break
 
                 if beat_ok:
-                    # C27: delivery-floor quality gate — the wall-clock writer
-                    # keeps clip length correct even at low delivery, but the
-                    # footage is choppy; re-shoot with a distinct marker.
-                    breach = delivery_floor_breach(
-                        (tl.get("delivery") or {}).get("delivered_fps")
-                    )
+                    # C27/C34: delivery quality gate — SCK under-delivery vs
+                    # mss grab failures, routed by backend marker.
+                    breach = _delivery_breach(tl.get("delivery"))
                     if breach:
                         print(
                             f"[LOW-DELIVERY] {beat.beat_id} attempt {retry + 1}: "

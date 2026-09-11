@@ -3529,6 +3529,134 @@ class TestC33EditorResolvedFromMainWindow(unittest.TestCase):
         self.assertEqual(state["dlg_ta"], "x" * 21)
 
 
+class TestC34MssBackend(unittest.TestCase):
+    """C34: pull-based mss window capture — same wall-clock writer semantics,
+    grab failures duplicate + count, cursor sprite composited per frame."""
+
+    def _recorder(self, tmp: str, grab_fn, **kwargs):
+        from compiler.discovery import _MssWindowRecorder
+
+        rec = _MssWindowRecorder(
+            str(Path(tmp) / "c34.mp4"),
+            fps=10,
+            app_name="FakeApp",
+            grab_fn=grab_fn,
+            cursor_fn=kwargs.pop("cursor_fn", lambda: (50.0, 20.0)),
+            bounds_fn=lambda: {"x": 0.0, "y": 0.0, "w": 200.0, "h": 100.0},
+            logical_size_fn=lambda: (200, 100),
+            **kwargs,
+        )
+        rec._scale = 1.0
+        rec._max_ticks = 10
+        return rec
+
+    def _run(self, rec) -> dict:
+        rec.start()
+        assert rec._thread is not None
+        rec._thread.join(timeout=10.0)
+        rec.stop()
+        assert rec.delivery_summary is not None
+        return rec.delivery_summary
+
+    def test_ten_ticks_ten_frames_all_grabbed(self) -> None:
+        """10 wall-clock ticks with a healthy grabber: 10 grabs, 10 writes,
+        zero failures, full per-second telemetry."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        rec = self._recorder(tmp, lambda region: np.zeros((100, 200, 4), np.uint8))
+        summary = self._run(rec)
+        self.assertEqual(summary["backend"], "mss")
+        self.assertEqual(summary["frames_delivered"], 10)
+        self.assertEqual(summary["frames_written"], 10)
+        self.assertEqual(summary["grabs_failed"], 0)
+        self.assertEqual(sum(b["frames_written"] for b in summary["per_second"]), 10)
+        cap = cv2.VideoCapture(str(rec.output_path))
+        self.assertTrue(cap.isOpened())
+        n = 0
+        while True:
+            ok, _frame = cap.read()
+            if not ok:
+                break
+            n += 1
+        cap.release()
+        self.assertEqual(n, 10)
+
+    def test_grab_exception_duplicates_latest_and_counts(self) -> None:
+        """Failing grabs never drop a write: the latest good frame is
+        duplicated and the failure lands in grabs_failed."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        calls = {"n": 0}
+
+        def flaky(region):
+            calls["n"] += 1
+            if calls["n"] in (3, 7):
+                raise RuntimeError("grab boom")
+            return np.zeros((100, 200, 4), np.uint8)
+
+        rec = self._recorder(tmp, flaky)
+        summary = self._run(rec)
+        self.assertEqual(summary["frames_delivered"], 8)
+        self.assertEqual(summary["frames_written"], 10)
+        self.assertEqual(summary["grabs_failed"], 2)
+        self.assertEqual(
+            sum(b["grabs_failed"] for b in summary["per_second"]), 2
+        )
+
+    def test_cursor_sprite_drawn_at_polled_position(self) -> None:
+        """The mss grab excludes the cursor; the sprite is composited at the
+        polled logical position — verify its pixels in the written frame."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        rec = self._recorder(tmp, lambda region: np.zeros((100, 200, 4), np.uint8))
+        self._run(rec)
+        cap = cv2.VideoCapture(str(rec.output_path))
+        ok, frame = cap.read()
+        cap.release()
+        self.assertTrue(ok)
+        # Window 200x100 logical == frame pixels; cursor at (50, 20) maps to
+        # the same pixel (no resize below TARGET_WIDTH). Sprite center is a
+        # filled magenta circle (BGR 255,0,255); codec loss gets tolerance.
+        px = frame[20, 50]
+        self.assertGreater(int(px[0]), 200)  # B
+        self.assertLess(int(px[1]), 80)      # G
+        self.assertGreater(int(px[2]), 200)  # R
+        # Off-sprite pixels stay black.
+        away = frame[80, 180]
+        self.assertLess(int(away.sum()), 60)
+
+
+class TestC34MssFloorGate(unittest.TestCase):
+    """C34: the mss quality gate flags seconds with too many failed grabs."""
+
+    def test_failures_over_threshold_flagged(self) -> None:
+        from compiler.discovery import mss_floor_breach
+
+        summary = {
+            "backend": "mss",
+            "per_second": [
+                {"grabs_failed": 0},
+                {"grabs_failed": 3},
+            ],
+        }
+        breach = mss_floor_breach(summary)
+        self.assertIsNotNone(breach)
+        self.assertIn("wsda-mss-grab-fail", breach)
+
+    def test_failures_under_threshold_pass(self) -> None:
+        from compiler.discovery import mss_floor_breach
+
+        summary = {
+            "backend": "mss",
+            "per_second": [
+                {"grabs_failed": 0},
+                {"grabs_failed": 2},
+            ],
+        }
+        self.assertIsNone(mss_floor_breach(summary))
+        self.assertIsNone(mss_floor_breach(None))
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -3579,6 +3707,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC31TracebackLogged))
     suite.addTests(loader.loadTestsFromTestCase(TestC33ModalDismissal))
     suite.addTests(loader.loadTestsFromTestCase(TestC33EditorResolvedFromMainWindow))
+    suite.addTests(loader.loadTestsFromTestCase(TestC34MssBackend))
+    suite.addTests(loader.loadTestsFromTestCase(TestC34MssFloorGate))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
