@@ -3689,17 +3689,24 @@ end tell
 
         return None
 
-    def _move_to_target(self, target: str) -> bool:
+    def _move_to_target(self, target: str, duration: float = 0.7) -> bool:
         point = self._resolve_choreography_target(target)
         if point is None:
             return self.emphasize_element(target, select=False)
         try:
-            pyautogui.moveTo(point[0], point[1], duration=0.7, tween=pyautogui.easeInOutQuad)
+            move_duration = max(0.25, duration)
+            pyautogui.moveTo(point[0], point[1], duration=move_duration, tween=pyautogui.easeInOutQuad)
             time.sleep(0.05)
             return True
         except Exception as exc:
             print(f"Warning: direct choreography move failed: {exc}", file=sys.stderr)
             return False
+
+    def _item_move_duration(self, item: Dict[str, Any], base: float) -> float:
+        # C35: scheduled plans may carry a speed factor (compression order b);
+        # cap the speed-up so motion stays deliberate.
+        speed = float(item.get("speed", 1.0) or 1.0)
+        return max(0.25, base / max(1.0, min(2.0, speed)))
 
     def execute_choreography_item(self, item: Dict[str, Any]) -> bool:
         """
@@ -3719,9 +3726,9 @@ end tell
             time.sleep(duration)
             return True
         if action_type == "hover":
-            return self._move_to_target(target)
+            return self._move_to_target(target, duration=self._item_move_duration(item, 0.7))
         if action_type == "click":
-            if not self._move_to_target(target):
+            if not self._move_to_target(target, duration=self._item_move_duration(item, 0.7)):
                 return False
             try:
                 pyautogui.click()
@@ -3736,9 +3743,10 @@ end tell
                 return self.emphasize_element(target, select=True)
             try:
                 x, y = point
-                pyautogui.moveTo(x, y, duration=0.4, tween=pyautogui.easeInOutQuad)
+                leg = self._item_move_duration(item, 0.4)
+                pyautogui.moveTo(x, y, duration=leg, tween=pyautogui.easeInOutQuad)
                 pyautogui.mouseDown()
-                pyautogui.moveTo(x + 150, y, duration=0.4, tween=pyautogui.easeInOutQuad)
+                pyautogui.moveTo(x + 150, y, duration=leg, tween=pyautogui.easeInOutQuad)
                 pyautogui.mouseUp()
                 time.sleep(0.2)
                 return True
@@ -3765,7 +3773,7 @@ end tell
         self,
         items: List[Dict[str, Any]],
         max_duration: Optional[float] = None,
-    ) -> bool:
+    ) -> int:
         """
         Run a list of choreography items sequentially.
 
@@ -3773,11 +3781,19 @@ end tell
         budget and truncates the final pause so the recorded clip stays within
         the narration-paced timing contract.  Leftover time is spent resting on
         the last target; cursor patrol/filler motion is banned (C15).
+
+        C35: coverage is a hard invariant — an item is never skipped while it
+        is its sentence's only remaining gesture.  When the budget is spent,
+        remaining uncovered sentences still get their gesture (slightly past
+        the soft budget); only covered sentences' redundant items are dropped.
+
+        Returns the number of items executed from the front of ``items``.
         """
         start = time.time()
-        ok = True
+        executed = 0
         last_target: Optional[str] = None
         last_sentence_idx: Optional[int] = None
+        gestured_sentences: Set[int] = set()
 
         for i, item in enumerate(items):
             item = dict(item)
@@ -3785,28 +3801,38 @@ end tell
             if max_duration is not None:
                 elapsed = time.time() - start
                 remaining = max(0.0, max_duration - elapsed)
-                if remaining <= 0.05:
+                # C35: never skip a sentence's last remaining gesture.
+                later_uncovered = any(
+                    it.get("sentence_idx", 0) not in gestured_sentences
+                    for it in items[i:]
+                    if it.get("type") in ("hover", "click", "scroll", "drag")
+                )
+                if remaining <= 0.05 and not later_uncovered:
                     remaining_items = len(items) - i
                     if remaining_items:
                         print(
-                            f"  [CHOREO] time budget exhausted; skipping {remaining_items} item(s)",
+                            f"  [CHOREO] time budget exhausted; skipping {remaining_items} redundant item(s)",
                             file=sys.stderr,
                         )
                     break
                 if item.get("type") == "pause":
-                    # C15: resting on a target is correct teaching, but no single
-                    # still run may exceed 6s (B3 anti-stall gate). Cap each pause
-                    # at 5.0s so combined rests cannot breach it.
-                    item["duration"] = min(float(item.get("duration", 0.5)), remaining, 5.0)
+                    # C15/C35: resting on a target is correct teaching, but no
+                    # single still run may approach the 6.0s B3 anti-stall gate.
+                    # Cap each pause at 5.0s so combined rests cannot breach it.
+                    item["duration"] = min(
+                        float(item.get("duration", 0.5)), max(remaining, 0.0), 5.0
+                    )
 
             target = item.get("target", "")
             print(
                 f"  [CHOREO] {item.get('type')} {target[:60]}",
                 file=sys.stderr,
             )
-            if not self.execute_choreography_item(item):
-                ok = False
+            self.execute_choreography_item(item)
+            executed += 1
 
+            if item.get("type") in ("hover", "click", "scroll", "drag"):
+                gestured_sentences.add(item.get("sentence_idx", 0))
             if item.get("type") in ("hover", "click") and target:
                 last_target = target
                 last_sentence_idx = item.get("sentence_idx")
@@ -3832,14 +3858,23 @@ end tell
                             sentence_targets.append(t)
 
                 current_idx = sentence_targets.index(last_target) if last_target in sentence_targets else 0
+                rested_same_target = 0.0
 
                 while leftover > 0.05:
                     rest = min(leftover, 5.0)
+                    if len(sentence_targets) <= 1:
+                        # C35: a single-target sentence cannot lawfully move; cap
+                        # consecutive still time below the B3 gate instead of
+                        # chaining 5s rests into one long parked run.
+                        rest = min(rest, max(0.0, 4.5 - rested_same_target))
+                        if rest <= 0.05:
+                            break
                     print(
                         f"  [CHOREO] resting {rest:.2f}s on '{last_target[:60]}'",
                         file=sys.stderr,
                     )
                     time.sleep(rest)
+                    rested_same_target += rest
                     elapsed = time.time() - start
                     leftover = max(0.0, max_duration - elapsed)
                     if leftover <= 0.05:
@@ -3855,6 +3890,7 @@ end tell
                     )
                     self._move_to_target(next_target)
                     last_target = next_target
+                    rested_same_target = 0.0
                     elapsed = time.time() - start
                     leftover = max(0.0, max_duration - elapsed)
             elif leftover > 0.05:
@@ -3863,7 +3899,7 @@ end tell
                     file=sys.stderr,
                 )
                 time.sleep(leftover)
-        return ok
+        return executed
 
     def frame_shows_error_signature(self, frame_path: str) -> bool:
         """Return True if ``frame_path`` matches the profile's error_signature (pixel check)."""

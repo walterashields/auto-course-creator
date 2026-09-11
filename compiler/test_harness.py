@@ -3657,6 +3657,210 @@ class TestC34MssFloorGate(unittest.TestCase):
         self.assertIsNone(mss_floor_breach(None))
 
 
+class TestC35SchedulerCoverage(unittest.TestCase):
+    """C35: the choreography scheduler keeps coverage under a tight budget.
+
+    Hard invariants: every narration sentence keeps at least one gesture; an
+    item is never skipped while it is its sentence's only gesture. Compression
+    order: rests to the floor first, then gesture speed, then (and only then)
+    redundant items. Execution invariants: no still block > 5s, first motion
+    within 2s, plan ends with a gesture.
+    """
+
+    @staticmethod
+    def _hover(target: str, sidx: int) -> Dict[str, Any]:
+        return {"type": "hover", "target": target, "sentence_idx": sidx}
+
+    @staticmethod
+    def _pause(sidx: int, duration: float = 1.5) -> Dict[str, Any]:
+        return {"type": "pause", "duration": duration, "sentence_idx": sidx}
+
+    @classmethod
+    def _plan(cls) -> List[Dict[str, Any]]:
+        # beat_003 replica: sentence 0 chains four hovers to one target.
+        return [
+            cls._hover("the SELECT clause in the SQL editor", 0), cls._pause(0),
+            cls._hover("the SELECT clause in the SQL editor", 0), cls._pause(0),
+            cls._hover("the SELECT clause in the SQL editor", 0), cls._pause(0),
+            cls._hover("the SELECT clause in the SQL editor", 0), cls._pause(0),
+            cls._hover("the SQL editor text area", 1), cls._pause(1),
+            cls._hover("the comment block in the SQL editor", 2), cls._pause(2),
+            cls._hover("the SELECT clause in the SQL editor", 2), cls._pause(2),
+        ]
+
+    @staticmethod
+    def _sentences(plan: List[Dict[str, Any]]) -> set:
+        return {
+            it.get("sentence_idx", 0)
+            for it in plan
+            if it.get("type") in ("hover", "click", "scroll", "drag")
+        }
+
+    @staticmethod
+    def _still_blocks(plan: List[Dict[str, Any]]) -> List[float]:
+        """Still blocks, mirroring _cap_choreo_still_blocks: a block opens with
+        a gesture to a new target (its move time included); rests and
+        same-target gestures extend it."""
+        from compiler.discovery import _CHOREO_GESTURE_COST
+
+        blocks: List[float] = []
+        current = 0.0
+        last_target: Optional[str] = None
+        for it in plan:
+            if it.get("type") == "pause":
+                current += float(it.get("duration", 0.5))
+                continue
+            target = it.get("target", "")
+            speed = max(1.0, float(it.get("speed", 1.0)))
+            cost = _CHOREO_GESTURE_COST.get(it.get("type"), 0.5) / speed
+            if target and target != last_target:
+                blocks.append(current)
+                current = cost
+                last_target = target
+            else:
+                current += cost
+        blocks.append(current)
+        return blocks
+
+    def test_tight_budget_rests_compress_to_floor_before_any_skip(self) -> None:
+        from compiler.discovery import (
+            CHOREO_MAX_SPEED,
+            CHOREO_PAUSE_FLOOR,
+            _schedule_choreography,
+        )
+
+        plan = self._plan()
+        # Three of sentence 0's four hovers are same-target repeats and are
+        # always deduped (coverage keeps one); they are not budget skips.
+        full = len(plan) - 3
+        # Budget that forces compression but not redundancy drops: rests to the
+        # floor and full speed must absorb it.
+        scheduled = _schedule_choreography(plan, 14.5)
+        self.assertEqual(len(scheduled), full, "no item may drop before rests+speed are exhausted")
+        pauses = [it for it in scheduled if it.get("type") == "pause"]
+        speeds = [float(it.get("speed", 1.0)) for it in scheduled if it.get("type") != "pause"]
+        self.assertTrue(
+            all(it["duration"] >= CHOREO_PAUSE_FLOOR - 1e-6 for it in pauses),
+            "rests never compress below the floor",
+        )
+        self.assertLessEqual(max(speeds), CHOREO_MAX_SPEED, "gesture speed stays within bounds")
+
+    def test_no_sentence_left_gestureless_when_redundant_items_drop(self) -> None:
+        from compiler.discovery import _schedule_choreography
+
+        plan = self._plan()
+        wanted = self._sentences(plan)
+        # Tighter and tighter: coverage must survive every level.
+        for budget in (11.0, 8.0, 5.0, 3.0, 1.5):
+            scheduled = _schedule_choreography(plan, budget)
+            self.assertTrue(
+                wanted <= self._sentences(scheduled),
+                f"budget {budget}: sentences lost their only gesture",
+            )
+
+    def test_no_executed_park_over_five_seconds_and_lead_within_two(self) -> None:
+        from compiler.discovery import CHOREO_LEAD_CAP, _schedule_choreography
+
+        for budget in (17.69, 13.0, 9.0, 6.0, 4.0):
+            scheduled = _schedule_choreography(self._plan(), budget)
+            blocks = self._still_blocks(scheduled)
+            self.assertLessEqual(
+                max(blocks), 5.0, f"budget {budget}: still block {max(blocks):.2f}s > 5s"
+            )
+            lead = 0.0
+            for it in scheduled:
+                if it.get("type") != "pause":
+                    break
+                lead += float(it.get("duration", 0.5))
+            self.assertLessEqual(lead, CHOREO_LEAD_CAP, "first motion must start within 2s")
+            self.assertIn(
+                scheduled[-1].get("type"), ("hover", "click", "scroll", "drag"),
+                "plan must end with a gesture so the clip tail is not parked",
+            )
+
+    def test_redundant_drop_only_after_rests_at_floor_and_speed_maxed(self) -> None:
+        from compiler.discovery import (
+            CHOREO_MAX_SPEED,
+            CHOREO_PAUSE_FLOOR,
+            _schedule_choreography,
+        )
+
+        plan = self._plan()
+        full = len(plan) - 3  # same-target repeats are always deduped first
+        # Binary-search the loosest budget that forces a drop.
+        dropped = None
+        for budget10 in range(50, 140):
+            budget = budget10 / 10.0
+            if len(_schedule_choreography(plan, budget)) < full:
+                dropped = budget
+                break
+        self.assertIsNotNone(dropped, "some budget must force a redundant drop")
+        scheduled = _schedule_choreography(plan, dropped)
+        pauses = [it for it in scheduled if it.get("type") == "pause"]
+        speeds = [float(it.get("speed", 1.0)) for it in scheduled if it.get("type") != "pause"]
+        self.assertTrue(
+            all(it["duration"] <= CHOREO_PAUSE_FLOOR + 1e-6 for it in pauses),
+            "rests must be at the floor before any redundant gesture drops",
+        )
+        self.assertTrue(
+            all(speed >= CHOREO_MAX_SPEED - 1e-6 for speed in speeds),
+            "gesture speed must be maxed before any redundant gesture drops",
+        )
+
+
+class TestC35GuardShape(unittest.TestCase):
+    """C35: the post-render final-frame guard derives the expected shape from
+    the actual video metadata instead of a hardcoded 1280x800."""
+
+    def test_dimensions_derived_from_video_metadata(self) -> None:
+        from compiler.curriculum import _video_stream_dimensions
+
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "clip.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "testsrc=duration=1:size=1280x802:rate=10",
+                    "-pix_fmt", "yuv420p", str(video),
+                ],
+                check=True, capture_output=True,
+            )
+            self.assertEqual(_video_stream_dimensions(str(video)), (1280, 802))
+
+    def test_guard_runs_when_shapes_differ_from_hardcoded(self) -> None:
+        from compiler.curriculum import _verify_final_frame_matches_locked_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "clip.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "testsrc=duration=2:size=1280x802:rate=10",
+                    "-pix_fmt", "yuv420p", str(video),
+                ],
+                check=True, capture_output=True,
+            )
+            # Locked screenshot at a deliberately different size/aspect: the
+            # guard must still run (no shape broadcast error) because it
+            # normalizes to the video's actual dimensions.
+            shot = Path(tmp) / "locked.png"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error", "-ss", "1.5", "-i", str(video),
+                    "-vframes", "1", "-vf", "scale=640:332", str(shot),
+                ],
+                check=True, capture_output=True,
+            )
+            result = mock.Mock()
+            result.locked_state = mock.Mock(screenshot_path=str(shot))
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                _verify_final_frame_matches_locked_state(str(video), result)
+            out = buf.getvalue()
+            self.assertNotIn("could not run final-frame check", out)
+            self.assertIn("MATCH", out)
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -3709,6 +3913,8 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC33EditorResolvedFromMainWindow))
     suite.addTests(loader.loadTestsFromTestCase(TestC34MssBackend))
     suite.addTests(loader.loadTestsFromTestCase(TestC34MssFloorGate))
+    suite.addTests(loader.loadTestsFromTestCase(TestC35SchedulerCoverage))
+    suite.addTests(loader.loadTestsFromTestCase(TestC35GuardShape))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

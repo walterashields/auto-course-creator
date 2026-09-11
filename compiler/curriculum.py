@@ -984,6 +984,29 @@ def _media_duration(path: str) -> Optional[float]:
         return None
 
 
+def _video_stream_dimensions(path: str) -> Optional[Tuple[int, int]]:
+    """ffprobe a video file's stream dimensions.
+
+    C35: the final-frame guard must derive its expected shape from the actual
+    video metadata — the rendered MP4 is 1280x802, not a hardcoded 1280x800.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0:s=x", path,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        dims = result.stdout.strip().split("x")
+        if len(dims) != 2:
+            return None
+        return (int(dims[0]), int(dims[1]))
+    except Exception:
+        return None
+
+
 def _verify_final_frame_matches_locked_state(
     video_path: str,
     discovery_result: Any,
@@ -998,7 +1021,8 @@ def _verify_final_frame_matches_locked_state(
     anti-aliasing while still being semantically identical.
 
     Diagnostics:
-      - Both images are normalized to 640 px wide grayscale before comparison.
+      - Both images are normalized to the video's actual dimensions
+        (ffprobe-derived, C35) before comparison.
       - Their original dimensions are logged.
       - On mismatch, both compared images are saved to discovery_output/.
     """
@@ -1036,14 +1060,20 @@ def _verify_final_frame_matches_locked_state(
             file=sys.stderr,
         )
 
-        # Normalize both to the same fixed width before comparing.
-        target_width = 640
+        # Normalize both to the video's actual dimensions (C35: derived from
+        # the video metadata, never a hardcoded size) so the comparison shapes
+        # always match — a shared width alone breaks when aspect ratios differ.
+        target_size = _video_stream_dimensions(video_path) or img_video_raw.size
+        print(
+            f"[POST-RENDER GUARD] normalizing both frames to video shape "
+            f"{target_size}",
+            file=sys.stderr,
+        )
+
         def _normalize(img: Image.Image) -> Image.Image:
-            w, h = img.size
-            if w == target_width:
+            if img.size == target_size:
                 return img
-            ratio = target_width / w
-            return img.resize((target_width, int(h * ratio)), Image.Resampling.LANCZOS)
+            return img.resize(target_size, Image.Resampling.LANCZOS)
 
         img_video = _normalize(img_video_raw)
         img_state = _normalize(img_state_raw)

@@ -199,64 +199,222 @@ def _clip_has_off_app_interval(
     return False
 
 
+# C35: choreography scheduling invariants. Coverage is hard — every narration
+# sentence keeps at least one gesture — and no still block may approach the
+# 6.0s B3 anti-stall gate, including across beat boundaries in the concatenated
+# video (a beat that ends parked next to a beat that starts parked merges into
+# one frozen run).
+CHOREO_PAUSE_FLOOR = 1.0
+CHOREO_PAUSE_CAP = 4.5
+CHOREO_LEAD_CAP = 2.0
+CHOREO_MAX_SPEED = 2.0
+CHOREO_GESTURE_TYPES = ("hover", "click", "scroll", "drag")
+_CHOREO_GESTURE_COST = {"hover": 0.9, "click": 1.1, "scroll": 0.9, "drag": 1.3}
+
+
+def _choreography_plan_cost(plan: List[Dict[str, Any]]) -> float:
+    """Estimated wall-clock cost of a scheduled choreography plan."""
+    total = 0.0
+    for it in plan:
+        t = it.get("type")
+        if t == "pause":
+            total += float(it.get("duration", 0.5))
+        else:
+            speed = max(1.0, float(it.get("speed", 1.0)))
+            total += _CHOREO_GESTURE_COST.get(t, 0.5) / speed
+    return total
+
+
 def _schedule_choreography(
     items: List[Dict[str, Any]],
     audio_duration: float,
     reserved_seconds: float = 0.0,
 ) -> List[Dict[str, Any]]:
     """
-    C16: compute pause durations so the total choreography fills the narration
-    window (audio_duration - 1.0s tail - reserved_seconds, ±0.5s tolerance).
-    Fixed 1.5s pauses are banned; every pause is derived from the available
-    window. Each pause is capped at 5.0s to satisfy the cursor-calm / anti-stall
-    rule. Any remaining time is left for the executor's rest-on-last-target
-    behavior.
+    C35: schedule choreography so the plan fills the narration window
+    (audio_duration - 1.0s tail - reserved_seconds) under hard invariants:
+
+      1. Coverage: every sentence keeps at least one gesture. An item is never
+         skipped while it is its sentence's only remaining gesture.
+      2. Compression order when the window is tight: (a) rests shrink toward a
+         1.0s floor; (b) gesture speed rises, up to 2x; (c) only then are
+         redundant gestures (sentences with 2+) dropped.
+      3. No still block exceeds 4.5s: rests separated only by motion to the
+         same target are one block. The plan leads with a gesture within 2.0s
+         and ends with a gesture so the clip tail is not parked.
     """
-    target = max(0.0, audio_duration - 1.0 - reserved_seconds)
-    if target <= 0.0 or not items:
-        return [dict(it) for it in items]
-
-    # Rough per-gesture motion cost. These are intentionally conservative so the
-    # computed pauses end up slightly shorter than the target; execute_choreography
-    # fills the remainder by resting on the last target.
-    GESTURE_COST = {
-        "hover": 0.5,
-        "click": 0.8,
-        "scroll": 0.8,
-        "drag": 1.0,
-    }
-
     scheduled: List[Dict[str, Any]] = [dict(it) for it in items]
-    pause_indices: List[int] = []
-    fixed_cost = 0.0
-    for i, it in enumerate(scheduled):
-        t = it.get("type")
-        if t == "pause":
-            pause_indices.append(i)
-        else:
-            fixed_cost += GESTURE_COST.get(t, 0.5)
+    target = max(0.0, audio_duration - 1.0 - reserved_seconds)
+    if target <= 0.0 or not scheduled:
+        return scheduled
 
-    available = max(0.0, target - fixed_cost)
-    if pause_indices:
-        base_pause = available / len(pause_indices)
-        for i in pause_indices:
-            scheduled[i]["duration"] = min(base_pause, 5.0)
-        # Redistribute any time shaved off by the 5.0s cap.
-        used = sum(scheduled[i]["duration"] for i in pause_indices)
-        remaining = available - used
-        while remaining > 0.05:
+    # C35: motion to the target the cursor already occupies is visually
+    # instant. Drop repeat same-target gestures up front — before any budget
+    # math — as long as the sentence keeps another gesture (coverage is a
+    # hard invariant). This frees both budget and still-block room; the time
+    # is redistributed into lawful rests below.
+    sentence_gesture_count: Dict[int, int] = {}
+    for it in scheduled:
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            s = it.get("sentence_idx", 0)
+            sentence_gesture_count[s] = sentence_gesture_count.get(s, 0) + 1
+    deduped: List[Optional[Dict[str, Any]]] = []
+    last_seen_target: Optional[str] = None
+    for it in scheduled:
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            t = it.get("target", "")
+            s = it.get("sentence_idx", 0)
+            if t and t == last_seen_target and sentence_gesture_count.get(s, 0) >= 2:
+                sentence_gesture_count[s] -= 1
+                deduped.append(None)
+                continue
+            last_seen_target = t
+        deduped.append(it)
+    scheduled = [it for it in deduped if it is not None]
+
+    pause_indices = [i for i, it in enumerate(scheduled) if it.get("type") == "pause"]
+    gesture_indices = [i for i, it in enumerate(scheduled) if it.get("type") in CHOREO_GESTURE_TYPES]
+
+    def cost() -> float:
+        return _choreography_plan_cost([it for it in scheduled if it is not None])
+
+    # --- (a) compress rests toward the floor, largest first ------------------
+    needed = cost() - target
+    if needed > 0.0:
+        for i in sorted(pause_indices, key=lambda j: -float(scheduled[j].get("duration", 0.5))):
+            if needed <= 0.0:
+                break
+            dur = float(scheduled[i].get("duration", 0.5))
+            reducible = max(0.0, dur - CHOREO_PAUSE_FLOOR)
+            take = min(reducible, needed)
+            scheduled[i]["duration"] = dur - take
+            needed -= take
+
+    # --- (b) speed gestures up within deliberate bounds ----------------------
+    if needed > 0.0 and gesture_indices:
+        gesture_total = sum(
+            _CHOREO_GESTURE_COST.get(scheduled[i].get("type"), 0.5) for i in gesture_indices
+        )
+        budget = max(0.0, gesture_total - needed)
+        if budget > 0.05:
+            speed = min(CHOREO_MAX_SPEED, gesture_total / budget)
+        else:
+            speed = CHOREO_MAX_SPEED
+        for i in gesture_indices:
+            scheduled[i]["speed"] = speed
+        needed = cost() - target
+
+    # --- (c) drop redundant gestures; a sentence's last gesture never is ------
+    while needed > 0.0:
+        per_sentence: Dict[int, List[int]] = {}
+        for i in gesture_indices:
+            if i < len(scheduled) and scheduled[i] is not None:
+                per_sentence.setdefault(scheduled[i].get("sentence_idx", 0), []).append(i)
+        redundant = {s: idxs for s, idxs in per_sentence.items() if len(idxs) >= 2}
+        if not redundant:
+            break
+        # Drop the latest gesture of the sentence with the most gestures.
+        sentence = max(redundant, key=lambda s: (len(redundant[s]), s))
+        drop = redundant[sentence][-1]
+        needed -= _CHOREO_GESTURE_COST.get(scheduled[drop].get("type"), 0.5) / max(
+            1.0, float(scheduled[drop].get("speed", 1.0))
+        )
+        scheduled[drop] = None  # type: ignore[assignment]
+        gesture_indices.remove(drop)
+
+    # --- redistribute slack back into rests (up to the per-rest cap) ---------
+    available_slack = target - cost()
+    if available_slack > 0.05:
+        live_pauses = [i for i in pause_indices if scheduled[i] is not None]
+        while available_slack > 0.05:
             progressed = False
-            for i in pause_indices:
-                if scheduled[i]["duration"] < 5.0 - 0.001:
-                    add = min(remaining, 5.0 - scheduled[i]["duration"], 0.5)
-                    scheduled[i]["duration"] += add
-                    remaining -= add
+            for i in live_pauses:
+                if available_slack <= 0.05:
+                    break
+                dur = float(scheduled[i].get("duration", 0.5))
+                if dur < CHOREO_PAUSE_CAP - 0.001:
+                    add = min(available_slack, CHOREO_PAUSE_CAP - dur, 0.5)
+                    scheduled[i]["duration"] = dur + add
+                    available_slack -= add
                     progressed = True
-                    if remaining <= 0.05:
-                        break
             if not progressed:
                 break
+
+    scheduled = [it for it in scheduled if it is not None]
+
+    # --- cap still blocks: rests split only by motion to a different target --
+    _cap_choreo_still_blocks(scheduled)
+
+    # --- lead with a gesture within CHOREO_LEAD_CAP seconds -------------------
+    lead = 0.0
+    for it in scheduled:
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            break
+        lead += float(it.get("duration", 0.5))
+    if lead > CHOREO_LEAD_CAP:
+        excess = lead - CHOREO_LEAD_CAP
+        for it in scheduled:
+            if it.get("type") in CHOREO_GESTURE_TYPES or excess <= 0.0:
+                break
+            dur = float(it.get("duration", 0.5))
+            take = min(dur, excess)
+            it["duration"] = dur - take
+            excess -= take
+
+    # --- end with a gesture so the clip tail is not parked --------------------
+    if scheduled and scheduled[-1].get("type") == "pause":
+        for i in range(len(scheduled) - 1, -1, -1):
+            if scheduled[i].get("type") in CHOREO_GESTURE_TYPES:
+                if i < len(scheduled) - 1:
+                    scheduled.append(scheduled.pop(i))
+                break
+
     return scheduled
+
+
+def _cap_choreo_still_blocks(plan: List[Dict[str, Any]]) -> None:
+    """Cap each visually-still block at CHOREO_PAUSE_CAP.
+
+    A still block is opened by a gesture to a new target; rests and any
+    same-target gestures (motion to the point the cursor already occupies is
+    visually instant) consume the block budget. Pauses are shrunk
+    largest-first, honoring CHOREO_PAUSE_FLOOR, until the block fits.
+    """
+    block: List[Dict[str, Any]] = []
+    block_gesture_cost = 0.0
+    last_target: Optional[str] = None
+
+    def flush() -> None:
+        nonlocal block_gesture_cost
+        budget = max(0.0, CHOREO_PAUSE_CAP - block_gesture_cost)
+        total = sum(float(it.get("duration", 0.5)) for it in block)
+        excess = total - budget
+        if excess > 0.0:
+            for it in sorted(block, key=lambda b: -float(b.get("duration", 0.5))):
+                if excess <= 0.0:
+                    break
+                dur = float(it.get("duration", 0.5))
+                take = min(max(0.0, dur - CHOREO_PAUSE_FLOOR), excess)
+                it["duration"] = dur - take
+                excess -= take
+        block.clear()
+        block_gesture_cost = 0.0
+
+    for it in plan:
+        if it.get("type") == "pause":
+            block.append(it)
+            continue
+        target = it.get("target", "")
+        speed = max(1.0, float(it.get("speed", 1.0)))
+        cost = _CHOREO_GESTURE_COST.get(it.get("type"), 0.5) / speed
+        if target and target != last_target:
+            flush()
+            last_target = target
+            block_gesture_cost = cost
+        else:
+            # Same-target motion: stillness continues across this gesture.
+            block_gesture_cost += cost
+    flush()
 
 
 def _extract_frame(video_path: str, out_path: str, offset: float = 0.5) -> bool:
@@ -4632,18 +4790,24 @@ class EndStateDiscovery:
                                         chunk = items[ptr:]
                                     choreo_pointer[sidx] = ptr + len(chunk)
                                     if chunk:
-                                        for orig_idx, _ in chunk:
-                                            executed_choreo_indices.add(orig_idx)
+                                        # C35: track exactly which items executed so
+                                        # the post-action and tail phases never
+                                        # re-run them.
                                         elapsed = time.time() - clip_start
                                         remaining_tts = (
                                             max(0.0, audio_duration - elapsed)
                                             if audio_duration
                                             else None
                                         )
-                                        agent.execute_choreography(
+                                        done = agent.execute_choreography(
                                             [it for _, it in chunk],
                                             max_duration=remaining_tts,
                                         )
+                                        for k, (orig_idx, _) in enumerate(chunk):
+                                            if k < done:
+                                                executed_choreo_indices.add(orig_idx)
+                                            else:
+                                                break
                             if beat_failed:
                                 break
                             # C16: one authoritative verification after all segments are
@@ -4731,12 +4895,12 @@ class EndStateDiscovery:
                         # C16: execute any remaining scheduled choreography during the
                         # remaining TTS window so every beat fills its narration duration.
                         if beat_ok and scheduled_choreo:
-                            remaining_choreo = [
-                                item
+                            remaining_pairs = [
+                                (idx, item)
                                 for idx, item in enumerate(scheduled_choreo)
                                 if idx not in executed_choreo_indices
                             ]
-                            if remaining_choreo:
+                            if remaining_pairs:
                                 elapsed = time.time() - clip_start
                                 remaining_tts = (
                                     max(0.0, audio_duration - elapsed)
@@ -4744,9 +4908,15 @@ class EndStateDiscovery:
                                     else None
                                 )
                                 if remaining_tts is None or remaining_tts > 0.1:
-                                    agent.execute_choreography(
-                                        remaining_choreo, max_duration=remaining_tts
+                                    done = agent.execute_choreography(
+                                        [it for _, it in remaining_pairs],
+                                        max_duration=remaining_tts,
                                     )
+                                    for k, (orig_idx, _) in enumerate(remaining_pairs):
+                                        if k < done:
+                                            executed_choreo_indices.add(orig_idx)
+                                        else:
+                                            break
                                 else:
                                     print(
                                         f"  [CHOREO] {beat.beat_id}: TTS already ended; skipping remaining choreography",
@@ -4874,10 +5044,21 @@ class EndStateDiscovery:
                                 # C14/C16: keep the cursor moving over named targets while
                                 # the narration finishes; a plain sleep would create a long
                                 # static run that fails the B3 anti-stall gate.
+                                # C35: only items not already executed earlier in this
+                                # beat — re-running the full plan double-counts the
+                                # spent budget and starves the plan's tail.
                                 if scheduled_choreo:
-                                    agent.execute_choreography(
-                                        scheduled_choreo, max_duration=remaining
-                                    )
+                                    tail_choreo = [
+                                        item
+                                        for idx, item in enumerate(scheduled_choreo)
+                                        if idx not in executed_choreo_indices
+                                    ]
+                                    if tail_choreo:
+                                        agent.execute_choreography(
+                                            tail_choreo, max_duration=remaining
+                                        )
+                                    else:
+                                        time.sleep(remaining)
                                 else:
                                     time.sleep(remaining)
                             elif remaining < -0.25:
