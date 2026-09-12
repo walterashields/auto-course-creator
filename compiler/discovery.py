@@ -47,6 +47,7 @@ from .schemas import DiscoveryResult, EnvironmentProfile, ExecutionGraph, Narrat
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
 from .target_resolver import (
     MIN_GESTURE_SEPARATION_PX,
+    describe_semantic_target,
     distance,
     distinct_alternatives,
 )
@@ -204,30 +205,53 @@ def _clip_has_off_app_interval(
     return False
 
 
-# C35: choreography scheduling invariants. Coverage is hard — every narration
-# sentence keeps at least one gesture — and no still block may approach the
-# 6.0s B3 anti-stall gate, including across beat boundaries in the concatenated
-# video (a beat that ends parked next to a beat that starts parked merges into
-# one frozen run).
+# C35/C38: choreography scheduling invariants. Coverage is hard — every
+# narration sentence keeps at least one gesture — and no contiguous stationary
+# stretch may exceed the C38 park cap of 3.5s, including the tail after the
+# last gesture and the lead before the first (the B3 detector samples at 1fps,
+# so a 3.5s park measures ~4-5s, safely under the 6.0s anti-stall gate).
 CHOREO_PAUSE_FLOOR = 1.0
-CHOREO_PAUSE_CAP = 4.5
+CHOREO_PAUSE_CAP = 3.5
 CHOREO_LEAD_CAP = 2.0
 CHOREO_MAX_SPEED = 2.0
+CHOREO_GLIDE_FLOOR_PX_S = 60.0
 CHOREO_GESTURE_TYPES = ("hover", "click", "scroll", "drag")
-_CHOREO_GESTURE_COST = {"hover": 0.9, "click": 1.1, "scroll": 0.9, "drag": 1.3}
+# C38: per-gesture wall-clock model at speed 1.0 = move base + settle time,
+# mirroring VisionAgent.execute_choreography_item (_item_move_duration move
+# plus post-gesture settle). The scheduler thus models executor seconds, not
+# an abstract cost — fill decisions are made in the time domain the B3 gate
+# measures.
+_CHOREO_GESTURE_COST = {"hover": 0.75, "click": 1.15, "scroll": 0.5, "drag": 1.2}
+_CHOREO_GESTURE_SETTLE = {"hover": 0.05, "click": 0.45, "scroll": 0.2, "drag": 0.4}
+
+
+def _choreography_item_seconds(item: Dict[str, Any]) -> float:
+    """Executor-accurate wall seconds of one scheduled plan item.
+
+    Move time follows the executor (max(0.25, move_base / min(2, speed)));
+    settle time (post-hover calm, post-click release, scroll/drag completion)
+    is fixed. Speeds below 1.0 (C38 slow glides) stretch the move.
+    """
+    t = item.get("type")
+    if t == "pause":
+        return float(item.get("duration", 0.5))
+    speed = float(item.get("speed", 1.0))
+    if speed <= 0.0:
+        speed = 1.0
+    settle = _CHOREO_GESTURE_SETTLE.get(t, 0.0)
+    move_base = max(0.05, _CHOREO_GESTURE_COST.get(t, 0.5) - settle)
+    return max(0.25, move_base / min(speed, CHOREO_MAX_SPEED)) + settle
 
 
 def _choreography_plan_cost(plan: List[Dict[str, Any]]) -> float:
-    """Estimated wall-clock cost of a scheduled choreography plan."""
-    total = 0.0
-    for it in plan:
-        t = it.get("type")
-        if t == "pause":
-            total += float(it.get("duration", 0.5))
-        else:
-            speed = max(1.0, float(it.get("speed", 1.0)))
-            total += _CHOREO_GESTURE_COST.get(t, 0.5) / speed
-    return total
+    """Estimated wall-clock cost of a scheduled choreography plan.
+
+    C38: costs are executor-accurate seconds (see _choreography_item_seconds);
+    speeds below 1.0 are deliberate slow glides and INCREASE the duration.
+    """
+    return sum(
+        _choreography_item_seconds(it) for it in plan if it is not None
+    )
 
 
 def _plan_target(it: Dict[str, Any]) -> str:
@@ -241,6 +265,7 @@ def _apply_seam_contract(
     resolve_point: Callable[[str], Optional[Tuple[float, float]]],
     prev_rest_point: Tuple[float, float],
     min_dist: float = MIN_GESTURE_SEPARATION_PX,
+    beat_id: str = "",
 ) -> List[Dict[str, Any]]:
     """C36 seam contract: the plan's first gesture must resolve at least
     ``min_dist`` from the previous beat's final rest point.
@@ -250,23 +275,47 @@ def _apply_seam_contract(
     sentence names, then to a distinct sub-point of the same element family.
     A no-op hover is never protected: it is retargeted or logged as an
     unresolvable risk, never silently kept.
+
+    C38: exactly one ``wsda-seam:`` summary line is printed per seam — pass or
+    retarget — so a zero grep count unambiguously means the code did not run.
     """
     first_idx: Optional[int] = None
     for i, it in enumerate(plan):
         if it.get("type") in CHOREO_GESTURE_TYPES:
             first_idx = i
             break
+    rest = (float(prev_rest_point[0]), float(prev_rest_point[1]))
     if first_idx is None:
+        print(
+            f"wsda-seam: beat={beat_id} prev_rest={rest} opener=NONE "
+            f"opener_point=None dist=n/a retargeted=no",
+            file=sys.stderr,
+        )
         return plan
     first = plan[first_idx]
     name = _plan_target(first)
     if not name:
+        print(
+            f"wsda-seam: beat={beat_id} prev_rest={rest} opener=NONE "
+            f"opener_point=None dist=n/a retargeted=no",
+            file=sys.stderr,
+        )
         return plan
     point = resolve_point(name)
-    rest = (float(prev_rest_point[0]), float(prev_rest_point[1]))
     if point is None:
+        print(
+            f"wsda-seam: beat={beat_id} prev_rest={rest} opener={name} "
+            f"opener_point=unresolved dist=n/a retargeted=no",
+            file=sys.stderr,
+        )
         return plan
     if distance((float(point[0]), float(point[1])), rest) >= min_dist:
+        print(
+            f"wsda-seam: beat={beat_id} prev_rest={rest} opener={name} "
+            f"opener_point={point} dist={distance((float(point[0]), float(point[1])), rest):.1f}px "
+            f"retargeted=no",
+            file=sys.stderr,
+        )
         return plan
     candidates: List[str] = []
     sidx = first.get("sentence_idx", 0)
@@ -294,10 +343,24 @@ def _apply_seam_contract(
                 f"(resolved {point} within {min_dist:.0f}px of rest {rest})",
                 file=sys.stderr,
             )
+            print(
+                f"wsda-seam: beat={beat_id} prev_rest={rest} opener={cand} "
+                f"opener_point={cand_point} "
+                f"dist={distance((float(cand_point[0]), float(cand_point[1])), rest):.1f}px "
+                f"retargeted=yes",
+                file=sys.stderr,
+            )
             return plan
     print(
         f"  [CHOREO] C36 seam: no distinct target for '{name}' "
         f"(rest {rest}); keeping the no-op risk visible",
+        file=sys.stderr,
+    )
+    print(
+        f"wsda-seam: beat={beat_id} prev_rest={rest} opener={name} "
+        f"opener_point={point} "
+        f"dist={distance((float(point[0]), float(point[1])), rest):.1f}px "
+        f"retargeted=unresolved-risk",
         file=sys.stderr,
     )
     return plan
@@ -309,6 +372,7 @@ def _schedule_choreography(
     reserved_seconds: float = 0.0,
     resolve_point: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None,
     prev_rest_point: Optional[Tuple[float, float]] = None,
+    beat_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
     C35: schedule choreography so the plan fills the narration window
@@ -319,15 +383,28 @@ def _schedule_choreography(
       2. Compression order when the window is tight: (a) rests shrink toward a
          1.0s floor; (b) gesture speed rises, up to 2x; (c) only then are
          redundant gestures (sentences with 2+) dropped.
-      3. No still block exceeds 4.5s: rests separated only by motion to the
-         same target are one block. The plan leads with a gesture within 2.0s
-         and ends with a gesture so the clip tail is not parked.
+      3. No still block exceeds CHOREO_PAUSE_CAP: rests separated only by
+         motion to the same target are one block. The plan leads with a
+         gesture within 2.0s and ends with a gesture so the clip tail is not
+         parked.
 
     C36: when ``resolve_point`` and ``prev_rest_point`` are given, the seam
     contract is enforced up front — the first gesture must land at least
     MIN_GESTURE_SEPARATION_PX from the previous beat's final rest point, so a
     concatenated seam freezes for at most the 1.0s recorder tail plus this
     plan's capped lead (<= 2.0s), i.e. <= 3.0s <= the 4.0s seam budget.
+
+    C38: expansion order when the window exceeds the scheduled motion (the
+    symmetric counterpart of compression) so no contiguous stationary stretch
+    — tail after the last gesture or lead before the first included — exceeds
+    the 3.5s park cap anywhere in the beat:
+      (a) extend existing pauses up to the 3.5s cap;
+      (b) slow gesture travel down to the 60px/s glide floor;
+      (c) inject linger gestures from the sentences' distinct_alternatives
+          (never invented points; each must resolve >= 40px from the rest);
+      (d) attention-drift glide: a slow move to the beat's most-referenced
+          alternative target and back, at the speed floor.
+    Every fill decision logs a wsda-fill: line (beat, span, method).
     """
     scheduled: List[Dict[str, Any]] = [dict(it) for it in items]
     target = max(0.0, audio_duration - 1.0 - reserved_seconds)
@@ -358,9 +435,29 @@ def _schedule_choreography(
         deduped.append(it)
     scheduled = [it for it in deduped if it is not None]
 
+    # C38: collapse runs of consecutive pauses into one rest. Dedup (and later
+    # linger injection) can leave adjacent pauses; they are one stationary
+    # stretch either way, and a single rest can be capped at the park cap
+    # whereas a floor-bound run of small pauses cannot.
+    merged: List[Dict[str, Any]] = []
+    for it in scheduled:
+        if (
+            merged
+            and it.get("type") == "pause"
+            and merged[-1].get("type") == "pause"
+        ):
+            merged[-1]["duration"] = float(merged[-1].get("duration", 0.5)) + float(
+                it.get("duration", 0.5)
+            )
+        else:
+            merged.append(dict(it))
+    scheduled = merged
+
     # C36 seam contract with the previous beat's final rest point.
     if resolve_point is not None and prev_rest_point is not None:
-        scheduled = _apply_seam_contract(scheduled, resolve_point, prev_rest_point)
+        scheduled = _apply_seam_contract(
+            scheduled, resolve_point, prev_rest_point, beat_id=beat_id
+        )
 
     pause_indices = [i for i, it in enumerate(scheduled) if it.get("type") == "pause"]
     gesture_indices = [i for i, it in enumerate(scheduled) if it.get("type") in CHOREO_GESTURE_TYPES]
@@ -368,7 +465,7 @@ def _schedule_choreography(
     def cost() -> float:
         return _choreography_plan_cost([it for it in scheduled if it is not None])
 
-    # --- (a) compress rests toward the floor, largest first ------------------
+    # --- compress: (a) rests toward the floor, largest first -----------------
     needed = cost() - target
     if needed > 0.0:
         for i in sorted(pause_indices, key=lambda j: -float(scheduled[j].get("duration", 0.5))):
@@ -380,7 +477,7 @@ def _schedule_choreography(
             scheduled[i]["duration"] = dur - take
             needed -= take
 
-    # --- (b) speed gestures up within deliberate bounds ----------------------
+    # --- compress: (b) speed gestures up within deliberate bounds ------------
     if needed > 0.0 and gesture_indices:
         gesture_total = sum(
             _CHOREO_GESTURE_COST.get(scheduled[i].get("type"), 0.5) for i in gesture_indices
@@ -394,7 +491,7 @@ def _schedule_choreography(
             scheduled[i]["speed"] = speed
         needed = cost() - target
 
-    # --- (c) drop redundant gestures; a sentence's last gesture never is ------
+    # --- compress: (c) drop redundant gestures (never a sentence's last) -----
     while needed > 0.0:
         per_sentence: Dict[int, List[int]] = {}
         for i in gesture_indices:
@@ -412,30 +509,292 @@ def _schedule_choreography(
         scheduled[drop] = None  # type: ignore[assignment]
         gesture_indices.remove(drop)
 
-    # --- redistribute slack back into rests (up to the per-rest cap) ---------
-    available_slack = target - cost()
-    if available_slack > 0.05:
-        live_pauses = [i for i in pause_indices if scheduled[i] is not None]
-        while available_slack > 0.05:
-            progressed = False
-            for i in live_pauses:
-                if available_slack <= 0.05:
-                    break
-                dur = float(scheduled[i].get("duration", 0.5))
-                if dur < CHOREO_PAUSE_CAP - 0.001:
-                    add = min(available_slack, CHOREO_PAUSE_CAP - dur, 0.5)
-                    scheduled[i]["duration"] = dur + add
-                    available_slack -= add
-                    progressed = True
-            if not progressed:
-                break
-
     scheduled = [it for it in scheduled if it is not None]
 
-    # --- cap still blocks: rests split only by motion to a different target --
+    # Plan shape after compression: still blocks capped, lead trimmed, tail
+    # gesture last. (The expansion loop below re-enforces after each round.)
+    _enforce_plan_shape(scheduled)
+
+    # --- C38 expansion: fill the surplus window in order (a)-(d) -------------
+    # (a) extend existing pauses up to the 3.5s cap; (b) slow gesture travel
+    # toward the 60px/s glide floor; (c) inject linger gestures from the
+    # sentences' distinct_alternatives; (d) attention-drift glide to the
+    # beat's most-referenced alternative target and back. Shape enforcement
+    # can trim filled time (lead cap, still-block caps), so re-expand after
+    # it, bounded, until the plan holds the window or every method is spent.
+    for _round in range(3):
+        deficit = target - cost()
+        if deficit <= 0.05:
+            break
+        deficit = _extend_pauses(scheduled, deficit, beat_id)
+        if deficit > 0.05:
+            deficit = _expand_slow_glides(scheduled, deficit, resolve_point, prev_rest_point, beat_id)
+        if deficit > 0.05:
+            deficit = _expand_linger_gestures(scheduled, deficit, resolve_point, beat_id)
+        if deficit > 0.05:
+            deficit = _expand_drift_glide(scheduled, deficit, resolve_point, prev_rest_point, beat_id)
+        _enforce_plan_shape(scheduled)
+
+    deficit = target - cost()
+    if deficit > 0.05:
+        print(
+            f"wsda-fill: beat={beat_id} span={deficit:.2f}s "
+            f"method=exhausted-park-cap-unreachable",
+            file=sys.stderr,
+        )
+
+    return scheduled
+
+
+def _extend_pauses(
+    plan: List[Dict[str, Any]], deficit: float, beat_id: str
+) -> float:
+    """C38 expansion (a): extend existing pauses up to CHOREO_PAUSE_CAP."""
+    filled = 0.0
+    live_pauses = [i for i in range(len(plan)) if plan[i].get("type") == "pause"]
+    while deficit > 0.05:
+        progressed = False
+        for i in live_pauses:
+            if deficit <= 0.05:
+                break
+            dur = float(plan[i].get("duration", 0.5))
+            if dur < CHOREO_PAUSE_CAP - 0.001:
+                add = min(deficit, CHOREO_PAUSE_CAP - dur, 0.5)
+                plan[i]["duration"] = dur + add
+                deficit -= add
+                filled += add
+                progressed = True
+        if not progressed:
+            break
+    if filled > 0.05:
+        print(
+            f"wsda-fill: beat={beat_id} span={filled:.2f}s method=pauses",
+            file=sys.stderr,
+        )
+    return deficit
+
+
+def _gesture_points(
+    plan: List[Dict[str, Any]],
+    resolve_point: Callable[[str], Optional[Tuple[float, float]]],
+    prev_rest_point: Optional[Tuple[float, float]] = None,
+) -> List[Tuple[int, Optional[Tuple[float, float]]]]:
+    """Resolved points of plan gestures in order; index 0 is the travel origin
+    (the previous rest point when known, else the first gesture's own point)."""
+    gestures = [
+        (i, _plan_target(it))
+        for i, it in enumerate(plan)
+        if it.get("type") in CHOREO_GESTURE_TYPES and _plan_target(it)
+    ]
+    out: List[Tuple[int, Optional[Tuple[float, float]]]] = []
+    origin: Optional[Tuple[float, float]] = None
+    if prev_rest_point is not None:
+        origin = (float(prev_rest_point[0]), float(prev_rest_point[1]))
+    for i, name in gestures:
+        pt = resolve_point(name)
+        if origin is None and pt is not None:
+            origin = (float(pt[0]), float(pt[1]))
+        out.append((i, pt))
+    if out:
+        out.insert(0, (-1, origin))
+    return out
+
+
+def _expand_slow_glides(
+    plan: List[Dict[str, Any]],
+    deficit: float,
+    resolve_point: Optional[Callable[[str], Optional[Tuple[float, float]]]],
+    prev_rest_point: Optional[Tuple[float, float]],
+    beat_id: str,
+) -> float:
+    """C38 expansion (b): slow gesture travel toward the 60px/s glide floor.
+
+    Each gesture's glide capacity is distance/60px/s minus its base cost; the
+    deficit is spread over gestures in plan order, each slowed only as much as
+    needed (never above the floor duration). Returns the remaining deficit.
+    """
+    if resolve_point is None:
+        return deficit
+    points = _gesture_points(plan, resolve_point, prev_rest_point)
+    if len(points) < 2:
+        return deficit
+    slowed = 0.0
+    for (prev_i, prev_pt), (i, pt) in zip(points, points[1:]):
+        if deficit <= 0.05:
+            break
+        if prev_pt is None or pt is None:
+            continue
+        it = plan[i]
+        settle = _CHOREO_GESTURE_SETTLE.get(it.get("type"), 0.0)
+        move_base = max(0.05, _CHOREO_GESTURE_COST.get(it.get("type"), 0.5) - settle)
+        current = _choreography_item_seconds(it)
+        # Executor seconds when the move travels at the 60px/s glide floor.
+        glide = distance(prev_pt, pt) / CHOREO_GLIDE_FLOOR_PX_S + settle
+        capacity = max(0.0, glide - current)
+        if capacity <= 0.05:
+            continue
+        add = min(capacity, deficit)
+        speed = move_base / max(0.25, current + add - settle)
+        if 0.0 < speed < float(it.get("speed", 1.0)):
+            it["speed"] = speed
+            slowed += add
+            deficit -= add
+    if slowed > 0.05:
+        print(
+            f"wsda-fill: beat={beat_id} span={slowed:.2f}s method=speed-floor",
+            file=sys.stderr,
+        )
+    return deficit
+
+
+def _expand_linger_gestures(
+    plan: List[Dict[str, Any]],
+    deficit: float,
+    resolve_point: Optional[Callable[[str], Optional[Tuple[float, float]]]],
+    beat_id: str,
+) -> float:
+    """C38 expansion (c): inject linger hovers drawn from the sentences'
+    distinct_alternatives — real secondary targets the profile already names,
+    never invented points. Each candidate must resolve at least
+    MIN_GESTURE_SEPARATION_PX from the cursor's running rest point."""
+    if resolve_point is None:
+        return deficit
+    used = {_plan_target(it) for it in plan if it.get("type") in CHOREO_GESTURE_TYPES}
+    rest: Optional[Tuple[float, float]] = None
+    for it in plan:
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            pt = resolve_point(_plan_target(it))
+            if pt is not None:
+                rest = (float(pt[0]), float(pt[1]))
+    if rest is None:
+        return deficit
+    # Sentence-ordered (target, sentence_idx) pairs for candidate derivation.
+    per_sentence: List[Tuple[str, int]] = []
+    for it in plan:
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            name = _plan_target(it)
+            if name:
+                per_sentence.append((name, it.get("sentence_idx", 0)))
+    injected = 0.0
+    hover_cost = _CHOREO_GESTURE_COST["hover"]
+    for name, sidx in per_sentence:
+        if deficit <= hover_cost + 0.05:
+            break
+        for alt in distinct_alternatives(name):
+            if deficit <= hover_cost + 0.05:
+                break
+            if not alt or alt in used:
+                continue
+            pt = resolve_point(alt)
+            if pt is None:
+                continue
+            if distance((float(pt[0]), float(pt[1])), rest) < MIN_GESTURE_SEPARATION_PX:
+                continue
+            pause_dur = min(CHOREO_PAUSE_CAP, deficit - 0.75)
+            plan.append(
+                {
+                    "type": "hover",
+                    "target": describe_semantic_target(alt),
+                    "semantic": alt,
+                    "sentence_idx": sidx,
+                }
+            )
+            plan.append({"type": "pause", "duration": pause_dur, "sentence_idx": sidx})
+            used.add(alt)
+            added = 0.75 + pause_dur
+            injected += added
+            deficit -= added
+            print(
+                f"wsda-fill: beat={beat_id} span={added:.2f}s method=linger "
+                f"target={alt}",
+                file=sys.stderr,
+            )
+            rest = (float(pt[0]), float(pt[1]))
+    return deficit
+
+
+def _expand_drift_glide(
+    plan: List[Dict[str, Any]],
+    deficit: float,
+    resolve_point: Optional[Callable[[str], Optional[Tuple[float, float]]]],
+    prev_rest_point: Optional[Tuple[float, float]],
+    beat_id: str,
+) -> float:
+    """C38 expansion (d): attention-drift glide — a slow move from the current
+    rest point to the beat's most-referenced alternative target and back, both
+    legs at the 60px/s speed floor."""
+    if resolve_point is None:
+        return deficit
+    counts: Dict[str, int] = {}
+    rest_name: Optional[str] = None
+    rest: Optional[Tuple[float, float]] = None
+    for it in plan:
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            name = _plan_target(it)
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            pt = resolve_point(name)
+            if pt is not None:
+                rest_name = name
+                rest = (float(pt[0]), float(pt[1]))
+    if prev_rest_point is not None and rest is None:
+        rest = (float(prev_rest_point[0]), float(prev_rest_point[1]))
+    if rest is None:
+        return deficit
+    dest_name: Optional[str] = None
+    dest_pt: Optional[Tuple[float, float]] = None
+    for name, _n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        if name == rest_name:
+            continue
+        pt = resolve_point(name)
+        if pt is None:
+            continue
+        if distance((float(pt[0]), float(pt[1])), rest) >= MIN_GESTURE_SEPARATION_PX:
+            dest_name = name
+            dest_pt = (float(pt[0]), float(pt[1]))
+            break
+    if dest_name is None or dest_pt is None or not rest_name:
+        return deficit
+    leg_out = distance(rest, dest_pt) / CHOREO_GLIDE_FLOOR_PX_S
+    leg_back = distance(dest_pt, rest) / CHOREO_GLIDE_FLOOR_PX_S
+    settle = _CHOREO_GESTURE_SETTLE["hover"]
+    move_base = max(0.05, _CHOREO_GESTURE_COST["hover"] - settle)
+    speed_out = move_base / max(0.25, leg_out)
+    speed_back = move_base / max(0.25, leg_back)
+    plan.append(
+        {
+            "type": "hover",
+            "target": describe_semantic_target(dest_name),
+            "semantic": dest_name,
+            "sentence_idx": plan[-1].get("sentence_idx", 0) if plan else 0,
+            "speed": speed_out,
+        }
+    )
+    plan.append(
+        {
+            "type": "hover",
+            "target": describe_semantic_target(rest_name),
+            "semantic": rest_name,
+            "sentence_idx": plan[-1].get("sentence_idx", 0) if plan else 0,
+            "speed": speed_back,
+        }
+    )
+    added = leg_out + leg_back + 2 * settle
+    print(
+        f"wsda-fill: beat={beat_id} span={added:.2f}s method=drift "
+        f"dest={dest_name}",
+        file=sys.stderr,
+    )
+    return deficit - added
+
+
+def _enforce_plan_shape(scheduled: List[Dict[str, Any]]) -> None:
+    """Re-apply the plan-shape rules after any mutation: still blocks capped at
+    CHOREO_PAUSE_CAP (glide-aware), a gesture within CHOREO_LEAD_CAP of the
+    start, and a gesture at the end so the clip tail is not parked."""
     _cap_choreo_still_blocks(scheduled)
 
-    # --- lead with a gesture within CHOREO_LEAD_CAP seconds -------------------
     lead = 0.0
     for it in scheduled:
         if it.get("type") in CHOREO_GESTURE_TYPES:
@@ -451,7 +810,6 @@ def _schedule_choreography(
             it["duration"] = dur - take
             excess -= take
 
-    # --- end with a gesture so the clip tail is not parked --------------------
     if scheduled and scheduled[-1].get("type") == "pause":
         for i in range(len(scheduled) - 1, -1, -1):
             if scheduled[i].get("type") in CHOREO_GESTURE_TYPES:
@@ -459,26 +817,27 @@ def _schedule_choreography(
                     scheduled.append(scheduled.pop(i))
                 break
 
-    return scheduled
-
 
 def _cap_choreo_still_blocks(plan: List[Dict[str, Any]]) -> None:
     """Cap each visually-still block at CHOREO_PAUSE_CAP.
 
-    A still block is opened by a gesture to a new target; rests and any
-    same-target gestures (motion to the point the cursor already occupies is
-    visually instant) consume the block budget. Pauses are shrunk
-    largest-first, honoring CHOREO_PAUSE_FLOOR, until the block fits.
+    A still block is opened by a gesture to a new target and consists of the
+    rests around it; same-target gestures (motion to the point the cursor
+    already occupies is visually instant) continue the block. Only REST time
+    is stationary — the opening gesture's travel is motion — so the block
+    budget is the full park cap. Pauses are shrunk largest-first, honoring
+    CHOREO_PAUSE_FLOOR, until the block fits.
+
+    C38: a deliberate slow glide (speed < 1.0) is real cursor motion — it
+    closes the current still block and opens a fresh one, so rests on either
+    side of a glide keep the full cap.
     """
     block: List[Dict[str, Any]] = []
-    block_gesture_cost = 0.0
     last_target: Optional[str] = None
 
     def flush() -> None:
-        nonlocal block_gesture_cost
-        budget = max(0.0, CHOREO_PAUSE_CAP - block_gesture_cost)
         total = sum(float(it.get("duration", 0.5)) for it in block)
-        excess = total - budget
+        excess = total - CHOREO_PAUSE_CAP
         if excess > 0.0:
             for it in sorted(block, key=lambda b: -float(b.get("duration", 0.5))):
                 if excess <= 0.0:
@@ -488,22 +847,23 @@ def _cap_choreo_still_blocks(plan: List[Dict[str, Any]]) -> None:
                 it["duration"] = dur - take
                 excess -= take
         block.clear()
-        block_gesture_cost = 0.0
 
     for it in plan:
         if it.get("type") == "pause":
             block.append(it)
             continue
         target = _plan_target(it)
-        speed = max(1.0, float(it.get("speed", 1.0)))
-        cost = _CHOREO_GESTURE_COST.get(it.get("type"), 0.5) / speed
-        if target and target != last_target:
+        speed = float(it.get("speed", 1.0))
+        if speed <= 0.0:
+            speed = 1.0
+        if speed < 1.0:
+            # C38 slow glide: motion, not stillness — break the block.
             flush()
             last_target = target
-            block_gesture_cost = cost
-        else:
-            # Same-target motion: stillness continues across this gesture.
-            block_gesture_cost += cost
+        elif target and target != last_target:
+            flush()
+            last_target = target
+        # Same-target motion at full speed: stillness continues across it.
     flush()
 
 
@@ -4797,6 +5157,7 @@ class EndStateDiscovery:
                             reserved_seconds=reserved_action_seconds,
                             resolve_point=agent.resolve_choreography_point,
                             prev_rest_point=agent._last_rest_point,
+                            beat_id=beat.beat_id,
                         )
                         print(
                             f"  [CHOREOGRAPHY SCHEDULED] {beat.beat_id}: "

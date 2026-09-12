@@ -3843,9 +3843,12 @@ end tell
 
     def _item_move_duration(self, item: Dict[str, Any], base: float) -> float:
         # C35: scheduled plans may carry a speed factor (compression order b);
-        # cap the speed-up so motion stays deliberate.
+        # cap the speed-up so motion stays deliberate. C38: speeds below 1.0
+        # are deliberate slow glides and stretch the move instead.
         speed = float(item.get("speed", 1.0) or 1.0)
-        return max(0.25, base / max(1.0, min(2.0, speed)))
+        if speed <= 0.0:
+            speed = 1.0
+        return max(0.25, base / min(2.0, speed))
 
     def execute_choreography_item(self, item: Dict[str, Any]) -> bool:
         """
@@ -3959,11 +3962,12 @@ end tell
                         )
                     break
                 if item.get("type") == "pause":
-                    # C15/C35: resting on a target is correct teaching, but no
+                    # C15/C35/C38: resting on a target is correct teaching, but no
                     # single still run may approach the 6.0s B3 anti-stall gate.
-                    # Cap each pause at 5.0s so combined rests cannot breach it.
+                    # Cap each pause at the 3.5s park cap (discovery.CHOREO_PAUSE_CAP,
+                    # mirrored here to avoid the discovery import cycle).
                     item["duration"] = min(
-                        float(item.get("duration", 0.5)), max(remaining, 0.0), 5.0
+                        float(item.get("duration", 0.5)), max(remaining, 0.0), 3.5
                     )
 
             target = item.get("semantic") or item.get("target", "")
@@ -4004,12 +4008,12 @@ end tell
                 rested_same_target = 0.0
 
                 while leftover > 0.05:
-                    rest = min(leftover, 5.0)
+                    rest = min(leftover, 3.5)
                     if len(sentence_targets) <= 1:
-                        # C35: a single-target sentence cannot lawfully move; cap
-                        # consecutive still time below the B3 gate instead of
-                        # chaining 5s rests into one long parked run.
-                        rest = min(rest, max(0.0, 4.5 - rested_same_target))
+                        # C35/C38: a single-target sentence cannot lawfully move; cap
+                        # consecutive still time at the 3.5s park cap instead of
+                        # chaining rests into one long parked run.
+                        rest = min(rest, max(0.0, 3.5 - rested_same_target))
                         if rest <= 0.05:
                             break
                     print(

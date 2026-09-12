@@ -3663,8 +3663,9 @@ class TestC35SchedulerCoverage(unittest.TestCase):
     Hard invariants: every narration sentence keeps at least one gesture; an
     item is never skipped while it is its sentence's only gesture. Compression
     order: rests to the floor first, then gesture speed, then (and only then)
-    redundant items. Execution invariants: no still block > 5s, first motion
-    within 2s, plan ends with a gesture.
+    redundant items. Execution invariants (C38 semantics): no still block —
+    contiguous rest time — exceeds the 3.5s park cap, first motion within 2s,
+    plan ends with a gesture.
     """
 
     @staticmethod
@@ -3698,11 +3699,10 @@ class TestC35SchedulerCoverage(unittest.TestCase):
 
     @staticmethod
     def _still_blocks(plan: List[Dict[str, Any]]) -> List[float]:
-        """Still blocks, mirroring _cap_choreo_still_blocks: a block opens with
-        a gesture to a new target (its move time included); rests and
-        same-target gestures extend it."""
-        from compiler.discovery import _CHOREO_GESTURE_COST
-
+        """Still blocks under the C38 semantics: a block holds REST time only
+        (the opening gesture's travel is motion). A gesture to a new target
+        or a slow glide (speed < 1.0) closes the block; same-target full-speed
+        gestures continue it without adding stationary time."""
         blocks: List[float] = []
         current = 0.0
         last_target: Optional[str] = None
@@ -3711,14 +3711,11 @@ class TestC35SchedulerCoverage(unittest.TestCase):
                 current += float(it.get("duration", 0.5))
                 continue
             target = it.get("target", "")
-            speed = max(1.0, float(it.get("speed", 1.0)))
-            cost = _CHOREO_GESTURE_COST.get(it.get("type"), 0.5) / speed
-            if target and target != last_target:
+            speed = float(it.get("speed", 1.0))
+            if speed < 1.0 or (target and target != last_target):
                 blocks.append(current)
-                current = cost
+                current = 0.0
                 last_target = target
-            else:
-                current += cost
         blocks.append(current)
         return blocks
 
@@ -3731,8 +3728,9 @@ class TestC35SchedulerCoverage(unittest.TestCase):
 
         plan = self._plan()
         # Three of sentence 0's four hovers are same-target repeats and are
-        # always deduped (coverage keeps one); they are not budget skips.
-        full = len(plan) - 3
+        # always deduped (coverage keeps one); their orphaned pauses merge
+        # into one rest. A huge budget yields that no-drop shape.
+        full = len(_schedule_choreography(plan, 1000.0))
         # Budget that forces compression but not redundancy drops: rests to the
         # floor and full speed must absorb it.
         scheduled = _schedule_choreography(plan, 14.5)
@@ -3759,13 +3757,14 @@ class TestC35SchedulerCoverage(unittest.TestCase):
             )
 
     def test_no_executed_park_over_five_seconds_and_lead_within_two(self) -> None:
-        from compiler.discovery import CHOREO_LEAD_CAP, _schedule_choreography
+        from compiler.discovery import CHOREO_LEAD_CAP, CHOREO_PAUSE_CAP, _schedule_choreography
 
         for budget in (17.69, 13.0, 9.0, 6.0, 4.0):
             scheduled = _schedule_choreography(self._plan(), budget)
             blocks = self._still_blocks(scheduled)
             self.assertLessEqual(
-                max(blocks), 5.0, f"budget {budget}: still block {max(blocks):.2f}s > 5s"
+                max(blocks), CHOREO_PAUSE_CAP + 1e-6,
+                f"budget {budget}: still block {max(blocks):.2f}s > {CHOREO_PAUSE_CAP}s",
             )
             lead = 0.0
             for it in scheduled:
@@ -3786,7 +3785,8 @@ class TestC35SchedulerCoverage(unittest.TestCase):
         )
 
         plan = self._plan()
-        full = len(plan) - 3  # same-target repeats are always deduped first
+        # No-drop shape: same-target repeats deduped, orphaned pauses merged.
+        full = len(_schedule_choreography(plan, 1000.0))
         # Binary-search the loosest budget that forces a drop.
         dropped = None
         for budget10 in range(50, 140):
@@ -4213,6 +4213,245 @@ class TestC36SeamContract(unittest.TestCase):
         )
 
 
+class TestC38ParkCapInvariant(unittest.TestCase):
+    """C38 STEP 3: no contiguous stationary cursor stretch exceeds the 3.5s
+    park cap anywhere in a beat — tail after the last gesture and lead before
+    the first included. Simulated timelines against TTS-derived windows."""
+
+    SCREEN = (1440.0, 900.0)
+
+    @staticmethod
+    def _hover(semantic: str, sidx: int) -> Dict[str, Any]:
+        return {"type": "hover", "target": semantic, "semantic": semantic, "sentence_idx": sidx}
+
+    @staticmethod
+    def _pause(sidx: int, duration: float = 1.5) -> Dict[str, Any]:
+        return {"type": "pause", "duration": duration, "sentence_idx": sidx}
+
+    def setUp(self) -> None:
+        from compiler.target_resolver import nominal_geometry
+
+        self.geo = nominal_geometry(self.SCREEN)
+
+    def _resolve(self, name: str):
+        from compiler.target_resolver import resolve_semantic_target
+
+        return resolve_semantic_target(name, self.geo)
+
+    def _simulate(self, plan: List[Dict[str, Any]], window: float) -> float:
+        """Max contiguous stationary stretch: pauses, the lead, and the tail
+        after the plan ends (all in executor-accurate seconds)."""
+        from compiler.discovery import (
+            CHOREO_GESTURE_TYPES,
+            _choreography_item_seconds,
+        )
+
+        cost = 0.0
+        parks: List[float] = []
+        for it in plan:
+            if it.get("type") == "pause":
+                d = float(it.get("duration", 0.5))
+                parks.append(d)
+                cost += d
+            elif it.get("type") in CHOREO_GESTURE_TYPES:
+                cost += _choreography_item_seconds(it)
+        tail = max(0.0, window - cost)
+        if tail > 0.0:
+            parks.append(tail)
+        return max(parks) if parks else 0.0
+
+    def test_long_explain_beat_tail_is_filled(self) -> None:
+        """The beat_007 shape: ~21s window, three gestures. Pre-C38 the plan
+        topped out near 12s and parked ~9s; the park cap must hold."""
+        from compiler.discovery import CHOREO_PAUSE_CAP, _schedule_choreography
+
+        plan = [
+            self._hover("results-grid:body", 0), self._pause(0),
+            self._hover("results-grid:header:Email", 1), self._pause(1),
+            self._hover("sql-editor:body", 2), self._pause(2),
+        ]
+        rest = self._resolve("sql-editor:line:6")
+        scheduled = _schedule_choreography(
+            plan, 22.8, resolve_point=self._resolve, prev_rest_point=rest, beat_id="beat_x"
+        )
+        max_park = self._simulate(scheduled, 21.8)
+        self.assertLessEqual(
+            max_park, CHOREO_PAUSE_CAP + 1e-6,
+            f"max park {max_park:.2f}s exceeds the {CHOREO_PAUSE_CAP}s cap",
+        )
+
+    def test_single_gesture_beat_fills_via_expansion(self) -> None:
+        from compiler.discovery import CHOREO_PAUSE_CAP, _schedule_choreography
+
+        plan = [self._hover("sql-editor:line:6", 0), self._pause(0)]
+        rest = self._resolve("results-grid:body")
+        scheduled = _schedule_choreography(
+            plan, 16.0, resolve_point=self._resolve, prev_rest_point=rest, beat_id="beat_y"
+        )
+        max_park = self._simulate(scheduled, 15.0)
+        self.assertLessEqual(
+            max_park, CHOREO_PAUSE_CAP + 1e-6,
+            f"max park {max_park:.2f}s exceeds the {CHOREO_PAUSE_CAP}s cap",
+        )
+
+    def test_tight_window_compression_keeps_parks_under_cap(self) -> None:
+        from compiler.discovery import CHOREO_PAUSE_CAP, _schedule_choreography
+
+        plan = [
+            self._hover("sql-editor:line:6", 0), self._pause(0),
+            self._hover("sql-editor:comment-block:1-5", 1), self._pause(1),
+            self._hover("sql-editor:body", 2), self._pause(2),
+        ]
+        rest = self._resolve("results-grid:body")
+        for audio in (21.0, 12.0, 7.0, 4.5):
+            scheduled = _schedule_choreography(
+                plan, audio, resolve_point=self._resolve, prev_rest_point=rest, beat_id="beat_z"
+            )
+            max_park = self._simulate(scheduled, max(0.0, audio - 1.0))
+            self.assertLessEqual(
+                max_park, CHOREO_PAUSE_CAP + 1e-6,
+                f"audio {audio}: max park {max_park:.2f}s exceeds the cap",
+            )
+
+
+class TestC38ExpansionOrder(unittest.TestCase):
+    """C38 STEP 3: a beat with a surplus window fills via pauses, then the
+    speed floor, then linger alternatives, then the drift glide — in that
+    order, each step logged as a wsda-fill: line."""
+
+    SCREEN = (1440.0, 900.0)
+
+    @staticmethod
+    def _hover(semantic: str, sidx: int) -> Dict[str, Any]:
+        return {"type": "hover", "target": semantic, "semantic": semantic, "sentence_idx": sidx}
+
+    @staticmethod
+    def _pause(sidx: int, duration: float = 1.5) -> Dict[str, Any]:
+        return {"type": "pause", "duration": duration, "sentence_idx": sidx}
+
+    def setUp(self) -> None:
+        from compiler.target_resolver import nominal_geometry
+
+        self.geo = nominal_geometry(self.SCREEN)
+
+    def _resolve(self, name: str):
+        from compiler.target_resolver import resolve_semantic_target
+
+        return resolve_semantic_target(name, self.geo)
+
+    def test_methods_fire_in_order_and_log(self) -> None:
+        from compiler.discovery import (
+            CHOREO_PAUSE_CAP,
+            _choreography_plan_cost,
+            _schedule_choreography,
+        )
+
+        plan = [
+            self._hover("sql-editor:line:6", 0), self._pause(0),
+            self._hover("sql-editor:comment-block:1-5", 1), self._pause(1),
+        ]
+        rest = self._resolve("results-grid:body")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            scheduled = _schedule_choreography(
+                plan, 60.0, resolve_point=self._resolve, prev_rest_point=rest, beat_id="beat_w"
+            )
+        out = buf.getvalue()
+        methods = [
+            line.split("method=")[1].split()[0]
+            for line in out.splitlines()
+            if line.startswith("wsda-fill:")
+        ]
+        order = ["pauses", "speed-floor", "linger", "drift"]
+        first_pos = []
+        for m in order:
+            self.assertIn(m, methods, f"expansion stage {m!r} must fire for a 60s window")
+            first_pos.append(methods.index(m))
+        self.assertEqual(
+            first_pos, sorted(first_pos),
+            f"fill methods must appear in expansion order, got {methods}",
+        )
+        # Structural evidence of each stage in the returned plan.
+        pauses = [it for it in scheduled if it.get("type") == "pause"]
+        self.assertTrue(
+            any(abs(it["duration"] - CHOREO_PAUSE_CAP) < 1e-6 for it in pauses),
+            "stage (a) leaves at least one pause at the cap",
+        )
+        speeds = [
+            float(it.get("speed", 1.0)) for it in scheduled
+            if it.get("type") in ("hover", "click")
+        ]
+        self.assertTrue(any(s < 1.0 for s in speeds), "stage (b) slows at least one glide")
+        self.assertGreater(len(scheduled), len(plan), "stages (c)/(d) inject items")
+        # The fill target: any remaining deficit up to the park cap is a
+        # lawful tail rest — the invariant is "no park exceeds the cap", not
+        # "cost reaches the window".
+        self.assertGreaterEqual(
+            _choreography_plan_cost(scheduled), 59.0 - CHOREO_PAUSE_CAP,
+            "the filled plan must cover the window up to one lawful tail rest",
+        )
+        # Stage (d) ends the plan with the drift pair: two slow hovers.
+        hovers = [it for it in scheduled if it.get("type") == "hover"]
+        self.assertLessEqual(float(hovers[-2].get("speed", 1.0)), 1.0, "drift out-leg is slow")
+        self.assertLess(float(hovers[-1].get("speed", 1.0)), 1.0, "drift return-leg is slow")
+
+
+class TestC38SeamMarkerAlwaysPrints(unittest.TestCase):
+    """C38 STEP 3: _apply_seam_contract ALWAYS prints exactly one wsda-seam:
+    summary line per seam — pass or retarget — so a zero grep count
+    unambiguously means the code did not run."""
+
+    SCREEN = (1440.0, 900.0)
+
+    @staticmethod
+    def _hover(semantic: str, sidx: int) -> Dict[str, Any]:
+        return {"type": "hover", "target": semantic, "semantic": semantic, "sentence_idx": sidx}
+
+    def setUp(self) -> None:
+        from compiler.target_resolver import nominal_geometry
+
+        self.geo = nominal_geometry(self.SCREEN)
+
+    def _resolve(self, name: str):
+        from compiler.target_resolver import resolve_semantic_target
+
+        return resolve_semantic_target(name, self.geo)
+
+    def _seam_lines(self, plan: List[Dict[str, Any]], rest) -> List[str]:
+        from compiler.discovery import _schedule_choreography
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            _schedule_choreography(
+                plan, 12.0, resolve_point=self._resolve, prev_rest_point=rest, beat_id="beat_s"
+            )
+        return [ln for ln in buf.getvalue().splitlines() if ln.startswith("wsda-seam:")]
+
+    def test_far_seam_pass_prints_summary_with_retargeted_no(self) -> None:
+        lines = self._seam_lines(
+            [self._hover("sql-editor:line:6", 0)], self._resolve("results-grid:body")
+        )
+        self.assertEqual(len(lines), 1, f"exactly one wsda-seam line, got {lines}")
+        self.assertIn("retargeted=no", lines[0])
+        self.assertIn("prev_rest=", lines[0])
+        self.assertIn("dist=", lines[0])
+
+    def test_near_seam_retarget_prints_summary_with_retargeted_yes(self) -> None:
+        # Opener lands exactly on the previous rest point -> must retarget.
+        rest = self._resolve("sql-editor:body")
+        lines = self._seam_lines(
+            [
+                self._hover("sql-editor:body", 0),
+                {"type": "pause", "duration": 1.5, "sentence_idx": 0},
+                self._hover("sql-editor:comment-block:1-5", 1),
+            ],
+            rest,
+        )
+        self.assertEqual(len(lines), 1, f"exactly one wsda-seam line, got {lines}")
+        self.assertIn("retargeted=yes", lines[0])
+        self.assertNotIn("opener=sql-editor:body ", lines[0] + " ")
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -4270,6 +4509,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC36SubElementTargets))
     suite.addTests(loader.loadTestsFromTestCase(TestC36DistinctnessRetarget))
     suite.addTests(loader.loadTestsFromTestCase(TestC36SeamContract))
+    suite.addTests(loader.loadTestsFromTestCase(TestC38ParkCapInvariant))
+    suite.addTests(loader.loadTestsFromTestCase(TestC38ExpansionOrder))
+    suite.addTests(loader.loadTestsFromTestCase(TestC38SeamMarkerAlwaysPrints))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))
