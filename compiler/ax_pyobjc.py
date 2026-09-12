@@ -80,8 +80,10 @@ _hs.AXUIElementPerformAction.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 _hs.AXValueGetValue.restype = ctypes.c_bool
 _hs.AXValueGetValue.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
 
-# kAXValueCGPointType == 1 (AXValue.h enum; not exported as a symbol).
+# kAXValueCGPointType == 1, kAXValueCGSizeType == 2 (AXValue.h enum; not
+# exported as symbols).
 _KAX_VALUE_CGPOINT_TYPE = 1
+_KAX_VALUE_CCGSIZE_TYPE = 2
 
 _TRUE_PTR = ctypes.c_void_p.in_dll(_cf, "kCFBooleanTrue")
 
@@ -140,6 +142,10 @@ def _as_str(ptr: int) -> Optional[str]:
 
 class _CGPoint(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class _CGSize(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
 
 
 def create_system_wide() -> int:
@@ -215,6 +221,17 @@ def element_position(element: Any) -> Optional[Tuple[float, float]]:
     if not _hs.AXValueGetValue(value, _KAX_VALUE_CGPOINT_TYPE, ctypes.byref(pt)):
         return None
     return (float(pt.x), float(pt.y))
+
+
+def element_size(element: Any) -> Optional[Tuple[float, float]]:
+    """Read AXSize as (width, height); None when unreadable or not a size."""
+    value = copy_attribute(element, "AXSize")
+    if not isinstance(value, int) or not value:
+        return None
+    size = _CGSize()
+    if not _hs.AXValueGetValue(value, _KAX_VALUE_CCGSIZE_TYPE, ctypes.byref(size)):
+        return None
+    return (float(size.width), float(size.height))
 
 
 def _running_apps() -> List[Any]:
@@ -450,6 +467,43 @@ def press_execute_tab(app_element: Any) -> bool:
         for child in children:
             stack.append((child, depth + 1))
     return False
+
+
+def find_radio_buttons(
+    app_element: Any, title_hints: Optional[Tuple[str, ...]] = None
+) -> List[Tuple[Any, str]]:
+    """Collect ``(element, title)`` for every AXRadioButton under the app's
+    windows (the view tabs). Same attribute-read traversal as
+    ``find_text_areas``; C33 window scoping applies when hints are given."""
+    windows = copy_attribute(app_element, "AXWindows") or []
+    if title_hints:
+        windows = _select_editor_windows(windows, title_hints)
+    found: List[Tuple[Any, str]] = []
+    stack: List[Tuple[Any, int]] = [(w, 0) for w in windows]
+    visited = 0
+    while stack:
+        el, depth = stack.pop()
+        visited += 1
+        if visited > _MAX_ELEMENTS or depth > _MAX_DEPTH:
+            continue
+        try:
+            role = copy_attribute(el, "AXRole")
+        except AxCallError:
+            role = None
+        if role == "AXRadioButton":
+            try:
+                title = copy_attribute(el, "AXTitle")
+            except AxCallError:
+                title = None
+            if title:
+                found.append((el, title))
+        try:
+            children = copy_attribute(el, "AXChildren") or []
+        except AxCallError:
+            children = []
+        for child in children:
+            stack.append((child, depth + 1))
+    return found
 
 
 def focused_element_info(app_element: Any) -> Optional[dict]:

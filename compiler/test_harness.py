@@ -3861,6 +3861,358 @@ class TestC35GuardShape(unittest.TestCase):
             self.assertIn("MATCH", out)
 
 
+class TestC36SubElementTargets(unittest.TestCase):
+    """C36 STEP 1: the planner emits semantic sub-element targets — a clause
+    names its editor line, the comment block names its line span — and the
+    profile-based resolver lands points on the intended sub-element."""
+
+    SCREEN = (1440.0, 900.0)
+    COMMENT = (
+        "/*\nCreated By: WSDA Student\nCreate Date: 2026-09-11\n"
+        "Description: Customer contact list for management\n*/"
+    )
+    SELECT_CLAUSE = "\nSELECT\n  FirstName,\n  LastName,\n  Email"
+    FROM_CLAUSE = "\nFROM Customer;"
+
+    @staticmethod
+    def _line_segments_action(text: str, idxs=None):
+        lines = [l for l in text.split("\n") if l]
+        if idxs is None:
+            idxs = [0] * len(lines)
+        segs = []
+        for line, sidx in zip(lines, list(idxs) + [0] * len(lines)):
+            if segs and segs[-1]["sentence_idx"] == sidx:
+                segs[-1]["text"] += "\n" + line
+            else:
+                segs.append({"text": line, "sentence_idx": sidx})
+        return {"type": "type_segments", "segments": segs}
+
+    @staticmethod
+    def _beat(beat_id, kind, text, action=None):
+        from compiler.narrator import ScriptBeat
+
+        return ScriptBeat(beat_id=beat_id, kind=kind, text=text, action=action)
+
+    def _plan_video_1_1_clauses(self):
+        """Thread content through the three typing beats exactly like the
+        script builder's choreography loop, and return the planned beats."""
+        from compiler.lesson_builder import LessonBuilder as LB
+
+        beats = [
+            self._beat(
+                "beat_002",
+                "demo",
+                "We type a comment header at the top of the query so anyone who "
+                "opens the file later can see who created it, when it was written, "
+                "and what problem it solves. The header appears above the SQL and "
+                "documents the query before any code runs, which is a professional "
+                "habit worth keeping.",
+                self._line_segments_action(self.COMMENT, [0, 0, 0, 1, 1]),
+            ),
+            self._beat(
+                "beat_003",
+                "demo",
+                "We type the SELECT clause, listing the columns FirstName, LastName, "
+                "and Email. SELECT tells the database which columns to return, so we "
+                "ask for only the contact fields we need. The SELECT clause appears "
+                "between the comment header and the FROM clause, defining the output "
+                "clearly.",
+                self._line_segments_action(self.SELECT_CLAUSE),
+            ),
+            self._beat(
+                "beat_004",
+                "demo",
+                "We type FROM Customer to name the data source for the columns. FROM "
+                "tells the database which table holds the data, so the query knows to "
+                "look in the Customer table. This completes the simplest useful query "
+                "pattern, asking for specific data from one table.",
+                self._line_segments_action(self.FROM_CLAUSE),
+            ),
+        ]
+        tour_state = {"current_tab": "execute_sql", "introduced": set(), "nominal_rest": None}
+        content = ""
+        for beat in beats:
+            beat.choreography = LB._choreography_for_beat(
+                beat,
+                ["FirstName", "LastName", "Email"],
+                "Customer",
+                tour_state,
+                content_before=content,
+                screen=self.SCREEN,
+            )
+            content = LB._content_after_beat(beat, content)
+        return beats
+
+    def test_from_clause_sentence_targets_line_10_distinct_from_select(self):
+        from compiler.target_resolver import (
+            MIN_GESTURE_SEPARATION_PX,
+            distance,
+            nominal_geometry,
+            resolve_semantic_target,
+        )
+
+        beats = self._plan_video_1_1_clauses()
+        geo = nominal_geometry(self.SCREEN)
+
+        def gestures(beat):
+            return [
+                (it.get("semantic"), resolve_semantic_target(it["semantic"], geo))
+                for it in beat.choreography
+                if it["type"] in ("hover", "click") and it.get("semantic")
+            ]
+
+        beat_003, beat_004 = beats[1], beats[2]
+        select_semantics = {name for name, _ in gestures(beat_003)}
+        from_sentence = [
+            it for it in beat_004.choreography
+            if it["type"] in ("hover", "click") and it.get("sentence_idx") == 0
+        ]
+        self.assertTrue(from_sentence, "the FROM sentence keeps its gesture (coverage)")
+        self.assertIn("sql-editor:line:6", select_semantics, "SELECT clause -> its line")
+        self.assertEqual(
+            from_sentence[0].get("semantic"), "sql-editor:line:10",
+            "the FROM-clause sentence must resolve to line 10, not the editor center",
+        )
+
+        select_point = resolve_semantic_target("sql-editor:line:6", geo)
+        from_point = resolve_semantic_target("sql-editor:line:10", geo)
+        self.assertGreaterEqual(
+            distance(select_point, from_point),
+            MIN_GESTURE_SEPARATION_PX,
+            "FROM and SELECT line points must be distinct gestures",
+        )
+
+    def test_comment_block_is_a_distinct_region(self):
+        from compiler.target_resolver import (
+            MIN_GESTURE_SEPARATION_PX,
+            distance,
+            nominal_geometry,
+            resolve_semantic_target,
+        )
+
+        geo = nominal_geometry(self.SCREEN)
+        comment_point = resolve_semantic_target("sql-editor:comment-block:1-5", geo)
+        body_point = resolve_semantic_target("sql-editor:body", geo)
+        from_point = resolve_semantic_target("sql-editor:line:10", geo)
+        self.assertIsNotNone(comment_point)
+        self.assertGreaterEqual(
+            distance(comment_point, body_point), MIN_GESTURE_SEPARATION_PX,
+            "comment centroid must not sit on the editor center",
+        )
+        self.assertGreaterEqual(
+            distance(comment_point, from_point), MIN_GESTURE_SEPARATION_PX,
+            "comment centroid must not sit on the FROM line",
+        )
+        # Centroid of lines 1..5 is line 3: editor_y + line_height * 2.5.
+        editor_rect = geo.editor_rect
+        self.assertAlmostEqual(
+            comment_point[1], editor_rect[1] + geo.line_height * 2.5, places=3,
+        )
+
+    def test_line_math_given_editor_rect_and_line_height(self):
+        from compiler.target_resolver import TargetGeometry, resolve_semantic_target
+
+        geo = TargetGeometry(editor_rect=(100.0, 200.0, 700.0, 300.0), line_height=20.0)
+        # line 3: y = 200 + 20 * (3 - 0.5) = 250; x = origin + text-start offset.
+        self.assertEqual(resolve_semantic_target("sql-editor:line:3", geo), (128.0, 250.0))
+        # Beyond the rect the point clamps inside the editor rather than flying off.
+        clamped = resolve_semantic_target("sql-editor:line:500", geo)
+        self.assertEqual(clamped[1], 490.0)
+        self.assertTrue(100.0 <= clamped[0] <= 800.0)
+
+
+class TestC36DistinctnessRetarget(unittest.TestCase):
+    """C36 STEP 1 distinctness rule: a sentence's only gesture never resolves
+    onto the cursor's current rest point — it is retargeted to a distinct
+    sub-point (different line / region), never protected as a no-op."""
+
+    SCREEN = (1440.0, 900.0)
+
+    @staticmethod
+    def _beat(beat_id, kind, text, action=None):
+        from compiler.narrator import ScriptBeat
+
+        return ScriptBeat(beat_id=beat_id, kind=kind, text=text, action=action)
+
+    def _plan(self, beat, tour_state, content_before=""):
+        from compiler.lesson_builder import LessonBuilder as LB
+
+        beat.choreography = LB._choreography_for_beat(
+            beat, ["FirstName", "LastName", "Email"], "Customer",
+            tour_state, content_before=content_before, screen=self.SCREEN,
+        )
+        return beat.choreography
+
+    def test_only_gesture_on_rest_point_is_retargeted_not_protected(self):
+        from compiler.target_resolver import (
+            MIN_GESTURE_SEPARATION_PX,
+            distance,
+            nominal_geometry,
+            resolve_semantic_target,
+        )
+
+        geo = nominal_geometry(self.SCREEN)
+        # Two consecutive sentences that both name only "the query": every
+        # gesture resolves to the editor body unless refined.
+        beat = self._beat(
+            "beat_010",
+            "explain",
+            "The query is now complete and returns the contact list. The query "
+            "also documents itself with the comment header.",
+            {"type": "wait", "duration": 1.5},
+        )
+        tour_state = {"current_tab": "execute_sql", "introduced": set(), "nominal_rest": None}
+        plan = self._plan(beat, tour_state)
+        points = [
+            resolve_semantic_target(it["semantic"], geo)
+            for it in plan
+            if it["type"] in ("hover", "click") and it.get("semantic")
+        ]
+        hover_names = [it["semantic"] for it in plan if it["type"] == "hover" and it.get("semantic")]
+        self.assertGreaterEqual(len(hover_names), 2, "both sentences keep a gesture")
+        for name_a, name_b in zip(hover_names, hover_names[1:]):
+            self.assertNotEqual(name_a, name_b, "consecutive hovers must not repeat one target")
+        for p1, p2 in zip(points, points[1:]):
+            self.assertGreaterEqual(
+                distance(p1, p2), MIN_GESTURE_SEPARATION_PX,
+                "no consecutive gesture pair may be a <40px no-op",
+            )
+
+    def test_single_gesture_incoming_rest_forces_distinct_subpoint(self):
+        from compiler.target_resolver import (
+            MIN_GESTURE_SEPARATION_PX,
+            distance,
+            nominal_geometry,
+            resolve_semantic_target,
+        )
+
+        geo = nominal_geometry(self.SCREEN)
+        rest = resolve_semantic_target("sql-editor:body", geo)
+        beat = self._beat(
+            "beat_011",
+            "explain",
+            "The query is ready to run.",
+            {"type": "wait", "duration": 1.5},
+        )
+        tour_state = {
+            "current_tab": "execute_sql",
+            "introduced": set(),
+            "nominal_rest": rest,  # cursor already rests on the editor center
+        }
+        plan = self._plan(beat, tour_state)
+        hovers = [it for it in plan if it["type"] == "hover" and it.get("semantic")]
+        self.assertEqual(len(hovers), 1, "the sentence keeps its single gesture (coverage)")
+        only = hovers[0]
+        self.assertNotEqual(
+            only["semantic"], "sql-editor:body",
+            "a no-op hover on the rest point must be retargeted, never protected",
+        )
+        point = resolve_semantic_target(only["semantic"], geo)
+        self.assertGreaterEqual(
+            distance(point, rest), MIN_GESTURE_SEPARATION_PX,
+            "the retargeted gesture must land on a distinct sub-point",
+        )
+
+
+class TestC36SeamContract(unittest.TestCase):
+    """C36 STEP 2: the previous beat's final rest point is passed into the next
+    beat's scheduling; the next opener resolves >= 40px from it (else the
+    sentence's next-best distinct target is used), and the concatenated seam
+    freezes for at most 4 seconds by construction."""
+
+    SCREEN = (1440.0, 900.0)
+
+    @staticmethod
+    def _hover(semantic: str, sidx: int, human: str = "the SQL editor text area") -> Dict[str, Any]:
+        return {"type": "hover", "target": human, "semantic": semantic, "sentence_idx": sidx}
+
+    @staticmethod
+    def _pause(sidx: int, duration: float = 1.5) -> Dict[str, Any]:
+        return {"type": "pause", "duration": duration, "sentence_idx": sidx}
+
+    def setUp(self) -> None:
+        from compiler.target_resolver import nominal_geometry
+
+        self.geo = nominal_geometry(self.SCREEN)
+
+    def _resolve(self, name: str):
+        from compiler.target_resolver import resolve_semantic_target
+
+        return resolve_semantic_target(name, self.geo)
+
+    def test_next_opener_resolves_at_least_40px_from_closing_rest(self):
+        from compiler.discovery import _schedule_choreography
+        from compiler.target_resolver import MIN_GESTURE_SEPARATION_PX, distance
+
+        # beat N closed resting on the editor body point.
+        closing_rest = self._resolve("sql-editor:body")
+        # beat N+1's first gesture hovers THE SAME point (the old no-op seam).
+        plan = [
+            self._hover("sql-editor:body", 0),
+            self._pause(0),
+            self._hover("sql-editor:comment-block:1-5", 0, "the comment block in the SQL editor"),
+            self._pause(0),
+            self._hover("sql-editor:line:6", 1, "the SELECT clause in the SQL editor"),
+            self._pause(1),
+        ]
+        scheduled = _schedule_choreography(
+            plan, 12.0, resolve_point=self._resolve, prev_rest_point=closing_rest
+        )
+        first_gesture = next(it for it in scheduled if it["type"] in ("hover", "click", "scroll", "drag"))
+        opener = first_gesture.get("semantic") or first_gesture.get("target")
+        self.assertNotEqual(opener, "sql-editor:body", "the no-op opener must be retargeted")
+        opener_point = self._resolve(opener)
+        self.assertGreaterEqual(
+            distance(opener_point, closing_rest),
+            MIN_GESTURE_SEPARATION_PX,
+            f"opener {opener} must resolve >= 40px from the closing rest",
+        )
+
+    def test_concatenated_seam_freeze_at_most_four_seconds(self):
+        from compiler.discovery import CHOREO_LEAD_CAP, RECORDER_TAIL_SECONDS, _schedule_choreography
+
+        closing_rest = self._resolve("sql-editor:body")
+        # A deliberately lead-heavy plan: the scheduler must cap the lead and
+        # the seam freeze stays within budget.
+        plan = [
+            self._pause(0, duration=6.0),
+            self._hover("sql-editor:comment-block:1-5", 0, "the comment block in the SQL editor"),
+            self._pause(0),
+            self._hover("sql-editor:line:6", 1, "the SELECT clause in the SQL editor"),
+            self._pause(1),
+        ]
+        scheduled = _schedule_choreography(
+            plan, 14.0, resolve_point=self._resolve, prev_rest_point=closing_rest
+        )
+        lead = 0.0
+        for it in scheduled:
+            if it["type"] != "pause":
+                break
+            lead += float(it.get("duration", 0.5))
+        self.assertLessEqual(lead, CHOREO_LEAD_CAP, "first motion starts within the lead cap")
+        seam_freeze = RECORDER_TAIL_SECONDS + lead
+        self.assertLessEqual(seam_freeze, 4.0, f"seam freeze {seam_freeze:.2f}s exceeds 4s")
+
+    def test_far_opener_is_not_retargeted(self):
+        from compiler.discovery import _schedule_choreography
+
+        closing_rest = self._resolve("results-grid:body")
+        plan = [
+            self._hover("sql-editor:body", 0),
+            self._pause(0),
+            self._hover("sql-editor:comment-block:1-5", 1, "the comment block in the SQL editor"),
+            self._pause(1),
+        ]
+        scheduled = _schedule_choreography(
+            plan, 12.0, resolve_point=self._resolve, prev_rest_point=closing_rest
+        )
+        first_gesture = next(it for it in scheduled if it["type"] in ("hover", "click", "scroll", "drag"))
+        self.assertEqual(
+            first_gesture.get("semantic"), "sql-editor:body",
+            "an already-distant opener is kept exactly as planned",
+        )
+
+
 def main() -> int:
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         print("ffmpeg and ffprobe are required for the test harness.", file=__import__("sys").stderr)
@@ -3915,6 +4267,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC34MssFloorGate))
     suite.addTests(loader.loadTestsFromTestCase(TestC35SchedulerCoverage))
     suite.addTests(loader.loadTestsFromTestCase(TestC35GuardShape))
+    suite.addTests(loader.loadTestsFromTestCase(TestC36SubElementTargets))
+    suite.addTests(loader.loadTestsFromTestCase(TestC36DistinctnessRetarget))
+    suite.addTests(loader.loadTestsFromTestCase(TestC36SeamContract))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

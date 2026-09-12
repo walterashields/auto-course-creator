@@ -42,6 +42,14 @@ from .narrator import (
 from .schemas import ActionEdge, DiscoveryResult, ExecutionGraph, NarrationBeat, ScreenState
 from .sql_formatter import format_sql_query
 from .cost_tracker import get_tracker, tracked_create
+from .target_resolver import (
+    MIN_GESTURE_SEPARATION_PX,
+    distinct_alternatives,
+    distance,
+    nominal_geometry,
+    resolve_semantic_target,
+    semantic_tab_name,
+)
 
 MODEL = os.environ.get("NARRATOR_MODEL", "claude-sonnet-5")
 
@@ -1080,9 +1088,17 @@ class LessonBuilder:
                 else:
                     targets.append(f"the {col} column under {table}")
 
-        # Table reference.
+        # Table reference. A "FROM <table>" mention is the FROM clause, not a
+        # schema-tree visit, even when the sentence also says "columns".
+        is_from_reference = bool(
+            re.search(rf"\bfrom\s+{re.escape(table)}\b", sentence, re.IGNORECASE)
+        )
         if re.search(rf"\b{re.escape(table)}\b", sentence, re.IGNORECASE):
-            if "structure" in lowered or "tree" in lowered or "columns" in lowered:
+            if (
+                "structure" in lowered
+                or "tree" in lowered
+                or ("columns" in lowered and not is_from_reference)
+            ):
                 targets.append(f"the {table} table in the Database Structure tree")
             elif "browse" in lowered:
                 targets.append(f"the {table} rows in the Browse Data grid")
@@ -1095,6 +1111,8 @@ class LessonBuilder:
             targets.append("the comment block in the SQL editor")
         if re.search(r"\b(select clause|select list)\b", lowered):
             targets.append("the SELECT clause in the SQL editor")
+        if re.search(r"\bfrom clause\b", lowered) or is_from_reference:
+            targets.append("the FROM clause in the SQL editor")
         if re.search(r"\b(order by clause)\b", lowered):
             targets.append("the ORDER BY clause in the SQL editor")
         if re.search(r"\b(limit clause)\b", lowered):
@@ -1119,13 +1137,163 @@ class LessonBuilder:
         return "execute_sql"  # Home base for everything else.
 
     @staticmethod
+    def _semantic_tab(semantic: str) -> str:
+        """Return the tab/view a semantic choreography target belongs to."""
+        if semantic.startswith(("tab:database-structure", "schema-tree:", "schema-columns:")):
+            return "database_structure"
+        if semantic.startswith(("tab:browse-data", "browse-grid:")):
+            return "browse_data"
+        return "execute_sql"  # Home base for everything else.
+
+    @staticmethod
+    def _find_clause_line(lines: List[str], keyword: str) -> Optional[int]:
+        """1-based line of the LAST line starting with ``keyword``.
+
+        The current query is always the last statement in the editor, so the
+        last match is the clause of the live query even when commented history
+        above contains older clauses.
+        """
+        found: Optional[int] = None
+        for i, line in enumerate(lines, start=1):
+            stripped = line.strip().lstrip("(").strip()
+            if stripped.upper().startswith(keyword):
+                found = i
+        return found
+
+    @staticmethod
+    def _find_comment_span(lines: List[str]) -> Optional[Tuple[int, int]]:
+        """1-based (start, end) of the last /* ... */ block, inclusive."""
+        start: Optional[int] = None
+        end: Optional[int] = None
+        for i, line in enumerate(lines, start=1):
+            if "/*" in line:
+                start = i
+            if "*/" in line and start is not None and end is None:
+                end = i
+        if start is not None and end is not None and start <= end:
+            return (start, end)
+        return None
+
+    @staticmethod
+    def _semantic_sentence_targets(
+        sentence: str,
+        columns: List[str],
+        table: str,
+        lines_after: List[str],
+    ) -> List[Tuple[str, str]]:
+        """Ordered (semantic, human) target pairs referenced by a sentence.
+
+        C36: wherever a sentence names a specific visible element the semantic
+        name addresses the sub-element — the clause's editor line, the comment
+        block's line span, a results-grid region — instead of the container's
+        center. Line indices are as of the beat's content state
+        (``lines_after``): the editor content including what this beat types.
+        """
+        lowered = sentence.lower()
+        pairs: List[Tuple[str, str]] = []
+
+        def clause_line(keyword: str) -> Optional[int]:
+            return LessonBuilder._find_clause_line(lines_after, keyword)
+
+        comment_span = LessonBuilder._find_comment_span(lines_after)
+
+        # Specific tab targets first so explicit references win.
+        if "database structure" in lowered:
+            pairs.append(("tab:database-structure", "the Database Structure tab"))
+        if "browse data" in lowered:
+            pairs.append(("tab:browse-data", "the Browse Data tab"))
+        if "execute sql" in lowered:
+            pairs.append(("tab:execute-sql", "the Execute SQL tab"))
+
+        # Column headers or columns under a table.
+        for col in columns:
+            if re.search(rf"\b{re.escape(col)}\b", sentence, re.IGNORECASE):
+                if "header" in lowered or "column" in lowered:
+                    pairs.append(
+                        (f"results-grid:header:{col}", f"the {col} column header in the result pane")
+                    )
+                else:
+                    pairs.append((f"schema-columns:{col}", f"the {col} column under {table}"))
+
+        # Table reference. A "FROM <table>" mention is the FROM clause, not a
+        # schema-tree visit, even when the sentence also says "columns".
+        is_from_reference = bool(
+            re.search(rf"\bfrom\s+{re.escape(table)}\b", sentence, re.IGNORECASE)
+        )
+        if re.search(rf"\b{re.escape(table)}\b", sentence, re.IGNORECASE):
+            if (
+                "structure" in lowered
+                or "tree" in lowered
+                or ("columns" in lowered and not is_from_reference)
+            ):
+                pairs.append(
+                    (f"schema-tree:{table}", f"the {table} table in the Database Structure tree")
+                )
+            elif "browse" in lowered:
+                pairs.append((f"browse-grid:{table}", f"the {table} rows in the Browse Data grid"))
+
+        if "result pane" in lowered or ("result" in lowered and "pane" in lowered):
+            pairs.append(("results-grid:body", "the result pane showing query output"))
+        if "editor" in lowered or re.search(r"\bquery\b", lowered):
+            pairs.append(("sql-editor:body", "the SQL editor text area"))
+        if re.search(r"\b(comment block|comment header)\b", lowered):
+            if comment_span:
+                pairs.append(
+                    (
+                        f"sql-editor:comment-block:{comment_span[0]}-{comment_span[1]}",
+                        "the comment block in the SQL editor",
+                    )
+                )
+            else:
+                pairs.append(("sql-editor:comment-block:1-5", "the comment block in the SQL editor"))
+        if re.search(r"\b(select clause|select list)\b", lowered):
+            line = clause_line("SELECT")
+            if line:
+                pairs.append((f"sql-editor:line:{line}", "the SELECT clause in the SQL editor"))
+        if re.search(r"\bfrom clause\b", lowered) or is_from_reference:
+            line = clause_line("FROM")
+            if line:
+                pairs.append((f"sql-editor:line:{line}", "the FROM clause in the SQL editor"))
+        if re.search(r"\b(order by clause)\b", lowered):
+            line = clause_line("ORDER BY")
+            if line:
+                pairs.append((f"sql-editor:line:{line}", "the ORDER BY clause in the SQL editor"))
+        if re.search(r"\b(limit clause)\b", lowered):
+            line = clause_line("LIMIT")
+            if line:
+                pairs.append((f"sql-editor:line:{line}", "the LIMIT clause in the SQL editor"))
+        if re.search(r"\b(run|execute)\s+the\s+quer", lowered):
+            pairs.append(("toolbar:execute-sql", "the Execute SQL toolbar button"))
+        if re.search(r"\bfirst\s+row\b", lowered):
+            pairs.append(("results-grid:row:1", "the first row in the result grid"))
+        if re.search(r"\bfinished\s+select\b", lowered):
+            line = clause_line("SELECT")
+            if line:
+                pairs.append(
+                    (f"sql-editor:line:{line}", "the finished SELECT statement in the SQL editor")
+                )
+            else:
+                pairs.append(("sql-editor:body", "the finished SELECT statement in the SQL editor"))
+
+        return pairs
+
+    @staticmethod
     def _choreography_for_beat(
         beat: ScriptBeat,
         columns: List[str],
         table: str,
         tour_state: Dict[str, Any],
+        content_before: str = "",
+        screen: Optional[Tuple[float, float]] = None,
     ) -> List[Dict[str, Any]]:
-        """Generate sentence-level choreography with cross-beat tour dedup."""
+        """Generate sentence-level choreography with cross-beat tour dedup.
+
+        C36: every gesture carries a semantic sub-element target (see
+        ``compiler/target_resolver.py``) alongside its human description, and
+        the plan satisfies the distinctness rule — a sentence's gesture never
+        resolves onto the cursor's current rest point; it is retargeted to a
+        distinct sub-point of the named element instead.
+        """
         sentences = LessonBuilder._split_sentences(beat.text)
         if not sentences:
             sentences = [beat.text]
@@ -1133,60 +1301,149 @@ class LessonBuilder:
         items: List[Dict[str, Any]] = []
         current_tab = tour_state.get("current_tab", "execute_sql")
         introduced: Set[str] = tour_state.get("introduced", set())
+        nominal_rest: Optional[Tuple[float, float]] = tour_state.get("nominal_rest")
 
         # Demo beats are composition/execution; they stay on the Execute SQL home
         # base and point at editor elements so the cursor is synced to the typing.
         is_demo = beat.kind == "demo"
 
-        def _add_hover(target: str, sidx: int) -> None:
+        # C36: editor content state for this beat — what the editor holds once
+        # the beat's own typing has landed. Clause/comment line indices are
+        # computed against it.
+        lines_before = [l for l in content_before.split("\n") if l.strip()]
+        typed_lines: List[str] = []
+        action = beat.action or {}
+        if action.get("type") == "type_segments":
+            for segment in action.get("segments") or []:
+                text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
+                typed_lines.extend(l for l in text.split("\n") if l.strip())
+        elif action.get("type") in ("type_block", "append_block"):
+            typed_lines.extend(
+                l for l in (action.get("text") or action.get("detail") or "").split("\n") if l.strip()
+            )
+        lines_after = lines_before + typed_lines
+
+        if screen is None:
+            try:
+                import pyautogui
+
+                size = pyautogui.size()
+                screen = (float(size.width), float(size.height))
+            except Exception:
+                screen = (1440.0, 900.0)
+        geo = nominal_geometry(screen)
+
+        def _add_hover(human: str, semantic: str, sidx: int) -> None:
             # C15: cursor rests on named targets; micro-motion to defeat stillness
             # is banned. Each hover is a deliberate gesture tied to a sentence.
-            items.append({**LessonBuilder._choreography_hover(target), "sentence_idx": sidx})
+            items.append(
+                {
+                    **LessonBuilder._choreography_hover(human),
+                    "sentence_idx": sidx,
+                    "semantic": semantic,
+                }
+            )
             items.append({**LessonBuilder._choreography_pause(1.5), "sentence_idx": sidx})
 
-        def _add_click(target: str, sidx: int) -> None:
-            items.append({**LessonBuilder._choreography_click(target), "sentence_idx": sidx})
+        def _add_click(human: str, semantic: str, sidx: int) -> None:
+            items.append(
+                {
+                    **LessonBuilder._choreography_click(human),
+                    "sentence_idx": sidx,
+                    "semantic": semantic,
+                }
+            )
 
-        def _anchor_target() -> str:
+        def _anchor() -> Tuple[str, str]:
             if is_demo and beat.action:
                 action_type = beat.action.get("type")
                 if action_type in ("type_block", "type_segments", "type"):
-                    return "the SQL editor text area"
+                    return ("sql-editor:body", "the SQL editor text area")
                 if action_type == "run_query":
-                    return "the Execute SQL toolbar button"
+                    return ("toolbar:execute-sql", "the Execute SQL toolbar button")
             if beat.kind == "validation":
-                return "the result pane showing query output"
+                return ("results-grid:body", "the result pane showing query output")
             if beat.kind == "close":
-                return "the finished SELECT statement in the SQL editor"
-            return "the SQL editor text area"
+                line = LessonBuilder._find_clause_line(lines_after, "SELECT")
+                if line:
+                    return (
+                        f"sql-editor:line:{line}",
+                        "the finished SELECT statement in the SQL editor",
+                    )
+                return ("sql-editor:body", "the finished SELECT statement in the SQL editor")
+            return ("sql-editor:body", "the SQL editor text area")
+
+        def _refine_for_distinct(semantic: str) -> str:
+            """C36 distinctness rule: never plan a gesture that rests on the
+            point the cursor already occupies. Retarget to a distinct
+            sub-point of the named element (a different line or region)."""
+            nonlocal nominal_rest
+            point = resolve_semantic_target(semantic, geo)
+            if point is None:
+                return semantic
+            if nominal_rest is not None and distance(point, nominal_rest) < MIN_GESTURE_SEPARATION_PX:
+                for alt in distinct_alternatives(semantic):
+                    alt_point = resolve_semantic_target(alt, geo)
+                    if (
+                        alt_point is not None
+                        and distance(alt_point, nominal_rest) >= MIN_GESTURE_SEPARATION_PX
+                    ):
+                        print(
+                            f"  [CHOREO] C36 distinctness: {semantic} -> {alt} "
+                            "(too close to the current rest point)",
+                            file=sys.stderr,
+                        )
+                        return alt
+                print(
+                    f"  [CHOREO] C36 distinctness: no distinct alternative for {semantic}; "
+                    "keeping the no-op risk visible",
+                    file=sys.stderr,
+                )
+            return semantic
+
+        def _note_rest(semantic: str) -> None:
+            nonlocal nominal_rest
+            point = resolve_semantic_target(semantic, geo)
+            if point is not None:
+                nominal_rest = point
 
         for sidx, sentence in enumerate(sentences):
-            targets = LessonBuilder._sentence_targets(sentence, columns, table)
-            if not targets:
+            pairs = LessonBuilder._semantic_sentence_targets(sentence, columns, table, lines_after)
+            if not pairs:
                 # Sentence references nothing visual: rest on the beat's anchor.
-                targets = [_anchor_target()]
+                pairs = [_anchor()]
 
             if is_demo:
                 # Demo beats are composition/execution on the Execute SQL tab.
                 # Map any result-pane / schema-tree references to editor anchors
                 # so the cursor stays over the live typing area.
-                editor_targets: List[str] = []
-                for t in targets:
-                    lowered = t.lower()
-                    if "result pane" in lowered or "column header" in lowered:
-                        editor_targets.append("the SELECT clause in the SQL editor")
-                    elif "column under" in lowered or "rows in the" in lowered:
-                        editor_targets.append("the SQL editor text area")
-                    elif LessonBuilder._target_tab(t) == "execute_sql":
-                        editor_targets.append(t)
-                targets = editor_targets or [_anchor_target()]
+                select_line = LessonBuilder._find_clause_line(lines_after, "SELECT")
+                editor_pairs: List[Tuple[str, str]] = []
+                for semantic, human in pairs:
+                    if semantic.startswith("results-grid:"):
+                        if select_line:
+                            editor_pairs.append(
+                                (f"sql-editor:line:{select_line}", "the SELECT clause in the SQL editor")
+                            )
+                        else:
+                            editor_pairs.append(("sql-editor:body", "the SQL editor text area"))
+                    elif semantic.startswith(("schema-tree:", "schema-columns:", "browse-grid:")):
+                        # Not on the Execute SQL home base; drop the gesture.
+                        continue
+                    elif LessonBuilder._semantic_tab(semantic) == "execute_sql":
+                        editor_pairs.append((semantic, human))
+                pairs = editor_pairs or [_anchor()]
 
             # Allowed tabs for this sentence; a tab switch is permitted only when
             # the sentence explicitly references that view's content.
-            allowed_tabs = {LessonBuilder._target_tab(t) for t in targets}
+            allowed_tabs = {LessonBuilder._semantic_tab(semantic) for semantic, _ in pairs}
 
-            for target in targets:
-                target_tab = LessonBuilder._target_tab(target)
+            seen_in_sentence: Set[str] = set()
+            for semantic, human in pairs:
+                if semantic in seen_in_sentence:
+                    continue
+                seen_in_sentence.add(semantic)
+                target_tab = LessonBuilder._semantic_tab(semantic)
 
                 # C16: never switch to a tab the current sentence does not reference.
                 if target_tab != current_tab and target_tab not in allowed_tabs:
@@ -1194,7 +1451,7 @@ class LessonBuilder:
 
                 # Cross-beat tour dedup: element introductions happen at most once.
                 is_introduction = target_tab in ("database_structure", "browse_data")
-                dedup_key = f"{target_tab}:{target}"
+                dedup_key = f"{target_tab}:{semantic}"
 
                 if is_introduction:
                     if target_tab != current_tab:
@@ -1202,9 +1459,11 @@ class LessonBuilder:
                             # Already toured this view; do not switch back.
                             continue
                         # First visit to this tab: click the tab itself as introduction.
-                        _add_click(f"the {target_tab.replace('_', ' ').title()} tab", sidx)
+                        tab_semantic = semantic_tab_name(target_tab)
+                        _add_click(f"the {target_tab.replace('_', ' ').title()} tab", tab_semantic, sidx)
                         introduced.add(target_tab)
                         current_tab = target_tab
+                        _note_rest(tab_semantic)
                     if dedup_key in introduced:
                         # Element already introduced in this view.
                         continue
@@ -1215,33 +1474,40 @@ class LessonBuilder:
                     # base at beat end.
                     if target_tab != current_tab:
                         if target_tab in introduced:
-                            _add_click(f"the {target_tab.replace('_', ' ').title()} tab", sidx)
+                            tab_semantic = semantic_tab_name(target_tab)
+                            _add_click(f"the {target_tab.replace('_', ' ').title()} tab", tab_semantic, sidx)
                             current_tab = target_tab
+                            _note_rest(tab_semantic)
                         else:
                             # Tab not yet introduced; skip the gesture and rest on anchor.
                             continue
 
-                _add_hover(target, sidx)
+                refined = _refine_for_distinct(semantic)
+                _add_hover(human, refined, sidx)
+                _note_rest(refined)
 
         # Return to Execute SQL home base if we wandered.
         if current_tab != "execute_sql":
-            items.append({**LessonBuilder._choreography_click("the Execute SQL tab"), "sentence_idx": len(sentences) - 1})
+            items.append(
+                {
+                    **LessonBuilder._choreography_click("the Execute SQL tab"),
+                    "sentence_idx": len(sentences) - 1,
+                    "semantic": "tab:execute-sql",
+                }
+            )
             current_tab = "execute_sql"
+            _note_rest("tab:execute-sql")
 
         # Every beat must have at least one gesture. If dedup skipped every
         # target, rest on the beat's anchor so the cursor is visible.
         if not items:
-            anchor = "the SQL editor text area"
-            if beat.kind == "validation":
-                anchor = "the result pane showing query output"
-            elif beat.kind == "close":
-                anchor = "the finished SELECT statement in the SQL editor"
-            elif beat.kind == "demo" and beat.action:
-                action_type = beat.action.get("type")
-                if action_type == "run_query":
-                    anchor = "the Execute SQL toolbar button"
-            items.append({**LessonBuilder._choreography_hover(anchor), "sentence_idx": 0})
+            anchor_semantic, anchor_human = _anchor()
+            anchor_semantic = _refine_for_distinct(anchor_semantic)
+            items.append(
+                {**LessonBuilder._choreography_hover(anchor_human), "sentence_idx": 0, "semantic": anchor_semantic}
+            )
             items.append({**LessonBuilder._choreography_pause(1.5), "sentence_idx": 0})
+            _note_rest(anchor_semantic)
 
         # Print the sentence->gesture map before recording.
         print(f"[CHOREO MAP] {beat.beat_id}:", file=sys.stderr)
@@ -1256,7 +1522,57 @@ class LessonBuilder:
 
         tour_state["current_tab"] = current_tab
         tour_state["introduced"] = introduced
+        tour_state["nominal_rest"] = nominal_rest
         return items
+
+    def replan_choreography(
+        self,
+        beats: List[ScriptBeat],
+        columns: List[str],
+        table: str,
+        opening_history: str = "",
+    ) -> bool:
+        """C36: replant stale choreography on loaded (baked) scripts.
+
+        Scripts persisted by pre-C36 planners carry container-center plans —
+        every editor sentence collapsed to one point, seams included. When any
+        gesture item lacks a semantic target, the WHOLE script's choreography
+        is replanned with semantic sub-element targets (the tour state and the
+        content thread must be consistent across beats, so partial replans are
+        not valid). ``opening_history`` seeds the content state with the
+        commented continuity history so clause line indices are exact even for
+        videos that paste prior queries.
+
+        Returns True when a replan happened.
+        """
+        stale = any(
+            item.get("type") in ("hover", "click", "drag") and not item.get("semantic")
+            for beat in beats
+            for item in (beat.choreography or [])
+        )
+        if not stale:
+            return False
+        print(
+            "[CHOREO] C36: baked choreography predates semantic targets; "
+            "replanning the script's gestures",
+            file=sys.stderr,
+        )
+        tour_state: Dict[str, Any] = {
+            "current_tab": "execute_sql",
+            "introduced": set(),
+            "nominal_rest": None,
+        }
+        content = opening_history or ""
+        for beat in beats:
+            beat.choreography = self._choreography_for_beat(
+                beat,
+                columns,
+                table,
+                tour_state,
+                content_before=content,
+            )
+            content = self._content_after_beat(beat, content)
+        return True
 
     @staticmethod
     def _choreography_matches_sentences(
@@ -2788,14 +3104,47 @@ class LessonBuilder:
 
         # C13/C14: every beat gets sentence-level choreography. A beat with no
         # choreography is a script defect and will fail validation.
-        tour_state: Dict[str, Any] = {"current_tab": "execute_sql", "introduced": set()}
+        # C36: track the editor content state beat-by-beat so semantic targets
+        # carry line indices as of the beat (FROM Customer lands on its real
+        # line, not the editor's center). The nominal rest point rides in the
+        # tour state so cross-beat gestures stay distinct by construction.
+        tour_state: Dict[str, Any] = {
+            "current_tab": "execute_sql",
+            "introduced": set(),
+            "nominal_rest": None,
+        }
+        editor_content = ""
         for beat in beats:
             if not beat.choreography:
                 beat.choreography = self._choreography_for_beat(
-                    beat, columns, table_name, tour_state
+                    beat,
+                    columns,
+                    table_name,
+                    tour_state,
+                    content_before=editor_content,
                 )
+            editor_content = self._content_after_beat(beat, editor_content)
 
         return beats
+
+    @staticmethod
+    def _content_after_beat(beat: ScriptBeat, content_before: str) -> str:
+        """Editor content once ``beat`` has executed its typing action."""
+        action = beat.action or {}
+        typed = ""
+        if action.get("type") == "type_segments":
+            for segment in action.get("segments") or []:
+                text = segment.get("text", "") if isinstance(segment, dict) else str(segment)
+                typed += ("\n" if typed else "") + text
+        elif action.get("type") in ("type_block", "append_block"):
+            typed = action.get("text") or action.get("detail") or ""
+        if not typed:
+            return content_before
+        if action.get("type") in ("type_segments", "append_block") or not content_before:
+            return content_before + ("\n" if content_before else "") + typed
+        # type_block replaces the editor when there is no continuity history;
+        # continuity runs rewrite it to append_block upstream.
+        return typed
 
     def _enforce_word_limits(
         self, beats: List[ScriptBeat], video: Any

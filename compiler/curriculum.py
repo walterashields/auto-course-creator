@@ -1366,6 +1366,21 @@ def run_course(
                 script_beats = [_dict_to_script_beat(b) for b in video.script_beats]
                 # Normalize legacy recipe/coordinate actions to the vision-agent format.
                 script_beats = lesson_builder._validate_script_beats(script_beats, video)
+                # C36: scripts baked by pre-C36 planners carry container-center
+                # choreography (every editor sentence collapsed to one point,
+                # no-op seams included). Replan them with semantic sub-element
+                # targets, seeded with the continuity history so clause line
+                # indices are exact for videos that paste commented history.
+                _history, _ = _derive_sql_history(manifest, video)
+                _exercise = video.exercise_artifact or {}
+                _table = _exercise.get("table_name", "Customer")
+                _facts = lesson_builder._db_facts(_exercise.get("db_path"), _table)
+                lesson_builder.replan_choreography(
+                    script_beats,
+                    _facts.get("columns", []),
+                    _table,
+                    opening_history=_history or "",
+                )
             else:
                 script_beats = lesson_builder.generate_script(
                     video, env_map=profile.model_dump()

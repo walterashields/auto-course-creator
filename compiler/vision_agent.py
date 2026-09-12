@@ -39,6 +39,13 @@ from .schemas import EnvironmentProfile
 from . import ax_pyobjc
 from .frame_analysis import detect_error_signature
 from .cost_tracker import CostTracker, get_tracker, tracked_create
+from .target_resolver import (
+    MIN_GESTURE_SEPARATION_PX,
+    TargetGeometry,
+    describe_semantic_target,
+    is_semantic_target,
+    resolve_semantic_target,
+)
 
 TARGET_LONG_EDGE = 1568
 DEFAULT_MODEL = os.environ.get("DISCOVERY_MODEL", "claude-sonnet-5")
@@ -439,6 +446,16 @@ class VisionAgent:
         # C17: cached Execute/Run toolbar button point (logical coordinates),
         # primed once at stage prep so run_query needs no mid-beat VLM call.
         self._run_button_point: Optional[Tuple[int, int]] = None
+        # C36: cached geometry for semantic choreography targets (editor /
+        # results rects, tab points, calibrated line height), primed at stage
+        # prep so mid-recording resolution is pure math on the cache.
+        self._target_geometry: Optional[TargetGeometry] = None
+        # C36: the cursor's actual last rest point (logical), tracked across
+        # the whole run so the seam contract can measure real distances.
+        self._last_rest_point: Optional[Tuple[float, float]] = None
+        # C36: bounded VLM fallback for semantic names the profile geometry
+        # cannot resolve — one locate per unique name, cached.
+        self._semantic_fallback_cache: Dict[str, Optional[Tuple[int, int]]] = {}
         # C29: during recording, screenshot() reads the recorder's latest
         # frame through this provider instead of capturing independently.
         self._frame_provider: Optional[Callable[[], Optional[Image.Image]]] = None
@@ -1234,6 +1251,71 @@ end tell
             print(f"  [RUN QUERY] button cached at {point}", file=sys.stderr)
             return True
         return False
+
+    def prime_choreography_geometry(self) -> bool:
+        """C36: resolve semantic-target geometry once per stage-prep window.
+
+        Reads the editor / results AX rects, the view-tab radio-button points,
+        and the calibrated line-height constant into the cached
+        ``TargetGeometry`` so choreography resolution during recording is
+        deterministic math — no AX walks, no VLM calls mid-recording. Missing
+        pieces degrade to the legacy fractional landmarks at resolve time.
+        Best effort: never raises.
+        """
+        try:
+            size = pyautogui.size()
+            screen = (float(size.width), float(size.height))
+        except Exception:
+            screen = (1440.0, 900.0)
+        ui = self.profile.ui or {}
+        line_height = DEFAULT_EDITOR_LINE_HEIGHT_PX
+        try:
+            line_height = float(ui.get("editor_line_height_px") or DEFAULT_EDITOR_LINE_HEIGHT_PX)
+        except (TypeError, ValueError):
+            line_height = DEFAULT_EDITOR_LINE_HEIGHT_PX
+        geo = TargetGeometry(screen=screen, line_height=line_height)
+        try:
+            process_name = self.profile.focus_target or self.profile.app_name
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is not None:
+                app_el = ax_pyobjc.create_application(pid)
+                hints = _main_window_title_hints(self.profile)
+                areas = ax_pyobjc.find_text_areas(app_el, title_hints=hints)
+                rects: List[Tuple[float, float, float, float]] = []
+                for el, _y in areas:
+                    pos = ax_pyobjc.element_position(el)
+                    sz = ax_pyobjc.element_size(el)
+                    if pos and sz:
+                        rects.append((pos[0], pos[1], sz[0], sz[1]))
+                rects.sort(key=lambda r: r[1])
+                if rects:
+                    geo.editor_rect = rects[0]
+                if len(rects) > 1:
+                    geo.results_rect = rects[-1]
+                for el, title in ax_pyobjc.find_radio_buttons(app_el, title_hints=hints):
+                    pos = ax_pyobjc.element_position(el)
+                    sz = ax_pyobjc.element_size(el)
+                    if pos and sz:
+                        key = title.lower().replace(" ", "-")
+                        geo.tab_points[key] = (pos[0] + sz[0] / 2.0, pos[1] + sz[1] / 2.0)
+        except Exception as exc:  # noqa: BLE001 - priming is best effort
+            print(
+                f"  [TARGETS] geometry priming AX read failed: {exc}",
+                file=sys.stderr,
+            )
+        if self._run_button_point is not None:
+            geo.toolbar_points["execute-sql"] = (
+                float(self._run_button_point[0]),
+                float(self._run_button_point[1]),
+            )
+        self._target_geometry = geo
+        print(
+            f"wsda-calibration: editor-line-height={geo.line_height:.1f}px "
+            f"editor_rect={geo.editor_rect} results_rect={geo.results_rect} "
+            f"tabs={sorted(geo.tab_points)}",
+            file=sys.stderr,
+        )
+        return geo.editor_rect is not None
 
     def _clear_editor_accessibility(self) -> bool:
         """
@@ -3609,6 +3691,45 @@ end tell
             time.sleep(0.3)
         return ok
 
+    def resolve_choreography_point(self, name: str) -> Optional[Tuple[int, int]]:
+        """C36: resolve a semantic target to integer logical points.
+
+        Pure math on the primed geometry cache; every successful resolution is
+        logged as ``wsda-target:<semantic> -> <point>`` so landings are
+        auditable against the intended line/region. Returns None only for
+        names the geometry cannot place (caller falls back).
+        """
+        if not is_semantic_target(name):
+            return None
+        geo = self._target_geometry
+        if geo is None:
+            self.prime_choreography_geometry()
+            geo = self._target_geometry
+        if geo is None:
+            return None
+        point = resolve_semantic_target(name, geo)
+        if point is None:
+            return None
+        pt = (int(round(point[0])), int(round(point[1])))
+        print(f"wsda-target:{name} -> {pt}", file=sys.stderr)
+        return pt
+
+    def _semantic_fallback_point(self, name: str) -> Optional[Tuple[int, int]]:
+        """C36 bounded fallback: one cached VLM locate per unique semantic name
+        the profile geometry cannot place (never for known families, which
+        always resolve deterministically)."""
+        if name in self._semantic_fallback_cache:
+            return self._semantic_fallback_cache[name]
+        point: Optional[Tuple[int, int]] = None
+        if len(self._semantic_fallback_cache) < 10:
+            point = self._vlm_locate_point(
+                "Locate (do NOT press)",
+                describe_semantic_target(name),
+            )
+        self._semantic_fallback_cache[name] = point
+        print(f"  [TARGETS] wsda-target-fallback:{name} -> {point}", file=sys.stderr)
+        return point
+
     def _resolve_choreography_target(self, target: str) -> Optional[Tuple[int, int]]:
         """Return logical screen coordinates for known choreography targets.
 
@@ -3617,12 +3738,23 @@ end tell
         to approximate coordinates so the whole routine stays fast enough to fill
         the beat's narration window.
 
+        C36: semantic targets (``sql-editor:line:<n>``,
+        ``sql-editor:comment-block:...``, ``results-grid:...``, ``tab:...``)
+        resolve deterministically against the primed profile geometry —
+        sub-element points, not container centers. Unplaced names get one
+        cached VLM locate (bounded fallback), never an inline lookup loop.
+
         C15: a target always resolves to the same single point. Micro-motion to
         defeat stillness is patrol residue and is banned; the cursor rests on a
         named target until a sentence change or the rest cap forces a move.
         """
         if not target:
             return None
+        if is_semantic_target(target):
+            point = self.resolve_choreography_point(target)
+            if point is not None:
+                return point
+            return self._semantic_fallback_point(target)
         lowered = target.lower()
         size = pyautogui.size()
         w, h = size.width, size.height
@@ -3637,6 +3769,8 @@ end tell
             return pt(0.50, 0.40)
         if "select statement" in lowered:
             return pt(0.50, 0.40)
+        if "from clause" in lowered:
+            return pt(0.50, 0.42)
         if "comment block" in lowered or "comment header" in lowered:
             return pt(0.50, 0.29)
         if "result pane" in lowered:
@@ -3692,11 +3826,15 @@ end tell
     def _move_to_target(self, target: str, duration: float = 0.7) -> bool:
         point = self._resolve_choreography_target(target)
         if point is None:
-            return self.emphasize_element(target, select=False)
+            desc = describe_semantic_target(target) if is_semantic_target(target) else target
+            return self.emphasize_element(desc, select=False)
         try:
             move_duration = max(0.25, duration)
             pyautogui.moveTo(point[0], point[1], duration=move_duration, tween=pyautogui.easeInOutQuad)
             time.sleep(0.05)
+            # C36: track the real rest point so the seam contract can compare
+            # the next gesture against where the cursor actually sits.
+            self._last_rest_point = (float(point[0]), float(point[1]))
             return True
         except Exception as exc:
             print(f"Warning: direct choreography move failed: {exc}", file=sys.stderr)
@@ -3720,7 +3858,9 @@ end tell
           - drag:   drag-select across an element (for highlighting rows/cells)
         """
         action_type = (item.get("type") or "").lower()
-        target = item.get("target", "")
+        # C36: semantic sub-element targets take precedence over the legacy
+        # human description when both are present on the item.
+        target = item.get("semantic") or item.get("target", "")
         if action_type == "pause":
             duration = float(item.get("duration", 0.5))
             time.sleep(duration)
@@ -3740,11 +3880,13 @@ end tell
         if action_type == "drag":
             point = self._resolve_choreography_target(target)
             if point is None:
-                return self.emphasize_element(target, select=True)
+                desc = describe_semantic_target(target) if is_semantic_target(target) else target
+                return self.emphasize_element(desc, select=True)
             try:
                 x, y = point
                 leg = self._item_move_duration(item, 0.4)
                 pyautogui.moveTo(x, y, duration=leg, tween=pyautogui.easeInOutQuad)
+                self._last_rest_point = (float(x), float(y))
                 pyautogui.mouseDown()
                 pyautogui.moveTo(x + 150, y, duration=leg, tween=pyautogui.easeInOutQuad)
                 pyautogui.mouseUp()
@@ -3823,7 +3965,7 @@ end tell
                         float(item.get("duration", 0.5)), max(remaining, 0.0), 5.0
                     )
 
-            target = item.get("target", "")
+            target = item.get("semantic") or item.get("target", "")
             print(
                 f"  [CHOREO] {item.get('type')} {target[:60]}",
                 file=sys.stderr,
@@ -3852,7 +3994,7 @@ end tell
                         item.get("sentence_idx") == last_sentence_idx
                         and item.get("type") in ("hover", "click")
                     ):
-                        t = item.get("target", "")
+                        t = item.get("semantic") or item.get("target", "")
                         if t and t not in seen:
                             seen.add(t)
                             sentence_targets.append(t)

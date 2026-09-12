@@ -45,6 +45,11 @@ from .frame_analysis import count_error_signature_frames
 from .narrator import ScriptBeat
 from .schemas import DiscoveryResult, EnvironmentProfile, ExecutionGraph, NarrationBeat, ScreenState
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
+from .target_resolver import (
+    MIN_GESTURE_SEPARATION_PX,
+    distance,
+    distinct_alternatives,
+)
 from .tts import TTSGenerator
 from .vision_agent import VisionAgent
 from .cost_tracker import get_tracker, tracked_create
@@ -225,10 +230,85 @@ def _choreography_plan_cost(plan: List[Dict[str, Any]]) -> float:
     return total
 
 
+def _plan_target(it: Dict[str, Any]) -> str:
+    """C36: the identity of a plan item is its semantic target when present,
+    else the legacy human description."""
+    return it.get("semantic") or it.get("target", "")
+
+
+def _apply_seam_contract(
+    plan: List[Dict[str, Any]],
+    resolve_point: Callable[[str], Optional[Tuple[float, float]]],
+    prev_rest_point: Tuple[float, float],
+    min_dist: float = MIN_GESTURE_SEPARATION_PX,
+) -> List[Dict[str, Any]]:
+    """C36 seam contract: the plan's first gesture must resolve at least
+    ``min_dist`` from the previous beat's final rest point.
+
+    When it would land on (or within 40px of) the point the cursor already
+    occupies, the gesture is retargeted — first to another target the same
+    sentence names, then to a distinct sub-point of the same element family.
+    A no-op hover is never protected: it is retargeted or logged as an
+    unresolvable risk, never silently kept.
+    """
+    first_idx: Optional[int] = None
+    for i, it in enumerate(plan):
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            first_idx = i
+            break
+    if first_idx is None:
+        return plan
+    first = plan[first_idx]
+    name = _plan_target(first)
+    if not name:
+        return plan
+    point = resolve_point(name)
+    rest = (float(prev_rest_point[0]), float(prev_rest_point[1]))
+    if point is None:
+        return plan
+    if distance((float(point[0]), float(point[1])), rest) >= min_dist:
+        return plan
+    candidates: List[str] = []
+    sidx = first.get("sentence_idx", 0)
+    for other in plan[first_idx + 1 :]:
+        if other.get("sentence_idx") != sidx:
+            continue
+        if other.get("type") not in ("hover", "click"):
+            continue
+        other_name = _plan_target(other)
+        if other_name and other_name != name and other_name not in candidates:
+            candidates.append(other_name)
+    for alt in distinct_alternatives(name):
+        if alt not in candidates:
+            candidates.append(alt)
+    for cand in candidates:
+        cand_point = resolve_point(cand)
+        if cand_point is None:
+            continue
+        if distance((float(cand_point[0]), float(cand_point[1])), rest) >= min_dist:
+            retargeted = dict(first)
+            retargeted["semantic"] = cand
+            plan[first_idx] = retargeted
+            print(
+                f"  [CHOREO] C36 seam retarget: {name} -> {cand} "
+                f"(resolved {point} within {min_dist:.0f}px of rest {rest})",
+                file=sys.stderr,
+            )
+            return plan
+    print(
+        f"  [CHOREO] C36 seam: no distinct target for '{name}' "
+        f"(rest {rest}); keeping the no-op risk visible",
+        file=sys.stderr,
+    )
+    return plan
+
+
 def _schedule_choreography(
     items: List[Dict[str, Any]],
     audio_duration: float,
     reserved_seconds: float = 0.0,
+    resolve_point: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None,
+    prev_rest_point: Optional[Tuple[float, float]] = None,
 ) -> List[Dict[str, Any]]:
     """
     C35: schedule choreography so the plan fills the narration window
@@ -242,6 +322,12 @@ def _schedule_choreography(
       3. No still block exceeds 4.5s: rests separated only by motion to the
          same target are one block. The plan leads with a gesture within 2.0s
          and ends with a gesture so the clip tail is not parked.
+
+    C36: when ``resolve_point`` and ``prev_rest_point`` are given, the seam
+    contract is enforced up front — the first gesture must land at least
+    MIN_GESTURE_SEPARATION_PX from the previous beat's final rest point, so a
+    concatenated seam freezes for at most the 1.0s recorder tail plus this
+    plan's capped lead (<= 2.0s), i.e. <= 3.0s <= the 4.0s seam budget.
     """
     scheduled: List[Dict[str, Any]] = [dict(it) for it in items]
     target = max(0.0, audio_duration - 1.0 - reserved_seconds)
@@ -262,7 +348,7 @@ def _schedule_choreography(
     last_seen_target: Optional[str] = None
     for it in scheduled:
         if it.get("type") in CHOREO_GESTURE_TYPES:
-            t = it.get("target", "")
+            t = _plan_target(it)
             s = it.get("sentence_idx", 0)
             if t and t == last_seen_target and sentence_gesture_count.get(s, 0) >= 2:
                 sentence_gesture_count[s] -= 1
@@ -271,6 +357,10 @@ def _schedule_choreography(
             last_seen_target = t
         deduped.append(it)
     scheduled = [it for it in deduped if it is not None]
+
+    # C36 seam contract with the previous beat's final rest point.
+    if resolve_point is not None and prev_rest_point is not None:
+        scheduled = _apply_seam_contract(scheduled, resolve_point, prev_rest_point)
 
     pause_indices = [i for i, it in enumerate(scheduled) if it.get("type") == "pause"]
     gesture_indices = [i for i, it in enumerate(scheduled) if it.get("type") in CHOREO_GESTURE_TYPES]
@@ -404,7 +494,7 @@ def _cap_choreo_still_blocks(plan: List[Dict[str, Any]]) -> None:
         if it.get("type") == "pause":
             block.append(it)
             continue
-        target = it.get("target", "")
+        target = _plan_target(it)
         speed = max(1.0, float(it.get("speed", 1.0)))
         cost = _CHOREO_GESTURE_COST.get(it.get("type"), 0.5) / speed
         if target and target != last_target:
@@ -4616,6 +4706,17 @@ class EndStateDiscovery:
                                 file=sys.stderr,
                             )
                     tl["pre_focus_done"] = time.time()
+                    # C36: prime the semantic-target geometry (editor/results
+                    # rects, tab points, calibrated line height) while AX is
+                    # idle, so mid-recording resolution is cache math only.
+                    try:
+                        agent.prime_choreography_geometry()
+                    except Exception as exc:
+                        print(
+                            f"  [TARGETS] geometry priming raised for {beat.beat_id} "
+                            f"(non-fatal): {exc}",
+                            file=sys.stderr,
+                        )
                     agent.recording = True
                     tl["recorder_start_called"] = time.time()
                     recorder.start()
@@ -4694,6 +4795,8 @@ class EndStateDiscovery:
                             beat.choreography,
                             audio_duration,
                             reserved_seconds=reserved_action_seconds,
+                            resolve_point=agent.resolve_choreography_point,
+                            prev_rest_point=agent._last_rest_point,
                         )
                         print(
                             f"  [CHOREOGRAPHY SCHEDULED] {beat.beat_id}: "
