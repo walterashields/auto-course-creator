@@ -40,6 +40,7 @@ from . import ax_pyobjc
 from .frame_analysis import detect_error_signature
 from .cost_tracker import CostTracker, get_tracker, tracked_create
 from .target_resolver import (
+    DEFAULT_EDITOR_LINE_HEIGHT_PX,
     MIN_GESTURE_SEPARATION_PX,
     TargetGeometry,
     describe_semantic_target,

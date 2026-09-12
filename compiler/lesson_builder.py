@@ -1553,6 +1553,11 @@ class LessonBuilder:
         if not stale:
             return False
         print(
+            "wsda-replan: baked choreography predates semantic targets; "
+            f"replanning {len(beats)} beat(s) with semantic sub-element targets",
+            file=sys.stderr,
+        )
+        print(
             "[CHOREO] C36: baked choreography predates semantic targets; "
             "replanning the script's gestures",
             file=sys.stderr,
