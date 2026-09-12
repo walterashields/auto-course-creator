@@ -2770,6 +2770,27 @@ class TestC39BudgetGuardCoverage(unittest.TestCase):
         )
 
 
+    def test_covered_sentences_helper_reads_executed_indices(self) -> None:
+        """Regression: the executor passes the beat-level covered set to the
+        guard. scheduled_choreo is a plain item list; the helper must read
+        executed indices against enumerate, not pair-unpack the list."""
+        from compiler.discovery import covered_choreo_sentences
+
+        scheduled = [
+            {"type": "hover", "sentence_idx": 0},
+            {"type": "pause", "sentence_idx": 0},
+            {"type": "hover", "sentence_idx": 1},
+            {"type": "hover", "sentence_idx": 2},
+        ]
+        # Executed ITEM indices map to their sentences (item idx != sentence).
+        self.assertEqual(covered_choreo_sentences(scheduled, {0, 2}), [0, 1])
+        self.assertEqual(covered_choreo_sentences(scheduled, {3}), [2])
+        self.assertEqual(covered_choreo_sentences(scheduled, {0, 3}), [0, 2])
+        self.assertEqual(covered_choreo_sentences(scheduled, set()), [])
+        # Pauses never count as coverage.
+        self.assertEqual(covered_choreo_sentences(scheduled, {1}), [])
+
+
 class TestC39RuntimeWatchdog(unittest.TestCase):
     """C39 STEP 1: the runtime park watchdog keeps the contiguous park at or
     under the 3.5s cap regardless of cause — injected action overruns,

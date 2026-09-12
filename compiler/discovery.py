@@ -278,6 +278,21 @@ def reserved_action_seconds(beat: Any, margin: float = MEASURED_RESERVATION_MARG
     return 2.0
 
 
+def covered_choreo_sentences(
+    scheduled_choreo: List[Dict[str, Any]], executed_indices: set
+) -> List[int]:
+    """C39 STEP 2: sentence indices with a gesture already executed in this
+    beat (used as the budget guard's ``covered`` set so a sentence already
+    gestured earlier in the beat may lose its remaining extras)."""
+    return sorted(
+        {
+            it.get("sentence_idx", 0)
+            for idx, it in enumerate(scheduled_choreo)
+            if idx in executed_indices and it.get("type") in CHOREO_GESTURE_TYPES
+        }
+    )
+
+
 def _plan_target(it: Dict[str, Any]) -> str:
     """C36: the identity of a plan item is its semantic target when present,
     else the legacy human description."""
@@ -5311,13 +5326,8 @@ class EndStateDiscovery:
                                         done = agent.execute_choreography(
                                             [it for _, it in chunk],
                                             max_duration=remaining_tts,
-                                            covered_sentences=sorted(
-                                                {
-                                                    it.get("sentence_idx", 0)
-                                                    for idx2, it in scheduled_choreo
-                                                    if idx2 in executed_choreo_indices
-                                                    and it.get("type") in CHOREO_GESTURE_TYPES
-                                                }
+                                            covered_sentences=covered_choreo_sentences(
+                                                scheduled_choreo, executed_choreo_indices
                                             ),
                                         )
                                         for k, (orig_idx, _) in enumerate(chunk):
@@ -5440,13 +5450,8 @@ class EndStateDiscovery:
                                 done = agent.execute_choreography(
                                     [it for _, it in remaining_pairs],
                                     max_duration=remaining_tts,
-                                    covered_sentences=sorted(
-                                        {
-                                            it.get("sentence_idx", 0)
-                                            for idx2, it in scheduled_choreo
-                                            if idx2 in executed_choreo_indices
-                                            and it.get("type") in CHOREO_GESTURE_TYPES
-                                        }
+                                    covered_sentences=covered_choreo_sentences(
+                                        scheduled_choreo, executed_choreo_indices
                                     ),
                                 )
                                 for k, (orig_idx, _) in enumerate(remaining_pairs):
@@ -5589,13 +5594,8 @@ class EndStateDiscovery:
                                         agent.execute_choreography(
                                             tail_choreo,
                                             max_duration=remaining,
-                                            covered_sentences=sorted(
-                                                {
-                                                    it.get("sentence_idx", 0)
-                                                    for idx2, it in scheduled_choreo
-                                                    if idx2 in executed_choreo_indices
-                                                    and it.get("type") in CHOREO_GESTURE_TYPES
-                                                }
+                                            covered_sentences=covered_choreo_sentences(
+                                                scheduled_choreo, executed_choreo_indices
                                             ),
                                         )
                                     elif agent.watchdog is not None:
