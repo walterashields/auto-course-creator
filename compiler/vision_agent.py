@@ -37,6 +37,12 @@ pyautogui.FAILSAFE = False
 
 from .schemas import EnvironmentProfile
 from . import ax_pyobjc
+from .choreo_runtime import (
+    PARK_CAP,
+    GESTURE_TYPES as _RUNTIME_GESTURE_TYPES,
+    ParkWatchdog,
+    compress_plan_for_budget,
+)
 from .frame_analysis import detect_error_signature
 from .cost_tracker import CostTracker, get_tracker, tracked_create
 from .target_resolver import (
@@ -44,6 +50,7 @@ from .target_resolver import (
     MIN_GESTURE_SEPARATION_PX,
     TargetGeometry,
     describe_semantic_target,
+    distance,
     is_semantic_target,
     resolve_semantic_target,
 )
@@ -454,6 +461,10 @@ class VisionAgent:
         # C36: the cursor's actual last rest point (logical), tracked across
         # the whole run so the seam contract can measure real distances.
         self._last_rest_point: Optional[Tuple[float, float]] = None
+        # C39 STEP 1: runtime park watchdog, armed per beat attempt by the
+        # discovery executor and disarmed when the attempt ends. None outside
+        # a beat (choreography helpers fall back to plain sleeps).
+        self.watchdog: Optional["ParkWatchdog"] = None
         # C36: bounded VLM fallback for semantic names the profile geometry
         # cannot resolve — one locate per unique name, cached.
         self._semantic_fallback_cache: Dict[str, Optional[Tuple[int, int]]] = {}
@@ -1632,6 +1643,10 @@ end tell
         """
         text = line + ("\n" if add_newline else "")
         self._verified_clipboard_paste(text)
+        # C39: a paste is a type action — an on-screen state change — and
+        # resets the park watchdog clock.
+        if self.watchdog is not None:
+            self.watchdog.note_motion()
         time.sleep(0.05)
         # C18: flat fast-end cadence; the governor's escalation rule is that a
         # failed beat-end canonical check at this pace is the evidence to slow
@@ -3836,6 +3851,9 @@ end tell
             # C36: track the real rest point so the seam contract can compare
             # the next gesture against where the cursor actually sits.
             self._last_rest_point = (float(point[0]), float(point[1]))
+            # C39: a real cursor move resets the park watchdog clock.
+            if self.watchdog is not None:
+                self.watchdog.note_motion()
             return True
         except Exception as exc:
             print(f"Warning: direct choreography move failed: {exc}", file=sys.stderr)
@@ -3867,7 +3885,12 @@ end tell
         target = item.get("semantic") or item.get("target", "")
         if action_type == "pause":
             duration = float(item.get("duration", 0.5))
-            time.sleep(duration)
+            # C39: pauses sleep through the park watchdog so no still stretch
+            # exceeds the cap regardless of the planned duration.
+            if self.watchdog is not None:
+                self.watchdog.checked_sleep(duration, reason="choreo-pause")
+            else:
+                time.sleep(duration)
             return True
         if action_type == "hover":
             return self._move_to_target(target, duration=self._item_move_duration(item, 0.7))
@@ -3876,7 +3899,13 @@ end tell
                 return False
             try:
                 pyautogui.click()
-                time.sleep(0.2)
+                # C39: post-click settle is an action-path sleep — capped by
+                # the watchdog, not by a bare time.sleep.
+                if self.watchdog is not None:
+                    self.watchdog.note_motion()
+                    self.watchdog.checked_sleep(0.2, reason="post-click-settle")
+                else:
+                    time.sleep(0.2)
                 return True
             except Exception as exc:
                 print(f"Warning: click choreography failed: {exc}", file=sys.stderr)
@@ -3891,10 +3920,15 @@ end tell
                 leg = self._item_move_duration(item, 0.4)
                 pyautogui.moveTo(x, y, duration=leg, tween=pyautogui.easeInOutQuad)
                 self._last_rest_point = (float(x), float(y))
+                if self.watchdog is not None:
+                    self.watchdog.note_motion()
                 pyautogui.mouseDown()
                 pyautogui.moveTo(x + 150, y, duration=leg, tween=pyautogui.easeInOutQuad)
                 pyautogui.mouseUp()
-                time.sleep(0.2)
+                if self.watchdog is not None:
+                    self.watchdog.checked_sleep(0.2, reason="post-drag-settle")
+                else:
+                    time.sleep(0.2)
                 return True
             except Exception as exc:
                 print(f"Warning: drag choreography failed: {exc}", file=sys.stderr)
@@ -3907,7 +3941,11 @@ end tell
                     pyautogui.scroll(-amount * 30)
                 else:
                     pyautogui.scroll(amount * 30)
-                time.sleep(0.2)
+                if self.watchdog is not None:
+                    self.watchdog.note_motion()
+                    self.watchdog.checked_sleep(0.2, reason="post-scroll-settle")
+                else:
+                    time.sleep(0.2)
                 return True
             except Exception as exc:
                 print(f"Warning: scroll choreography failed: {exc}", file=sys.stderr)
@@ -3919,55 +3957,85 @@ end tell
         self,
         items: List[Dict[str, Any]],
         max_duration: Optional[float] = None,
+        covered_sentences: Optional[Set[int]] = None,
     ) -> int:
         """
         Run a list of choreography items sequentially.
 
-        If ``max_duration`` is provided, the routine stops before it exceeds the
-        budget and truncates the final pause so the recorded clip stays within
-        the narration-paced timing contract.  Leftover time is spent resting on
-        the last target; cursor patrol/filler motion is banned (C15).
+        If ``max_duration`` is provided, the routine compresses the tail so
+        the recorded clip stays within the narration-paced timing contract.
+        Leftover time is spent resting on the last target; cursor
+        patrol/filler motion is banned (C15).
 
-        C35: coverage is a hard invariant — an item is never skipped while it
-        is its sentence's only remaining gesture.  When the budget is spent,
-        remaining uncovered sentences still get their gesture (slightly past
-        the soft budget); only covered sentences' redundant items are dropped.
+        C35/C39: coverage is a hard invariant — an item is never skipped
+        while it is its sentence's only remaining gesture.  When the time
+        budget is exhausted the tail is compressed in the C35 order (see
+        compiler.choreo_runtime.compress_plan_for_budget): pauses drop to
+        zero, gesture travel compresses up to the 2x speed cap, only
+        gestures that are NOT any sentence's last gesture may drop (with a
+        park-cap re-check after every decision), and a sentence's last/only
+        gesture ALWAYS runs — compressed, slightly past the soft budget.
+        The pre-C39 wholesale "skipping redundant item(s)" break is gone.
 
-        Returns the number of items executed from the front of ``items``.
+        ``covered_sentences`` holds the sentence indices already gestured
+        earlier in this beat (interleaved demo segments), so the guard knows
+        which sentences already have a gesture.
+
+        Returns the number of items from the front of ``items`` that were
+        executed or deliberately handled by the budget guard.
         """
         start = time.time()
         executed = 0
         last_target: Optional[str] = None
         last_sentence_idx: Optional[int] = None
-        gestured_sentences: Set[int] = set()
+        gestured_sentences: Set[int] = set(covered_sentences or set())
+        handled_by_guard = False
+        # After the budget guard compresses the tail, every remaining original
+        # item counts as handled the moment the compression is decided; the
+        # compressed survivors then execute without double-counting.
+        count_executed = True
 
-        for i, item in enumerate(items):
-            item = dict(item)
+        work_items: List[Dict[str, Any]] = [dict(it) for it in items]
+        i = 0
+        while i < len(work_items):
+            item = work_items[i]
             remaining: Optional[float] = None
             if max_duration is not None:
                 elapsed = time.time() - start
                 remaining = max(0.0, max_duration - elapsed)
-                # C35: never skip a sentence's last remaining gesture.
-                later_uncovered = any(
-                    it.get("sentence_idx", 0) not in gestured_sentences
-                    for it in items[i:]
-                    if it.get("type") in ("hover", "click", "scroll", "drag")
-                )
-                if remaining <= 0.05 and not later_uncovered:
-                    remaining_items = len(items) - i
-                    if remaining_items:
+                if remaining <= 0.05 and not handled_by_guard:
+                    # C39 STEP 2: never wholesale-skip. Compress the remaining
+                    # tail in the C35 order and keep executing the survivors.
+                    tail, decisions = compress_plan_for_budget(
+                        work_items[i:],
+                        remaining,
+                        covered=sorted(gestured_sentences),
+                        log=lambda msg: print(f"  [CHOREO] {msg}", file=sys.stderr),
+                    )
+                    if decisions:
                         print(
-                            f"  [CHOREO] time budget exhausted; skipping {remaining_items} redundant item(s)",
+                            f"  [CHOREO] guard: time budget exhausted; "
+                            f"compressing {len(work_items) - i} remaining item(s) "
+                            f"in C35 order",
                             file=sys.stderr,
                         )
-                    break
+                        for d in decisions:
+                            print(f"  [CHOREO] {d}", file=sys.stderr)
+                    handled_by_guard = True
+                    executed += len(work_items) - i
+                    count_executed = False
+                    work_items = work_items[:i] + tail
+                    if not tail:
+                        # Everything remaining was a zero-length pause.
+                        break
+                    item = work_items[i]
                 if item.get("type") == "pause":
                     # C15/C35/C38: resting on a target is correct teaching, but no
                     # single still run may approach the 6.0s B3 anti-stall gate.
-                    # Cap each pause at the 3.5s park cap (discovery.CHOREO_PAUSE_CAP,
-                    # mirrored here to avoid the discovery import cycle).
+                    # Cap each pause at the 3.5s park cap (PARK_CAP from
+                    # compiler.choreo_runtime; no discovery import cycle).
                     item["duration"] = min(
-                        float(item.get("duration", 0.5)), max(remaining, 0.0), 3.5
+                        float(item.get("duration", 0.5)), max(remaining or 0.0, 0.0), PARK_CAP
                     )
 
             target = item.get("semantic") or item.get("target", "")
@@ -3975,10 +4043,14 @@ end tell
                 f"  [CHOREO] {item.get('type')} {target[:60]}",
                 file=sys.stderr,
             )
+            if self.watchdog is not None:
+                self.watchdog.last_item = item
             self.execute_choreography_item(item)
-            executed += 1
+            if count_executed:
+                executed += 1
+            i += 1
 
-            if item.get("type") in ("hover", "click", "scroll", "drag"):
+            if item.get("type") in _RUNTIME_GESTURE_TYPES:
                 gestured_sentences.add(item.get("sentence_idx", 0))
             if item.get("type") in ("hover", "click") and target:
                 last_target = target
@@ -4008,19 +4080,22 @@ end tell
                 rested_same_target = 0.0
 
                 while leftover > 0.05:
-                    rest = min(leftover, 3.5)
+                    rest = min(leftover, PARK_CAP)
                     if len(sentence_targets) <= 1:
                         # C35/C38: a single-target sentence cannot lawfully move; cap
                         # consecutive still time at the 3.5s park cap instead of
                         # chaining rests into one long parked run.
-                        rest = min(rest, max(0.0, 3.5 - rested_same_target))
+                        rest = min(rest, max(0.0, PARK_CAP - rested_same_target))
                         if rest <= 0.05:
                             break
                     print(
                         f"  [CHOREO] resting {rest:.2f}s on '{last_target[:60]}'",
                         file=sys.stderr,
                     )
-                    time.sleep(rest)
+                    if self.watchdog is not None:
+                        self.watchdog.checked_sleep(rest, reason="leftover-rest")
+                    else:
+                        time.sleep(rest)
                     rested_same_target += rest
                     elapsed = time.time() - start
                     leftover = max(0.0, max_duration - elapsed)
@@ -4045,8 +4120,93 @@ end tell
                     f"  [CHOREO] resting {leftover:.2f}s (no sentence target to cycle)",
                     file=sys.stderr,
                 )
-                time.sleep(leftover)
+                if self.watchdog is not None:
+                    self.watchdog.checked_sleep(leftover, reason="leftover-rest-no-target")
+                else:
+                    time.sleep(leftover)
         return executed
+
+    # ------------------------------------------------------------------
+    # C39 runtime park watchdog — minimal visible motion
+    # ------------------------------------------------------------------
+
+    def _resolve_watchdog_point(self, name: str) -> Optional[Tuple[int, int]]:
+        """Resolve a watchdog motion target WITHOUT any VLM call: semantic
+        names go through the primed-geometry math only (None when the
+        geometry cannot place them); legacy phrases use the deterministic
+        phrase table."""
+        if not name:
+            return None
+        if is_semantic_target(name):
+            # Pure math on the primed geometry cache; never the VLM fallback.
+            return self.resolve_choreography_point(name)
+        return self._resolve_choreography_target(name)
+
+    def _watchdog_break_motion(self, reason: str) -> bool:
+        """C39 STEP 1: the watchdog's minimal visible motion. Preferred: a
+        fast hover to the current sentence's resolved target. When that
+        lands on (or within MIN_GESTURE_SEPARATION_PX of) the cursor's rest
+        point, or no target resolves: a short drift glide to the beat's
+        most-referenced alternative and back. When nothing resolves at all,
+        a small deterministic relative drift around the current point.
+
+        Deterministic — never a VLM call."""
+        watchdog = self.watchdog
+        rest = self._last_rest_point
+        try:
+            target, source = (
+                watchdog.resolve_motion_target() if watchdog is not None else (None, "none")
+            )
+            if target:
+                point = self._resolve_watchdog_point(target)
+                if point is not None and (
+                    rest is None
+                    or distance((float(point[0]), float(point[1])), rest)
+                    >= MIN_GESTURE_SEPARATION_PX
+                ):
+                    pyautogui.moveTo(
+                        point[0],
+                        point[1],
+                        duration=0.25,
+                        tween=pyautogui.easeInOutQuad,
+                    )
+                    self._last_rest_point = (float(point[0]), float(point[1]))
+                    print(
+                        f"  [WATCHDOG] break-park hover -> {target[:60]} "
+                        f"({source}, reason={reason})",
+                        file=sys.stderr,
+                    )
+                    return True
+                if point is not None and rest is not None:
+                    # The alternative resolves but the cursor is already
+                    # there: glide to it and back — visible travel both ways.
+                    pyautogui.moveTo(
+                        point[0], point[1], duration=0.25, tween=pyautogui.easeInOutQuad
+                    )
+                    time.sleep(0.05)
+                    pyautogui.moveTo(
+                        rest[0], rest[1], duration=0.25, tween=pyautogui.easeInOutQuad
+                    )
+                    print(
+                        f"  [WATCHDOG] break-park drift glide -> {target[:60]} and back "
+                        f"({source}, reason={reason})",
+                        file=sys.stderr,
+                    )
+                    return True
+            # Nothing resolved: small deterministic relative drift and back.
+            pos = pyautogui.position()
+            x, y = float(pos.x), float(pos.y)
+            pyautogui.moveTo(x + 60.0, y + 20.0, duration=0.2, tween=pyautogui.easeInOutQuad)
+            time.sleep(0.05)
+            pyautogui.moveTo(x, y, duration=0.2, tween=pyautogui.easeInOutQuad)
+            print(
+                f"  [WATCHDOG] break-park relative drift (reason={reason})",
+                file=sys.stderr,
+            )
+            return True
+        except Exception as exc:
+            print(f"Warning: watchdog break-park motion failed: {exc}", file=sys.stderr)
+            return False
 
     def frame_shows_error_signature(self, frame_path: str) -> bool:
         """Return True if ``frame_path`` matches the profile's error_signature (pixel check)."""

@@ -2649,6 +2649,369 @@ class TestC31TracebackLogged(unittest.TestCase):
         self.assertIn("ValueError: boom", err.getvalue())
 
 
+class TestC39BudgetGuardCoverage(unittest.TestCase):
+    """C39 STEP 2: when the executor time budget is exhausted, the guard
+    compresses the plan tail in the C35 order — (a) pauses to zero, (b)
+    gesture travel to the 2x speed cap, (c) only gestures that are NOT any
+    sentence's last gesture dropped, (d) a sentence's last/only gesture
+    NEVER dropped (it runs compressed). The park cap is re-checked after
+    every guard decision, and the string "redundant" is never applied to a
+    sentence-covered gesture."""
+
+    @staticmethod
+    def _hover(target: str, sidx: int, speed: float = 1.0) -> Dict[str, Any]:
+        return {
+            "type": "hover",
+            "target": target,
+            "semantic": target,
+            "sentence_idx": sidx,
+            "speed": speed,
+        }
+
+    @staticmethod
+    def _pause(sidx: int, duration: float = 1.5) -> Dict[str, Any]:
+        return {"type": "pause", "duration": duration, "sentence_idx": sidx}
+
+    def test_compression_order_pauses_then_speed_then_drops(self) -> None:
+        from compiler.choreo_runtime import CHOREO_MAX_SPEED, compress_plan_for_budget
+
+        plan = [
+            self._hover("sql-editor:body", 0), self._pause(0, 2.0),
+            self._hover("sql-editor:line:6", 0), self._pause(0, 2.0),
+            self._hover("sql-editor:line:8", 1), self._pause(1, 2.0),
+        ]
+        # Loose enough that zeroing the pauses alone absorbs the surplus.
+        plan2, decisions = compress_plan_for_budget(plan, 8.0)
+        self.assertTrue(any("guard(a)" in d for d in decisions), "(a) must run first")
+        self.assertTrue(all("guard(c)" not in d for d in decisions), "no drops at this budget")
+        # Zeroed pauses are filtered out of the compressed plan entirely.
+        self.assertFalse(
+            [it for it in plan2 if it.get("type") == "pause" and float(it.get("duration", 0.5)) > 0.0],
+            "no pause may survive compression with a nonzero duration",
+        )
+        speeds = [it["speed"] for it in plan2 if it.get("type") != "pause"]
+        self.assertLessEqual(max(speeds), CHOREO_MAX_SPEED + 1e-6)
+
+    def test_sentence_last_gestures_survive_even_at_zero_budget(self) -> None:
+        from compiler.choreo_runtime import compress_plan_for_budget
+
+        plan = [
+            self._hover("sql-editor:body", 0), self._pause(0),
+            self._hover("sql-editor:line:6", 0), self._pause(0),
+            self._hover("results-grid:body", 1), self._pause(1),
+            self._hover("results-grid:header:Email", 2),
+        ]
+        plan_out, decisions = compress_plan_for_budget(plan, 0.0)
+        sentences = {it["sentence_idx"] for it in plan_out}
+        self.assertEqual(sentences, {0, 1, 2}, "every sentence keeps a gesture at zero budget")
+        # Sentence 0 had two gestures: the non-last one may drop, the last
+        # (line:6, the later gesture) must survive.
+        survivors = [it["target"] for it in plan_out if it.get("type") != "pause"]
+        self.assertIn("sql-editor:line:6", survivors)
+        self.assertIn("results-grid:header:Email", survivors)
+        self.assertTrue(
+            any("guard(d)" in d for d in decisions),
+            "zero budget must log the compressed-run decision",
+        )
+        for d in decisions:
+            self.assertNotIn("redundant", d.lower())
+
+    def test_already_covered_sentence_may_lose_all_remaining_gestures(self) -> None:
+        from compiler.choreo_runtime import compress_plan_for_budget
+
+        plan = [
+            self._hover("sql-editor:body", 0), self._pause(0),
+            self._hover("sql-editor:line:6", 0), self._pause(0),
+            self._hover("results-grid:body", 1),
+        ]
+        # Sentence 0 was already gestured earlier in the beat.
+        plan_out, _ = compress_plan_for_budget(plan, 0.0, covered=[0])
+        sentences = {it["sentence_idx"] for it in plan_out}
+        self.assertNotIn(0, sentences, "covered sentence's extras may all drop")
+        self.assertIn(1, sentences)
+
+    def test_park_cap_rechecked_after_every_guard_decision(self) -> None:
+        from compiler.choreo_runtime import PARK_CAP, compress_plan_for_budget
+
+        plan = [
+            self._hover("sql-editor:body", 0), self._pause(0, 3.0),
+            self._hover("sql-editor:line:6", 1), self._pause(1, 3.0),
+        ]
+        _, decisions = compress_plan_for_budget(plan, 0.0)
+        rechecks = [d for d in decisions if "park-recheck" in d]
+        self.assertGreaterEqual(len(rechecks), 2, "a re-check per guard stage")
+        for d in rechecks:
+            self.assertIn(f"<= {PARK_CAP:.1f}s", d)
+        self.assertFalse(
+            any("keeping" in d for d in decisions),
+            "no drop was blocked: zeroed pauses leave no park to protect",
+        )
+
+    def test_guard_decisions_cover_all_stages_in_order(self) -> None:
+        from compiler.choreo_runtime import compress_plan_for_budget
+
+        plan = [
+            self._hover("sql-editor:body", 0), self._pause(0, 2.0),
+            self._hover("sql-editor:line:6", 0), self._pause(0, 2.0),
+            self._hover("results-grid:body", 1), self._pause(1, 2.0),
+            self._hover("results-grid:header:Email", 1),
+        ]
+        _, decisions = compress_plan_for_budget(plan, 0.0)
+        stages = [
+            ("guard(a)", min(i for i, d in enumerate(decisions) if "guard(a)" in d)),
+            ("guard(b)", min(i for i, d in enumerate(decisions) if "guard(b)" in d)),
+            ("guard(c)", min(i for i, d in enumerate(decisions) if "guard(c)" in d)),
+            ("guard(d)", min(i for i, d in enumerate(decisions) if "guard(d)" in d)),
+        ]
+        self.assertEqual(
+            [name for name, _ in sorted(stages, key=lambda kv: kv[1])],
+            ["guard(a)", "guard(b)", "guard(c)", "guard(d)"],
+            f"compression stages out of order: {stages}",
+        )
+
+
+class TestC39RuntimeWatchdog(unittest.TestCase):
+    """C39 STEP 1: the runtime park watchdog keeps the contiguous park at or
+    under the 3.5s cap regardless of cause — injected action overruns,
+    action-path sleeps (post-execute settles, verification polls), and
+    choreography rests. Fires log 'wsda-watchdog: fired beat=<id> span=<s>
+    reason=<...>'; every beat arms with 'wsda-watchdog: armed beat=<id>'."""
+
+    class _FakeClock:
+        def __init__(self) -> None:
+            self.t = 0.0
+
+        def time(self) -> float:
+            return self.t
+
+        def sleep(self, seconds: float) -> None:
+            self.t += max(0.0, float(seconds))
+
+    class _Tracker:
+        """Still-time accounting under B3 semantics: only real cursor motion
+        closes a park."""
+
+        def __init__(self, clock: "_FakeClock") -> None:
+            self.clock = clock
+            self.still = 0.0
+            self.max_park = 0.0
+            self.mode = "still"
+
+        def sleep(self, seconds: float) -> None:
+            seconds = max(0.0, float(seconds))
+            if self.mode == "still":
+                self.still += seconds
+            self.clock.t += seconds
+
+        def motion(self, seconds: float) -> None:
+            self.max_park = max(self.max_park, self.still)
+            self.still = 0.0
+            self.clock.t += max(0.0, float(seconds))
+
+    def _watchdog(self, beat_id: str = "beat_w"):
+        from compiler.choreo_runtime import PARK_CAP, ParkWatchdog
+
+        clock = self._FakeClock()
+        tracker = self._Tracker(clock)
+        logs: List[str] = []
+        watchdog = ParkWatchdog(
+            beat_id,
+            clock=clock.time,
+            sleeper=tracker.sleep,
+            motion=lambda reason: (tracker.motion(0.25), True)[1],
+            log=logs.append,
+        )
+        return watchdog, clock, tracker, logs
+
+    def test_armed_line_prints_at_beat_start(self) -> None:
+        _watchdog, _clock, _tracker, logs = self._watchdog("beat_arm")
+        self.assertEqual(logs, ["wsda-watchdog: armed beat=beat_arm"])
+
+    def test_injected_overrun_fires_and_resets_park(self) -> None:
+        watchdog, clock, tracker, logs = self._watchdog()
+        tracker.sleep(5.0)  # action overrun: no motion for 5s
+        fired = watchdog.check("action-overrun")
+        self.assertTrue(fired)
+        self.assertEqual(tracker.max_park, 5.0)
+        self.assertEqual(clock.t, 5.25)  # 5s overrun + 0.25s break-park motion
+        self.assertEqual(watchdog.parked(), 0.0)  # clock restarted by the fire
+        self.assertTrue(any("wsda-watchdog: fired beat=beat_w" in ln for ln in logs))
+        fired_line = [ln for ln in logs if "fired" in ln][0]
+        self.assertIn("span=5.00s", fired_line)
+        self.assertIn("reason=action-overrun", fired_line)
+
+    def test_long_action_path_sleep_never_parks_past_cap(self) -> None:
+        watchdog, _clock, tracker, logs = self._watchdog()
+        watchdog.checked_sleep(8.8, reason="verification-poll")
+        self.assertLessEqual(tracker.max_park, 3.5 + 1e-6)
+        self.assertEqual(len(watchdog.fires), 2, "8.8s still sleep fires at 3.5 and 7.0")
+        self.assertAlmostEqual(tracker.still, 8.8 - 2 * 3.5, places=6)
+
+    def test_short_sleep_after_motion_does_not_fire(self) -> None:
+        watchdog, _clock, tracker, _logs = self._watchdog()
+        tracker.motion(0.7)
+        watchdog.note_motion()
+        tracker.sleep(1.0)
+        watchdog.checked_sleep(2.0, reason="post-execute-settle")
+        self.assertEqual(watchdog.fires, [])
+        self.assertLessEqual(tracker.max_park, 3.0 + 1e-6)
+
+    def test_park_never_exceeds_cap_across_mixed_activity(self) -> None:
+        watchdog, _clock, tracker, _logs = self._watchdog()
+        rng_moves = [0.7, 0.0, 0.0, 3.9, 0.2, 6.1, 0.0, 2.9, 0.5, 4.2]
+        for i, still in enumerate(rng_moves):
+            if i % 2 == 0:
+                tracker.motion(0.7)
+                watchdog.note_motion()
+            watchdog.checked_sleep(still, reason=f"step-{i}")
+            if i % 3 == 0:
+                watchdog.check(f"between-steps-{i}")
+            tracker.sleep(0.1)
+        self.assertLessEqual(tracker.max_park, 3.5 + 1e-6)
+
+    def test_resolve_motion_target_prefers_sentence_then_alternative(self) -> None:
+        from compiler.choreo_runtime import ParkWatchdog
+
+        plan = [
+            {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 0},
+            {"type": "hover", "semantic": "sql-editor:line:6", "sentence_idx": 1},
+            {"type": "hover", "semantic": "sql-editor:line:6", "sentence_idx": 1},
+        ]
+        watchdog, _clock, _tracker, _logs = self._watchdog()
+        watchdog.plan = plan
+        target, source = watchdog.resolve_motion_target()
+        self.assertEqual((target, source), ("sql-editor:line:6", "alternative"))
+        watchdog.last_item = {"type": "hover", "semantic": "x", "sentence_idx": 0}
+        target, source = watchdog.resolve_motion_target()
+        self.assertEqual((target, source), ("sql-editor:body", "sentence"))
+        empty, _clock2, _t2, _l2 = self._watchdog()
+        self.assertEqual(empty.resolve_motion_target(), (None, "none"))
+
+    def test_executor_guard_compresses_tail_and_watchdog_caps_rests(self) -> None:
+        """Integration: execute_choreography with an exhausted budget runs
+        the C35 compression (never a wholesale skip; sentence-last gestures
+        survive) and every rest goes through the watchdog."""
+        from unittest import mock
+
+        from compiler.choreo_runtime import PARK_CAP, ParkWatchdog
+        from compiler.vision_agent import VisionAgent
+
+        clock = self._FakeClock()
+        tracker = self._Tracker(clock)
+        logs: List[str] = []
+        agent = VisionAgent()
+        agent.watchdog = ParkWatchdog(
+            "beat_exec",
+            clock=clock.time,
+            sleeper=tracker.sleep,
+            motion=lambda reason: (tracker.motion(0.25), True)[1],
+            log=logs.append,
+        )
+        moved: List[str] = []
+
+        def fake_move(target: str, duration: float = 0.7) -> bool:
+            tracker.motion(duration)
+            agent._last_rest_point = (100.0, 100.0)
+            moved.append(target)
+            if agent.watchdog is not None:
+                agent.watchdog.note_motion()
+            return True
+
+        agent._move_to_target = fake_move  # type: ignore[assignment]
+        items = [
+            {"type": "hover", "target": "sql-editor:body", "semantic": "sql-editor:body", "sentence_idx": 0},
+            {"type": "pause", "duration": 1.5, "sentence_idx": 0},
+            {"type": "hover", "target": "sql-editor:line:6", "semantic": "sql-editor:line:6", "sentence_idx": 0},
+            {"type": "pause", "duration": 1.5, "sentence_idx": 0},
+            {"type": "hover", "target": "results-grid:body", "semantic": "results-grid:body", "sentence_idx": 1},
+        ]
+        err = io.StringIO()
+        with mock.patch("compiler.vision_agent.time.time", clock.time):
+            with contextlib.redirect_stderr(err):
+                done = agent.execute_choreography(items, max_duration=0.0)
+        self.assertEqual(done, len(items), "every item handled (executed or guard-compressed)")
+        self.assertIn("guard", err.getvalue())
+        self.assertNotIn("skipping", err.getvalue().lower())
+        self.assertNotIn("redundant", err.getvalue().lower())
+        # Sentence 0's last gesture (line:6) and sentence 1's only gesture
+        # both ran, compressed; the non-last body hover was dropped.
+        self.assertIn("sql-editor:line:6", moved)
+        self.assertIn("results-grid:body", moved)
+        self.assertLessEqual(tracker.max_park, PARK_CAP + 1e-6)
+        self.assertTrue(any("wsda-watchdog: armed beat=beat_exec" in ln for ln in logs))
+
+
+class TestC39MeasuredReservation(unittest.TestCase):
+    """C39 STEP 3: the choreography reservation is the persisted MEASURED
+    action window + 15% when a prior measurement exists; the stale per-type
+    estimate is the first-ever-run fallback. The measurement round-trips
+    through the manifest serialization helpers."""
+
+    def _beat(self, kind: str = "demo", action: Optional[Dict[str, Any]] = None,
+              measured: Optional[float] = None):
+        from compiler.narrator import ScriptBeat
+
+        return ScriptBeat(
+            beat_id="beat_m",
+            kind=kind,  # type: ignore[arg-type]
+            text="text",
+            action=action,
+            measured_action_seconds=measured,
+        )
+
+    def test_measured_plus_margin_is_used_when_present(self) -> None:
+        from compiler.discovery import MEASURED_RESERVATION_MARGIN, reserved_action_seconds
+
+        beat = self._beat(action={"type": "type_segments", "segments": [{"text": "a"}, {"text": "b"}]}, measured=17.61)
+        self.assertAlmostEqual(
+            reserved_action_seconds(beat),
+            17.61 * (1.0 + MEASURED_RESERVATION_MARGIN),
+            places=6,
+        )
+
+    def test_fallback_estimate_on_first_ever_run(self) -> None:
+        from compiler.discovery import reserved_action_seconds
+
+        segs = self._beat(action={"type": "type_segments", "segments": [{"text": "a"}] * 3})
+        self.assertEqual(reserved_action_seconds(segs), 2.0 + 3 * 2.0)
+        block = self._beat(action={"type": "type_block", "text": "SELECT 1;"})
+        self.assertEqual(reserved_action_seconds(block), 3.0)
+        query = self._beat(action={"type": "run_query"})
+        self.assertEqual(reserved_action_seconds(query), 3.0)
+        other = self._beat(action={"type": "scroll"})
+        self.assertEqual(reserved_action_seconds(other), 2.0)
+
+    def test_non_demo_beats_reserve_nothing(self) -> None:
+        from compiler.discovery import reserved_action_seconds
+
+        beat = self._beat(kind="explain", action={"type": "wait", "duration": 1.5}, measured=99.0)
+        self.assertEqual(reserved_action_seconds(beat), 0.0)
+        wait_demo = self._beat(action={"type": "wait", "duration": 1.5}, measured=99.0)
+        self.assertEqual(reserved_action_seconds(wait_demo), 0.0)
+
+    def test_measurement_roundtrips_through_manifest_serialization(self) -> None:
+        from compiler.curriculum import _dict_to_script_beat, _script_beat_to_dict
+
+        beat = self._beat(action={"type": "run_query"}, measured=7.56)
+        as_dict = _script_beat_to_dict(beat)
+        self.assertEqual(as_dict.get("measured_action_seconds"), 7.56)
+        restored = _dict_to_script_beat(as_dict)
+        self.assertEqual(restored.measured_action_seconds, 7.56)
+        # And the restored beat feeds the reservation helper directly.
+        from compiler.discovery import reserved_action_seconds
+
+        self.assertAlmostEqual(reserved_action_seconds(restored), 7.56 * 1.15, places=6)
+
+    def test_absent_measurement_serializes_without_the_field(self) -> None:
+        from compiler.curriculum import _dict_to_script_beat, _script_beat_to_dict
+
+        beat = self._beat(action={"type": "run_query"})
+        as_dict = _script_beat_to_dict(beat)
+        self.assertNotIn("measured_action_seconds", as_dict)
+        restored = _dict_to_script_beat(as_dict)
+        self.assertIsNone(restored.measured_action_seconds)
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -4512,6 +4875,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC38ParkCapInvariant))
     suite.addTests(loader.loadTestsFromTestCase(TestC38ExpansionOrder))
     suite.addTests(loader.loadTestsFromTestCase(TestC38SeamMarkerAlwaysPrints))
+    suite.addTests(loader.loadTestsFromTestCase(TestC39BudgetGuardCoverage))
+    suite.addTests(loader.loadTestsFromTestCase(TestC39RuntimeWatchdog))
+    suite.addTests(loader.loadTestsFromTestCase(TestC39MeasuredReservation))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

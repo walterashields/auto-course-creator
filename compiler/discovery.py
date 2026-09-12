@@ -41,6 +41,18 @@ from PIL import Image
 # Automated recording must not abort when the cursor reaches a screen corner.
 pyautogui.FAILSAFE = False
 
+from .choreo_runtime import (
+    CHOREO_MAX_SPEED as _RT_CHOREO_MAX_SPEED,
+    GESTURE_COST as _RT_GESTURE_COST,
+    GESTURE_SETTLE as _RT_GESTURE_SETTLE,
+    GESTURE_TYPES as _RT_GESTURE_TYPES,
+    PARK_CAP,
+    ParkWatchdog,
+    compress_plan_for_budget,
+    item_seconds as _runtime_item_seconds,
+    max_contiguous_park,
+    plan_cost as _runtime_plan_cost,
+)
 from .frame_analysis import count_error_signature_frames
 from .narrator import ScriptBeat
 from .schemas import DiscoveryResult, EnvironmentProfile, ExecutionGraph, NarrationBeat, ScreenState
@@ -210,48 +222,60 @@ def _clip_has_off_app_interval(
 # stretch may exceed the C38 park cap of 3.5s, including the tail after the
 # last gesture and the lead before the first (the B3 detector samples at 1fps,
 # so a 3.5s park measures ~4-5s, safely under the 6.0s anti-stall gate).
+# C39: the cap, the speed bound, and the executor-accurate wall-clock model
+# live in compiler/choreo_runtime.py (leaf module); the names below are bound
+# here so planner, executor, and dry proof share one source of truth.
 CHOREO_PAUSE_FLOOR = 1.0
-CHOREO_PAUSE_CAP = 3.5
+CHOREO_PAUSE_CAP = PARK_CAP
 CHOREO_LEAD_CAP = 2.0
-CHOREO_MAX_SPEED = 2.0
+CHOREO_MAX_SPEED = _RT_CHOREO_MAX_SPEED
 CHOREO_GLIDE_FLOOR_PX_S = 60.0
-CHOREO_GESTURE_TYPES = ("hover", "click", "scroll", "drag")
-# C38: per-gesture wall-clock model at speed 1.0 = move base + settle time,
-# mirroring VisionAgent.execute_choreography_item (_item_move_duration move
-# plus post-gesture settle). The scheduler thus models executor seconds, not
-# an abstract cost — fill decisions are made in the time domain the B3 gate
-# measures.
-_CHOREO_GESTURE_COST = {"hover": 0.75, "click": 1.15, "scroll": 0.5, "drag": 1.2}
-_CHOREO_GESTURE_SETTLE = {"hover": 0.05, "click": 0.45, "scroll": 0.2, "drag": 0.4}
+CHOREO_GESTURE_TYPES = _RT_GESTURE_TYPES
+# C38: per-gesture wall-clock model at speed 1.0 = move base + settle time
+# (see compiler/choreo_runtime.GESTURE_COST/GESTURE_SETTLE).
+_CHOREO_GESTURE_COST = _RT_GESTURE_COST
+_CHOREO_GESTURE_SETTLE = _RT_GESTURE_SETTLE
+# C39 STEP 3: measured-action reservation margin. A prior run's measured
+# action window plus this margin is the choreography reservation; the stale
+# per-type estimate below is the first-ever-run fallback only.
+MEASURED_RESERVATION_MARGIN = 0.15
 
 
 def _choreography_item_seconds(item: Dict[str, Any]) -> float:
-    """Executor-accurate wall seconds of one scheduled plan item.
-
-    Move time follows the executor (max(0.25, move_base / min(2, speed)));
-    settle time (post-hover calm, post-click release, scroll/drag completion)
-    is fixed. Speeds below 1.0 (C38 slow glides) stretch the move.
-    """
-    t = item.get("type")
-    if t == "pause":
-        return float(item.get("duration", 0.5))
-    speed = float(item.get("speed", 1.0))
-    if speed <= 0.0:
-        speed = 1.0
-    settle = _CHOREO_GESTURE_SETTLE.get(t, 0.0)
-    move_base = max(0.05, _CHOREO_GESTURE_COST.get(t, 0.5) - settle)
-    return max(0.25, move_base / min(speed, CHOREO_MAX_SPEED)) + settle
+    """Executor-accurate wall seconds of one scheduled plan item (delegates
+    to compiler/choreo_runtime.item_seconds; kept as the public planner name)."""
+    return _runtime_item_seconds(item)
 
 
 def _choreography_plan_cost(plan: List[Dict[str, Any]]) -> float:
-    """Estimated wall-clock cost of a scheduled choreography plan.
+    """Estimated wall-clock cost of a scheduled choreography plan (delegates
+    to compiler/choreo_runtime.plan_cost; kept as the public planner name)."""
+    return _runtime_plan_cost(plan)
 
-    C38: costs are executor-accurate seconds (see _choreography_item_seconds);
-    speeds below 1.0 are deliberate slow glides and INCREASE the duration.
+
+def reserved_action_seconds(beat: Any, margin: float = MEASURED_RESERVATION_MARGIN) -> float:
+    """C39 STEP 3: choreography reservation for a beat's concrete demo action.
+
+    When a prior run persisted ``beat.measured_action_seconds`` (the C26
+    timeline instrumentation's measured action window), the reservation is
+    the measurement plus ``margin`` (default 15%) — the feedback loop that
+    removes the stale-guess skew (C38: beat_002 reserved 6.0s but measured
+    17.61s). On the first-ever run (no measurement) the pre-C39 per-type
+    estimate is the fallback. Non-demo beats reserve nothing.
     """
-    return sum(
-        _choreography_item_seconds(it) for it in plan if it is not None
-    )
+    action = beat.action or {}
+    is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
+    if not is_demo_action:
+        return 0.0
+    measured = getattr(beat, "measured_action_seconds", None)
+    if measured and float(measured) > 0.0:
+        return float(measured) * (1.0 + margin)
+    action_type = action.get("type")
+    if action_type == "type_segments":
+        return 2.0 + len(action.get("segments") or []) * 2.0
+    if action_type in ("type_block", "append_block", "run_query"):
+        return 3.0
+    return 2.0
 
 
 def _plan_target(it: Dict[str, Any]) -> str:
@@ -382,7 +406,9 @@ def _schedule_choreography(
          skipped while it is its sentence's only remaining gesture.
       2. Compression order when the window is tight: (a) rests shrink toward a
          1.0s floor; (b) gesture speed rises, up to 2x; (c) only then are
-         redundant gestures (sentences with 2+) dropped.
+         extra same-sentence gestures (a sentence's non-final gesture) dropped.
+         C39: the word "redundant" is never applied to a sentence-covered
+         gesture — every dropped gesture's sentence keeps another gesture.
       3. No still block exceeds CHOREO_PAUSE_CAP: rests separated only by
          motion to the same target are one block. The plan leads with a
          gesture within 2.0s and ends with a gesture so the clip tail is not
@@ -491,18 +517,19 @@ def _schedule_choreography(
             scheduled[i]["speed"] = speed
         needed = cost() - target
 
-    # --- compress: (c) drop redundant gestures (never a sentence's last) -----
+    # --- compress: (c) drop extra same-sentence gestures (never a sentence's
+    # last; the sentence keeps another gesture, so coverage never breaks) -----
     while needed > 0.0:
         per_sentence: Dict[int, List[int]] = {}
         for i in gesture_indices:
             if i < len(scheduled) and scheduled[i] is not None:
                 per_sentence.setdefault(scheduled[i].get("sentence_idx", 0), []).append(i)
-        redundant = {s: idxs for s, idxs in per_sentence.items() if len(idxs) >= 2}
-        if not redundant:
+        multi = {s: idxs for s, idxs in per_sentence.items() if len(idxs) >= 2}
+        if not multi:
             break
         # Drop the latest gesture of the sentence with the most gestures.
-        sentence = max(redundant, key=lambda s: (len(redundant[s]), s))
-        drop = redundant[sentence][-1]
+        sentence = max(multi, key=lambda s: (len(multi[s]), s))
+        drop = multi[sentence][-1]
         needed -= _CHOREO_GESTURE_COST.get(scheduled[drop].get("type"), 0.5) / max(
             1.0, float(scheduled[drop].get("speed", 1.0))
         )
@@ -3612,6 +3639,11 @@ class EndStateDiscovery:
         # measure per-beat wall time so narration can be sized to the action.
         self.actions_only = actions_only
         self.action_timings: List[Dict[str, Any]] = []
+        # C39 STEP 3: per-beat MEASURED action windows (seconds) from the C26
+        # timeline instrumentation of the passing recording attempt. Persisted
+        # into the course manifest at run end so the next run's choreography
+        # reservation is measured * 1.15 instead of the stale per-type guess.
+        self.measured_action_seconds: Dict[str, float] = {}
         self.client = anthropic.Anthropic()
         self.output_dir = Path(__file__).resolve().parent / "discovery_output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -4987,6 +5019,15 @@ class EndStateDiscovery:
             for retry in range(MAX_BEAT_RETRIES):
                 beat_ok = False
                 executed_choreo_indices: set[int] = set()
+                # C39 STEP 1: arm the runtime park watchdog at every beat
+                # attempt start (the "wsda-watchdog: armed" line proves it is
+                # active for this beat). It is disarmed when the attempt ends.
+                # The plan context is attached once the choreography is
+                # scheduled below.
+                agent.watchdog = ParkWatchdog(
+                    beat.beat_id,
+                    motion=lambda reason, _a=agent: _a._watchdog_break_motion(reason),
+                )
                 if retry > 0 and not skipped:
                     # C10 beat-scoped retry: restore the last known-good editor
                     # state without re-composing prior passed beats.
@@ -5131,20 +5172,12 @@ class EndStateDiscovery:
                     # the narration duration with scheduled choreography synced to TTS.
                     is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
 
-                    # C16: reserve time in the narration window for the concrete demo
-                    # action so choreography pauses do not consume the entire TTS budget.
-                    reserved_action_seconds = 0.0
-                    if is_demo_action:
-                        action_type = action.get("type")
-                        if action_type == "type_segments":
-                            segment_count = len(action.get("segments") or [])
-                            # Initial editor focus (~2s) + ~2s per segment for paste,
-                            # accessibility read-back, and line-paste verification.
-                            reserved_action_seconds = 2.0 + segment_count * 2.0
-                        elif action_type in ("type_block", "append_block", "run_query"):
-                            reserved_action_seconds = 3.0
-                        else:
-                            reserved_action_seconds = 2.0
+                    # C16/C39: reserve time in the narration window for the concrete
+                    # demo action so choreography pauses do not consume the entire
+                    # TTS budget. C39 STEP 3: the reservation is the MEASURED action
+                    # window + 15% when a prior run persisted one (feedback loop);
+                    # the stale per-type estimate is the first-ever-run fallback.
+                    reserved_beat_seconds = reserved_action_seconds(beat)
 
                     # C16: schedule choreography so total duration fills the narration
                     # window (audio - 1.0s tail - reserved action time). Use the
@@ -5154,11 +5187,16 @@ class EndStateDiscovery:
                         scheduled_choreo = _schedule_choreography(
                             beat.choreography,
                             audio_duration,
-                            reserved_seconds=reserved_action_seconds,
+                            reserved_seconds=reserved_beat_seconds,
                             resolve_point=agent.resolve_choreography_point,
                             prev_rest_point=agent._last_rest_point,
                             beat_id=beat.beat_id,
                         )
+                        # C39: give the watchdog the scheduled plan so a fire can
+                        # hover to the current sentence's resolved target (or the
+                        # beat's most-referenced alternative).
+                        if agent.watchdog is not None:
+                            agent.watchdog.plan = [dict(it) for it in scheduled_choreo]
                         print(
                             f"  [CHOREOGRAPHY SCHEDULED] {beat.beat_id}: "
                             f"{scheduled_choreo}",
@@ -5242,6 +5280,13 @@ class EndStateDiscovery:
                                     beat_failed = True
                                     break
 
+                                # C39 STEP 1: between action steps — if the segment's
+                                # typing/paste work parked the cursor past the cap,
+                                # the watchdog inserts a minimal visible motion.
+                                if agent.watchdog is not None:
+                                    agent.watchdog.check(
+                                        f"between-segments seg={seg_idx + 1}"
+                                    )
                                 # Run a slice of choreography tied to this sentence.
                                 if sidx in choreo_by_sentence:
                                     items = choreo_by_sentence[sidx]
@@ -5266,6 +5311,14 @@ class EndStateDiscovery:
                                         done = agent.execute_choreography(
                                             [it for _, it in chunk],
                                             max_duration=remaining_tts,
+                                            covered_sentences=sorted(
+                                                {
+                                                    it.get("sentence_idx", 0)
+                                                    for idx2, it in scheduled_choreo
+                                                    if idx2 in executed_choreo_indices
+                                                    and it.get("type") in CHOREO_GESTURE_TYPES
+                                                }
+                                            ),
                                         )
                                         for k, (orig_idx, _) in enumerate(chunk):
                                             if k < done:
@@ -5303,6 +5356,11 @@ class EndStateDiscovery:
                                     file=sys.stderr,
                                 )
                                 time.sleep(0.5)
+                            # C39 STEP 1: between action steps — the concrete action
+                            # may have parked the cursor past the cap; break the
+                            # park before the remaining choreography runs.
+                            if agent.watchdog is not None:
+                                agent.watchdog.check("after-demo-action")
 
                         # Programmatic fallback for row-count validations: the VLM
                         # sometimes focuses on the SQL editor instead of the result
@@ -5371,21 +5429,31 @@ class EndStateDiscovery:
                                     if audio_duration
                                     else None
                                 )
-                                if remaining_tts is None or remaining_tts > 0.1:
-                                    done = agent.execute_choreography(
-                                        [it for _, it in remaining_pairs],
-                                        max_duration=remaining_tts,
-                                    )
-                                    for k, (orig_idx, _) in enumerate(remaining_pairs):
-                                        if k < done:
-                                            executed_choreo_indices.add(orig_idx)
-                                        else:
-                                            break
-                                else:
-                                    print(
-                                        f"  [CHOREO] {beat.beat_id}: TTS already ended; skipping remaining choreography",
-                                        file=sys.stderr,
-                                    )
+                                # C39 STEP 2: even when the TTS has ended (or the
+                                # demo action consumed the window), the remaining
+                                # choreography is NEVER wholesale-skipped. The guard
+                                # compresses the tail in the C35 order — pauses to
+                                # zero, travel to the 2x cap, only non-sentence-last
+                                # gestures dropped — and every sentence's last
+                                # gesture still runs compressed. The C26 hard stop
+                                # ends the recording at the audio tail regardless.
+                                done = agent.execute_choreography(
+                                    [it for _, it in remaining_pairs],
+                                    max_duration=remaining_tts,
+                                    covered_sentences=sorted(
+                                        {
+                                            it.get("sentence_idx", 0)
+                                            for idx2, it in scheduled_choreo
+                                            if idx2 in executed_choreo_indices
+                                            and it.get("type") in CHOREO_GESTURE_TYPES
+                                        }
+                                    ),
+                                )
+                                for k, (orig_idx, _) in enumerate(remaining_pairs):
+                                    if k < done:
+                                        executed_choreo_indices.add(orig_idx)
+                                    else:
+                                        break
 
                         if beat_ok and beat.kind == "demo":
                             # Persist the composed cumulative editor content so the
@@ -5519,10 +5587,30 @@ class EndStateDiscovery:
                                     ]
                                     if tail_choreo:
                                         agent.execute_choreography(
-                                            tail_choreo, max_duration=remaining
+                                            tail_choreo,
+                                            max_duration=remaining,
+                                            covered_sentences=sorted(
+                                                {
+                                                    it.get("sentence_idx", 0)
+                                                    for idx2, it in scheduled_choreo
+                                                    if idx2 in executed_choreo_indices
+                                                    and it.get("type") in CHOREO_GESTURE_TYPES
+                                                }
+                                            ),
+                                        )
+                                    elif agent.watchdog is not None:
+                                        # C39: a bare tail sleep is an action-path
+                                        # sleep — the watchdog truncates it at the
+                                        # park cap and inserts visible motion.
+                                        agent.watchdog.checked_sleep(
+                                            remaining, reason="tail-fill-no-choreo"
                                         )
                                     else:
                                         time.sleep(remaining)
+                                elif agent.watchdog is not None:
+                                    agent.watchdog.checked_sleep(
+                                        remaining, reason="tail-fill-no-plan"
+                                    )
                                 else:
                                     time.sleep(remaining)
                             elif remaining < -0.25:
@@ -5580,6 +5668,8 @@ class EndStateDiscovery:
                     else:
                         beat_ok = True
                 finally:
+                    # C39: the beat attempt is over — disarm the park watchdog.
+                    agent.watchdog = None
                     if not skipped:
                         if audio_proc is not None:
                             try:
@@ -5681,6 +5771,16 @@ class EndStateDiscovery:
                         # ScreenCaptureKit delegate now drops stale buffers, so clips
                         # stay true to wall-clock recording time without trimming.
                         beat.video_clip_path = str(clip_path.resolve())
+                        # C39 STEP 3: record the passing attempt's MEASURED action
+                        # window (C26 timeline instrumentation). curriculum persists
+                        # it into the manifest at run end so the next run's
+                        # reservation is measured * 1.15, not the stale estimate.
+                        _phases = _timeline_phases(tl)
+                        _action_window = _phases.get("action_window")
+                        if _action_window is not None and not skipped:
+                            self.measured_action_seconds[beat.beat_id] = round(
+                                float(_action_window), 3
+                            )
                     break
 
             if beat_failed:
@@ -5736,6 +5836,20 @@ class EndStateDiscovery:
             return self._finish_action_timings(success=True)
 
         _dump_beat_timeline(run_id, timeline, run_start)
+
+        # C39 STEP 3: report the measured action windows that curriculum will
+        # persist into the manifest (reservation feedback loop).
+        if self.measured_action_seconds:
+            print(
+                "[MEASURED ACTIONS] beat_id | measured_action_seconds | "
+                "next-run reservation (x1.15)",
+                file=sys.stderr,
+            )
+            for _bid, _secs in sorted(self.measured_action_seconds.items()):
+                print(
+                    f"[MEASURED ACTIONS] {_bid} | {_secs:.2f} | {_secs * (1.0 + MEASURED_RESERVATION_MARGIN):.2f}",
+                    file=sys.stderr,
+                )
 
         # TIDY end state: dismiss any open dropdown/modal before final capture.
         try:

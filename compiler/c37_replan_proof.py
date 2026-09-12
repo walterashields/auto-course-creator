@@ -2,8 +2,8 @@
 """
 compiler/c37_replan_proof.py
 
-C37 STEP 1 / C38 STEP 2 — dry replan + park-cap proof (NO recording, NO VLM,
-NO TTS API calls).
+C37 STEP 1 / C38 STEP 2 / C39 STEP 4 — dry replan + park-cap proof +
+simulated-executor replay (NO recording, NO VLM, NO TTS API calls).
 
 Loads the REAL baked video_1_1 manifest through the same code path run_course
 uses (curriculum.load_manifest -> _dict_to_script_beat -> _validate_script_beats
@@ -17,7 +17,13 @@ TTS-derived window and prints:
       opener point, and the distance;
   (d) C38: per beat, a simulated timeline (gesture moves at planned speeds +
       pauses against the beat's TTS window): total motion / pause / glide
-      seconds and the max contiguous stationary park (tail included).
+      seconds and the max contiguous stationary park (tail included);
+  (e) C39: a simulated-executor replay of every beat against the MEASURED
+      action durations from the C38 recording log (beat_002 = 17.61s, etc.)
+      with the C39 budget guard and runtime park watchdog ACTIVE on a virtual
+      clock: per beat it prints the planned window, the measured actions, the
+      guard compressions applied, the watchdog fires, and the max contiguous
+      park over the whole beat.
 
 Hard-fail assertions:
   - replan fired on the real manifest;
@@ -25,6 +31,9 @@ Hard-fail assertions:
   - all consecutive intra-beat gesture distances >= 40px;
   - all seam distances >= 40px;
   - C38: max contiguous park <= 3.5s in EVERY beat, tails included;
+  - C39: under measured-action conditions, max contiguous park <= 3.5s in
+    EVERY beat with the guard and watchdog active;
+  - C39: no sentence loses its last gesture under any guard decision;
   - zero VLM/Anthropic calls during the entire check (tracker + API spy).
 
 Exits 0 only when every assertion passes.
@@ -40,6 +49,12 @@ import re
 import subprocess
 import sys
 
+from compiler.choreo_runtime import (
+    PARK_CAP,
+    ParkWatchdog,
+    compress_plan_for_budget,
+    item_seconds,
+)
 from compiler.cost_tracker import get_tracker, reset_tracker
 from compiler.curriculum import (
     _derive_sql_history,
@@ -49,8 +64,10 @@ from compiler.curriculum import (
 from compiler.discovery import (
     CHOREO_GESTURE_TYPES,
     CHOREO_PAUSE_CAP,
+    RECORDER_TAIL_SECONDS,
     _choreography_item_seconds,
     _schedule_choreography,
+    reserved_action_seconds,
 )
 from compiler.lesson_builder import LessonBuilder
 from compiler.target_resolver import (
@@ -64,6 +81,21 @@ COURSE_ID = "sql_essential_training_ch4"
 VIDEO_ID = "video_1_1"
 TTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "tts_cache")
 WORDS_PER_SECOND_FALLBACK = 3.0
+
+# C39 STEP 4: MEASURED per-beat action windows from the C38 recording log
+# (output/live_video_1_1_c38_20260912_161744.log, wsda-timeline "actions"
+# column). These are the inputs the simulated executor replays against.
+MEASURED_C38_ACTIONS = {
+    "beat_001": 0.0,
+    "beat_002": 17.61,
+    "beat_003": 13.15,
+    "beat_004": 11.46,
+    "beat_005": 7.56,
+    "beat_006": 0.0,
+    "beat_007": 0.0,
+    "beat_008": 0.0,
+    "beat_009": 0.0,
+}
 
 _failures: list[str] = []
 
@@ -96,20 +128,6 @@ def _tts_seconds(beat_text: str) -> float:
             pass
     words = max(1, len(beat_text.split()))
     return words / WORDS_PER_SECOND_FALLBACK
-
-
-def _reserved_seconds(beat: Any) -> float:
-    """Mirror of the reserved-action-time math in discovery.execute_script."""
-    action = beat.action or {}
-    is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
-    if not is_demo_action:
-        return 0.0
-    action_type = action.get("type")
-    if action_type == "type_segments":
-        return 2.0 + len(action.get("segments") or []) * 2.0
-    if action_type in ("type_block", "append_block", "run_query"):
-        return 3.0
-    return 2.0
 
 
 def _move_seconds(item: dict) -> float:
@@ -147,6 +165,225 @@ def _simulate(plan: list[dict], window: float) -> dict:
         "window": window,
         "tail": tail,
         "max_park": max(parks) if parks else 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# C39 STEP 4: simulated executor (virtual clock, real guard + watchdog)
+# ---------------------------------------------------------------------------
+
+
+class _VirtualClock:
+    """Deterministic clock for the simulated executor."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def time(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.t += max(0.0, float(seconds))
+
+
+class _ParkTracker:
+    """Contiguous-still accounting over the virtual timeline. The tracker is
+    injected as the watchdog's sleeper; the sim flips ``mode`` between still
+    time (sleeps) and visible cursor motion so the max contiguous park is
+    measured under B3 semantics: only real cursor motion closes a park."""
+
+    def __init__(self, clock: _VirtualClock) -> None:
+        self.clock = clock
+        self.still = 0.0
+        self.max_park = 0.0
+        self.mode = "still"
+
+    def sleep(self, seconds: float) -> None:
+        seconds = max(0.0, float(seconds))
+        if self.mode == "still":
+            self.still += seconds
+        self.clock.t += seconds
+
+    def motion(self, seconds: float) -> None:
+        self.max_park = max(self.max_park, self.still)
+        self.still = 0.0
+        self.clock.t += max(0.0, float(seconds))
+
+
+def _sim_watchdog_motion(tracker: _ParkTracker):
+    """The simulated watchdog's minimal visible motion: 0.25s of cursor
+    travel (a fast hover or drift glide), deterministic, no VLM."""
+
+    def motion(reason: str) -> bool:
+        tracker.motion(0.25)
+        return True
+
+    return motion
+
+
+def _replay_beat(
+    beat: Any,
+    scheduled: list[dict],
+    tts: float,
+    measured_actions: float,
+) -> dict:
+    """Replay one beat's scheduled plan against its MEASURED action duration
+    with the C39 guard and watchdog active, exactly mirroring the executor's
+    pipeline:
+
+      1. actions phase: the measured window, subdivided into action steps
+         (type_segments segments; run_query click + settle; otherwise one
+         step). Step bodies sleep through ``watchdog.checked_sleep`` (the
+         action-path sleeps: paste cadence, post-execute settles,
+         verification polls) so an overrun can never park past the cap;
+         between steps the watchdog checks. A type/click event resets the
+         park clock (directive model).
+      2. interleaved choreography: one sentence chunk per segment, then the
+         remaining plan, both through the C39 budget guard (compress in the
+         C35 order; never wholesale-skip; a sentence's last gesture always
+         runs compressed).
+      3. leftover rest until the TTS window ends, through checked_sleep;
+         the recorder tail after the audio end is still time.
+
+    Returns the replay report: guard decisions, watchdog fires, max park,
+    and the executed gesture count per sentence (coverage check).
+    """
+    clock = _VirtualClock()
+    tracker = _ParkTracker(clock)
+    watchdog = ParkWatchdog(
+        beat.beat_id,
+        plan=[dict(it) for it in scheduled],
+        clock=clock.time,
+        sleeper=tracker.sleep,
+        motion=_sim_watchdog_motion(tracker),
+        log=lambda msg: print(msg, file=sys.stderr),
+    )
+    guard_decisions: list[str] = []
+    covered: set[int] = set()
+    compressed = False
+
+    def execute_item(item: dict) -> None:
+        if item.get("type") == "pause":
+            tracker.mode = "still"
+            watchdog.checked_sleep(
+                float(item.get("duration", 0.5)), reason="choreo-pause"
+            )
+        elif item.get("type") in CHOREO_GESTURE_TYPES:
+            tracker.motion(item_seconds(item))
+            watchdog.note_motion()
+            covered.add(item.get("sentence_idx", 0))
+        # The glide/move itself is visible motion; the post-gesture settle
+        # inside the executor is an action-path sleep already accounted by
+        # the executor-accurate item_seconds model.
+
+    def execute_guarded(items: list[dict]) -> None:
+        nonlocal compressed
+        work = [dict(it) for it in items]
+        i = 0
+        while i < len(work):
+            remaining = max(0.0, tts - clock.t)
+            if remaining <= 0.05 and not compressed:
+                guard_decisions.append(
+                    f"guard: time budget exhausted at t={clock.t:.2f}s; "
+                    f"compressing {len(work) - i} remaining item(s) in C35 order"
+                )
+                tail, _decisions = compress_plan_for_budget(
+                    work[i:],
+                    remaining,
+                    covered=sorted(covered),
+                    log=guard_decisions.append,
+                )
+                compressed = True
+                work = work[:i] + tail
+                if not tail:
+                    break
+            item = work[i]
+            watchdog.last_item = item
+            execute_item(item)
+            i += 1
+
+    # --- 1. actions phase ---------------------------------------------------
+    action = beat.action or {}
+    action_type = action.get("type")
+    if action_type == "type_segments":
+        n_steps = max(1, len(action.get("segments") or []))
+    elif action_type == "run_query":
+        n_steps = 2  # click (motion) + execute/settle (still work)
+    else:
+        n_steps = 1
+    step_dur = measured_actions / n_steps if n_steps else measured_actions
+
+    choreo_by_sentence: dict[int, list[dict]] = {}
+    for item in scheduled:
+        choreo_by_sentence.setdefault(item.get("sentence_idx", 0), []).append(item)
+    choreo_consumed = {s: 0 for s in choreo_by_sentence}
+    interleaved = action_type == "type_segments" and bool(scheduled)
+
+    for step in range(n_steps):
+        # A type/click event at the step start resets the park clock (C39
+        # directive model) and closes the B3 park. Only steps that actually
+        # begin with typing/clicking get the reset: segmented typing steps
+        # and the run_query click; a settle/verification step does not.
+        has_type_event = action_type == "type_segments" or (
+            action_type == "run_query" and step == 0
+        )
+        if action_type == "run_query" and step == 0:
+            tracker.motion(0.5)  # the Execute-button click itself
+        if has_type_event:
+            tracker.motion(0.0)
+            watchdog.note_motion()
+        tracker.mode = "still"
+        if step_dur > 0.0:
+            watchdog.checked_sleep(step_dur, reason=f"action-step-{step + 1}")
+        if step < n_steps - 1:
+            watchdog.check(f"between-action-steps step={step + 1}")
+        if interleaved:
+            segs = action.get("segments") or []
+            sidx = (
+                segs[step].get("sentence_idx", 0)
+                if step < len(segs) and isinstance(segs[step], dict)
+                else 0
+            )
+            queue = choreo_by_sentence.get(sidx, [])
+            ptr = choreo_consumed.get(sidx, 0)
+            if ptr < len(queue):
+                # One gesture per segment (mirrors the executor); the final
+                # segment also runs the remainder of the sentence.
+                chunk = queue[ptr : ptr + 1]
+                if step == n_steps - 1:
+                    chunk = queue[ptr:]
+                choreo_consumed[sidx] = ptr + len(chunk)
+                execute_guarded(chunk)
+
+    # --- 2. remaining plan through the guard --------------------------------
+    if not interleaved:
+        execute_guarded(list(scheduled))
+    else:
+        remainder = []
+        for sidx, queue in choreo_by_sentence.items():
+            ptr = choreo_consumed.get(sidx, 0)
+            remainder.extend(queue[ptr:])
+        if remainder:
+            execute_guarded(remainder)
+
+    # --- 3. leftover rest + recorder tail ------------------------------------
+    tracker.mode = "still"
+    leftover = max(0.0, tts - clock.t)
+    if leftover > 0.05:
+        watchdog.checked_sleep(leftover, reason="leftover-rest")
+    tracker.sleep(RECORDER_TAIL_SECONDS)  # stop at audio end + recorder tail
+
+    return {
+        "guard_decisions": guard_decisions,
+        "watchdog_fires": list(watchdog.fires),
+        "max_park": tracker.max_park,
+        "covered_sentences": set(covered),
+        "planned_sentences": {
+            it.get("sentence_idx", 0)
+            for it in scheduled
+            if it.get("type") in CHOREO_GESTURE_TYPES
+        },
+        "sim_seconds": clock.t,
     }
 
 
@@ -244,7 +481,10 @@ def _run_proof() -> None:
     reserved_by_beat: dict[str, float] = {}
     for beat in script_beats:
         tts = _tts_seconds(beat.text)
-        reserved = _reserved_seconds(beat)
+        # C39: single-source reservation helper (fallback estimate here — the
+        # baked manifest carries no measured_action_seconds until a run
+        # persists one).
+        reserved = reserved_action_seconds(beat)
         tts_by_beat[beat.beat_id] = tts
         reserved_by_beat[beat.beat_id] = reserved
         windows[beat.beat_id] = max(0.0, tts - 1.0 - reserved)
@@ -416,6 +656,84 @@ def _run_proof() -> None:
         not park_failures,
         f"max contiguous park <= {CHOREO_PAUSE_CAP}s in every beat (tails included)"
         + ("" if not park_failures else f" | {park_failures}"),
+    )
+
+    # --- (e) C39 simulated-executor replay under MEASURED actions ------------
+    print("=" * 78)
+    print(
+        "(e) C39 simulated-executor replay (measured C38 actions; "
+        "budget guard + park watchdog active)"
+    )
+    sim_header = (
+        f"{'beat':<10} {'tts':>6} {'resv':>6} {'meas':>6} {'window':>7} "
+        f"{'guards':>7} {'fires':>6} {'max_park':>9} {'sim_s':>7}"
+    )
+    print(sim_header)
+    print("-" * len(sim_header))
+    sim_park_failures: list[str] = []
+    sim_coverage_failures: list[str] = []
+    sim_fire_lines: list[str] = []
+    prev_rest_e = None  # executor-fresh seam chain for the measured replay
+    for beat in script_beats:
+        measured = MEASURED_C38_ACTIONS.get(beat.beat_id, 0.0)
+        beat.measured_action_seconds = measured if measured > 0 else None
+        reserved = reserved_action_seconds(beat)
+        plan = [dict(it) for it in (beat.choreography or [])]
+        scheduled = _schedule_choreography(
+            plan,
+            tts_by_beat[beat.beat_id],
+            reserved_seconds=reserved,
+            resolve_point=resolver,
+            prev_rest_point=prev_rest_e,
+            beat_id=beat.beat_id,
+        )
+        rep = _replay_beat(
+            beat, scheduled, tts_by_beat[beat.beat_id], measured
+        )
+        for it in scheduled:
+            if it.get("type") in CHOREO_GESTURE_TYPES:
+                name = it.get("semantic") or it.get("target", "")
+                pt = resolver(name) if name else None
+                if pt is not None:
+                    prev_rest_e = pt
+        window_e = max(0.0, tts_by_beat[beat.beat_id] - 1.0 - reserved)
+        print(
+            f"{beat.beat_id:<10} {tts_by_beat[beat.beat_id]:6.2f} "
+            f"{reserved:6.2f} {measured:6.2f} {window_e:7.2f} "
+            f"{len(rep['guard_decisions']):7d} {len(rep['watchdog_fires']):6d} "
+            f"{rep['max_park']:8.2f}s {rep['sim_seconds']:7.2f}"
+        )
+        for fire in rep["watchdog_fires"]:
+            line = (
+                f"  wsda-watchdog: fired beat={fire['beat_id']} "
+                f"span={fire['span']:.2f}s reason={fire['reason']}"
+            )
+            print(line)
+            sim_fire_lines.append(line)
+        for d in rep["guard_decisions"]:
+            print(f"  {d}")
+        if rep["max_park"] > PARK_CAP + 0.05:
+            sim_park_failures.append(
+                f"{beat.beat_id}: max contiguous park {rep['max_park']:.2f}s "
+                f"> cap {PARK_CAP}s under measured-action conditions"
+            )
+        uncovered = rep["planned_sentences"] - rep["covered_sentences"]
+        if uncovered:
+            sim_coverage_failures.append(
+                f"{beat.beat_id}: sentence(s) {sorted(uncovered)} lost their "
+                f"last gesture under a guard decision"
+            )
+
+    check(
+        not sim_park_failures,
+        f"C39: max contiguous park <= {PARK_CAP}s in every beat under "
+        f"measured-action conditions (guard + watchdog active)"
+        + ("" if not sim_park_failures else f" | {sim_park_failures}"),
+    )
+    check(
+        not sim_coverage_failures,
+        "C39: no sentence loses its last gesture under any guard decision"
+        + ("" if not sim_coverage_failures else f" | {sim_coverage_failures}"),
     )
 
 

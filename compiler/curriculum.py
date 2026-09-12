@@ -899,7 +899,7 @@ def _video_order(manifest: CourseManifest) -> List[VideoManifest]:
 _SCRIPT_BEAT_FIELDS = {
     "beat_id", "kind", "text", "action", "visual_check",
     "attaches_to", "target_id", "video_clip_path", "observed_state",
-    "choreography", "planned_duration",
+    "choreography", "planned_duration", "measured_action_seconds",
 }
 
 
@@ -1432,6 +1432,27 @@ def run_course(
                 opening_state_history=opening_state_history,
                 new_query=new_query,
             )
+
+            # C39 STEP 3: persist each beat's MEASURED action window (from the
+            # C26 timeline instrumentation) into the manifest immediately —
+            # even when a later gate fails, the next run's choreography
+            # reservation must be the measurement * 1.15, not the stale
+            # per-type estimate. Skipped beats keep their prior measurement
+            # (the demo never ran, so nothing new was measured).
+            _measured = getattr(discovery, "measured_action_seconds", None) or {}
+            if _measured:
+                for _beat_dict in video.script_beats:
+                    _m = _measured.get(_beat_dict.get("beat_id"))
+                    if _m is not None:
+                        _beat_dict["measured_action_seconds"] = round(float(_m), 3)
+                        print(
+                            f"wsda-measured: beat={_beat_dict.get('beat_id')} "
+                            f"actions={float(_m):.2f}s "
+                            f"reservation-next-run="
+                            f"{float(_m) * 1.15:.2f}s",
+                            file=sys.stderr,
+                        )
+                save_manifest(manifest)
 
             if not discovery_result.success:
                 print("FAILED (script execution did not reach objective)")

@@ -46,6 +46,11 @@ class ScriptBeat:
     observed_state: Optional[Dict[str, Any]] = None
     # Planned action duration used to budget narration length.
     planned_duration: Optional[float] = None
+    # C39 STEP 3: MEASURED action window (seconds) recorded by the C26
+    # timeline instrumentation of the passing attempt and persisted into the
+    # manifest. The next run's choreography reservation is
+    # measured_action_seconds * 1.15 instead of the stale per-type estimate.
+    measured_action_seconds: Optional[float] = None
     # Narration-paced on-screen choreography: a list of small action specs that
     # fill the beat's spoken duration with deliberate cursor motion.
     choreography: Optional[List[Dict[str, Any]]] = None
