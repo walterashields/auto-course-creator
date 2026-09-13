@@ -1211,9 +1211,12 @@ def run_course(
 
     ``dry_run`` skips VLM/screen recording and exercises the attempt-report path.
 
-    ``dry_run_actions`` (C17) executes demo actions without recording or TTS and
-    reports per-beat ``action_seconds`` so LessonBuilder can size demo-beat
-    narration to the measured action plus gesture time.
+    ``dry_run_actions`` (C17/C40) executes beats without recording or TTS
+    playback: the real beat choreography loop runs end-to-end (per-beat
+    ParkWatchdog, scheduled choreography with guard compression,
+    covered-sentence tracking, checked sleeps) with the recorder, TTS
+    playback, physical cursor motion, and VLM calls stubbed. It reports
+    per-beat ``action_seconds`` from the C26 timeline instrumentation.
 
     Returns a summary dict with per-video outputs and aggregate duration.
     """
@@ -1964,8 +1967,9 @@ def main() -> int:
         "--dry-run-actions",
         action="store_true",
         help=(
-            "C17: execute demo actions without recording or TTS and print per-beat "
-            "action_seconds so narration can be sized to the measured action."
+            "C40 smoke: run the real beat choreography loop (watchdog, scheduled "
+            "choreography, guard compression) with recorder/TTS/VLM stubbed; "
+            "prints per-beat action_seconds. No capture, no TTS, no API spend."
         ),
     )
     args = parser.parse_args()

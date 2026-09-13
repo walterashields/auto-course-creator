@@ -59,6 +59,7 @@ from .schemas import DiscoveryResult, EnvironmentProfile, ExecutionGraph, Narrat
 from .sql_formatter import extract_first_query, format_sql_in_text, format_sql_query
 from .target_resolver import (
     MIN_GESTURE_SEPARATION_PX,
+    TargetGeometry,
     describe_semantic_target,
     distance,
     distinct_alternatives,
@@ -1371,6 +1372,65 @@ def _probe_clip_duration(path: Path) -> Optional[float]:
         return float(out.stdout.strip())
     except Exception:
         return None
+
+
+# C40: nominal narration window for --dry-run-actions smoke passes. Long
+# enough to force schedule-time guard compression against real choreography
+# plans, short enough to keep the smoke fast.
+SMOKE_NOMINAL_AUDIO_SECONDS = 5.0
+
+
+class _SmokeRecorder:
+    """C40: recorder stub for --dry-run-actions smoke passes.
+
+    start/stop are no-ops (no capture, no file on disk); the frame provider
+    serves None so any consumer falls back to its non-recording path; the
+    delivery summary carries no delivered_fps key so the C27 delivery-floor
+    gate never flags (unknown/missing delivery never flags by contract).
+    """
+
+    def __init__(self, path: str, fps: float = 10.0) -> None:
+        self.path = str(path)
+        self.fps = fps
+        self.delivery_summary: Dict[str, Any] = {"backend": "smoke"}
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def first_frame_time(self) -> Optional[float]:
+        return None
+
+    def latest_frame_provider(self) -> Callable[[], Any]:
+        return lambda: None
+
+
+class _SmokeAudioProc:
+    """C40: stand-in for the afplay process during smoke passes.
+
+    wait() blocks until the nominal narration window elapses (raising
+    TimeoutExpired past ``timeout``), so the C26 measured-audio-end watcher
+    and the main thread's reap path observe the same pacing a real afplay
+    would give; terminate() ends the window immediately.
+    """
+
+    def __init__(self, duration: float = SMOKE_NOMINAL_AUDIO_SECONDS) -> None:
+        self._end = time.time() + max(0.0, float(duration))
+
+    def wait(self, timeout: Optional[float] = None) -> int:
+        while True:
+            remaining = self._end - time.time()
+            if remaining <= 0.0:
+                return 0
+            if timeout is not None and remaining > timeout:
+                time.sleep(max(0.0, timeout))
+                raise subprocess.TimeoutExpired(cmd="smoke-audio", timeout=timeout)
+            time.sleep(min(remaining, 0.05))
+
+    def terminate(self) -> None:
+        self._end = time.time()
 
 
 def _timeline_phases(tl: Dict[str, Any]) -> Dict[str, Any]:
@@ -4797,6 +4857,14 @@ class EndStateDiscovery:
             return self._make_result(success=False, reason=stage_assertion["reason"])
 
         agent = VisionAgent(model=MODEL, output_dir=str(self.output_dir), profile=self.profile)
+        if self.actions_only:
+            # C40: real-wiring smoke — stub the screen/VLM-touching agent
+            # primitives BEFORE anything uses them so the beat loop below
+            # exercises the genuine choreography path (per-beat ParkWatchdog
+            # arming, scheduled_choreo iteration, covered_choreo_sentences at
+            # all three call sites, checked_sleep, guard compression) with
+            # recorder start/stop and TTS playback stubbed.
+            self._smoke_stub_agent(agent)
         # C17: ground the Execute/Run toolbar button once, outside any recording
         # window, so run_query needs no mid-beat VLM locate call. Best effort:
         # run_query falls back to a per-beat locate when priming fails.
@@ -4926,50 +4994,6 @@ class EndStateDiscovery:
                 # Non-demo beats without an explicit action simply wait.
                 action = {"type": "wait", "duration": 1.5}
 
-            if self.actions_only:
-                # C17: measure the deterministic demo action with no recorder, no
-                # TTS, and no choreography so LessonBuilder can size narration to
-                # action_seconds + gesture time. agent.recording is set so the
-                # production line-paste path (not the rehearsal paste path) is
-                # what gets timed.
-                if beat.kind != "demo" or action.get("type") == "wait":
-                    continue
-                beat_start = time.time()
-                action_ok = False
-                try:
-                    agent.recording = True
-                    action_ok = agent.execute_beat(
-                        dict(action),
-                        fallback_text=segment_fallback_text or None,
-                    )
-                except Exception as exc:
-                    print(
-                        f"  [ACTION TIMING] {beat.beat_id} raised: {exc}",
-                        file=sys.stderr,
-                    )
-                finally:
-                    agent.recording = False
-                action_seconds = time.time() - beat_start
-                self.action_timings.append(
-                    {
-                        "beat_id": beat.beat_id,
-                        "action_type": action.get("type"),
-                        "action_seconds": round(action_seconds, 3),
-                        "ok": bool(action_ok),
-                    }
-                )
-                print(
-                    f"[ACTION TIMING] {beat.beat_id} | {action.get('type')} | "
-                    f"{action_seconds:.2f}s | ok={action_ok}",
-                    file=sys.stderr,
-                )
-                if not action_ok:
-                    return self._finish_action_timings(
-                        success=False,
-                        reason=f"[ACTION TIMING] {beat.beat_id} demo action failed",
-                    )
-                continue
-
             # --- SKIP redundant demo actions ----------------------------------
             # C13: when choreography is present we record the beat's deliberate
             # cursor tour, so never collapse it into a skipped state beat.
@@ -5060,11 +5084,17 @@ class EndStateDiscovery:
                     else:
                         self._reset_editor_for_retry(agent, self.opening_state_history)
 
-                recorder: Any = ScreenRecorder(str(clip_path), fps=10)
-                if self.profile and self.profile.app_name:
-                    recorder = _make_window_recorder(
-                        str(clip_path), fps=10, app_name=self.profile.app_name
-                    )
+                if self.actions_only:
+                    # C40: smoke — recorder start/stop stubbed (no capture, no
+                    # file); the stub preserves the interface the beat loop
+                    # drives, including the C26 deadline/timeline fields.
+                    recorder: Any = _SmokeRecorder(str(clip_path), fps=10)
+                else:
+                    recorder = ScreenRecorder(str(clip_path), fps=10)
+                    if self.profile and self.profile.app_name:
+                        recorder = _make_window_recorder(
+                            str(clip_path), fps=10, app_name=self.profile.app_name
+                        )
                 audio_proc: Optional[subprocess.Popen] = None
                 audio_duration = 0.0
                 # C26: timeline record for this recording attempt.
@@ -5145,31 +5175,49 @@ class EndStateDiscovery:
                         getattr(recorder, "latest_frame_provider", lambda: None)()
                     )
                     # C13: start the beat's own TTS so recording is paced by speech.
-                    tts_info = tts_clip_by_beat.get(beat.beat_id)
-                    if tts_info:
-                        audio_path, audio_dur_ms = tts_info
-                        audio_duration = audio_dur_ms / 1000.0
+                    # C40: in actions_only smoke mode playback is stubbed — a
+                    # nominal window plus a no-op process — so the C26 measured
+                    # audio-end watcher, stop deadline, and tail-fill wiring
+                    # still run for real without afplay or TTS spend.
+                    if self.actions_only:
+                        audio_duration = SMOKE_NOMINAL_AUDIO_SECONDS
+                        audio_proc = _SmokeAudioProc()
                         tl["tts_dur"] = audio_duration
                         print(
-                            f"  [TTS] playing {beat.beat_id} audio ({audio_duration:.2f}s)",
+                            f"  [TTS] smoke nominal audio for {beat.beat_id} "
+                            f"({audio_duration:.2f}s; playback stubbed)",
                             file=sys.stderr,
                         )
-                        audio_proc = subprocess.Popen(
-                            ["afplay", str(audio_path)],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
                         tl["audio_start"] = time.time()
-                        # C26: watcher thread records the measured audio end without
-                        # changing any beat behavior.
                         threading.Thread(
                             target=_watch_audio_end, args=(audio_proc, tl), daemon=True
                         ).start()
                     else:
-                        print(
-                            f"  [TTS] no audio for {beat.beat_id}; recording unpaced",
-                            file=sys.stderr,
-                        )
+                        tts_info = tts_clip_by_beat.get(beat.beat_id)
+                        if tts_info:
+                            audio_path, audio_dur_ms = tts_info
+                            audio_duration = audio_dur_ms / 1000.0
+                            tl["tts_dur"] = audio_duration
+                            print(
+                                f"  [TTS] playing {beat.beat_id} audio ({audio_duration:.2f}s)",
+                                file=sys.stderr,
+                            )
+                            audio_proc = subprocess.Popen(
+                                ["afplay", str(audio_path)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            tl["audio_start"] = time.time()
+                            # C26: watcher thread records the measured audio end without
+                            # changing any beat behavior.
+                            threading.Thread(
+                                target=_watch_audio_end, args=(audio_proc, tl), daemon=True
+                            ).start()
+                        else:
+                            print(
+                                f"  [TTS] no audio for {beat.beat_id}; recording unpaced",
+                                file=sys.stderr,
+                            )
                 clip_start = time.time()
 
                 try:
@@ -5694,6 +5742,21 @@ class EndStateDiscovery:
                     getattr(recorder, "_fallback", None), "delivery_summary", None
                 )
                 timeline.append(tl)
+                if self.actions_only:
+                    # C40: keep the C17 action_timings table populated from the
+                    # real loop's C26 instrumentation (the measured action
+                    # window) so the smoke report stays meaningful.
+                    _phases = _timeline_phases(tl)
+                    self.action_timings.append(
+                        {
+                            "beat_id": beat.beat_id,
+                            "action_type": action.get("type"),
+                            "action_seconds": round(
+                                float(_phases.get("action_window") or 0.0), 3
+                            ),
+                            "ok": bool(beat_ok),
+                        }
+                    )
                 if not skipped:
                     print(
                         "wsda-timeline: "
@@ -6671,6 +6734,139 @@ class EndStateDiscovery:
 
         print("[STAGE PREP] DB open and Customer count = 60", file=sys.stderr)
         return {"ok": True}
+
+    def _smoke_stub_agent(self, agent: VisionAgent) -> None:
+        """C40: stub the screen/VLM-touching agent primitives so a
+        --dry-run-actions pass walks the REAL beat choreography loop —
+        per-beat ParkWatchdog arming, scheduled_choreo iteration,
+        covered_choreo_sentences at all three call sites, checked_sleep,
+        schedule-time and runtime guard compression — with recorder
+        start/stop and TTS playback stubbed and zero VLM spend.
+
+        What stays real: _schedule_choreography and its C35/C38 guard
+        compression, the ParkWatchdog itself, the seam contract, the C26
+        measured-audio-end/stop-deadline/tail-fill wiring, target
+        resolution (pure math on the nominal geometry primed here), and
+        SQL grounding against the real sqlite3 result. Only the screen
+        surface is nominal: no capture, no physical cursor motion, no
+        anthropic Messages call.
+        """
+
+        def _nominal_geometry() -> bool:
+            try:
+                size = pyautogui.size()
+                screen = (float(size.width), float(size.height))
+            except Exception:
+                screen = (1440.0, 900.0)
+            w, h = screen
+            geo = TargetGeometry(screen=screen)
+            geo.editor_rect = (w * 0.30, h * 0.20, w * 0.60, h * 0.40)
+            geo.results_rect = (w * 0.30, h * 0.62, w * 0.60, h * 0.25)
+            geo.tab_points = {
+                "database-structure": (w * 0.55, h * 0.11),
+                "browse-data": (w * 0.65, h * 0.11),
+                "execute-sql": (w * 0.75, h * 0.11),
+            }
+            run_point = (w * 0.60, h * 0.06)
+            geo.toolbar_points = {"execute-sql": run_point}
+            agent._target_geometry = geo
+            if getattr(agent, "_run_button_point", None) is None:
+                agent._run_button_point = run_point
+            print(
+                f"wsda-calibration: smoke nominal geometry screen={screen} "
+                f"editor_rect={geo.editor_rect} results_rect={geo.results_rect} "
+                f"tabs={sorted(geo.tab_points)}",
+                file=sys.stderr,
+            )
+            return True
+
+        def _smoke_execute_beat(
+            beat_dict: Dict[str, Any], fallback_text: Optional[str] = None
+        ) -> bool:
+            action_type = beat_dict.get("action_type") or beat_dict.get("type")
+            if action_type == "wait":
+                return True
+            if action_type in ("type_block", "append_block"):
+                text = beat_dict.get("text") or beat_dict.get("detail") or ""
+                agent._last_executed_statement = text
+                agent._last_composed_text = text
+            elif action_type == "type_segments":
+                segments = beat_dict.get("segments") or []
+                full = "".join(
+                    s.get("text", "") if isinstance(s, dict) else str(s)
+                    for s in segments
+                )
+                agent._last_executed_statement = full
+                agent._last_composed_text = full
+            # click/key/run_query/verify/move_cursor/select_text and friends:
+            # nominal success; the screen is not touched.
+            return True
+
+        def _smoke_type_segments(
+            segments: Any,
+            fallback_text: Optional[str] = None,
+            focus_editor: bool = True,
+        ) -> bool:
+            full = "".join(
+                s.get("text", "") if isinstance(s, dict) else str(s)
+                for s in (segments or [])
+            )
+            agent._last_composed_text = full or fallback_text or ""
+            return True
+
+        def _smoke_choreo_item(item: Dict[str, Any]) -> bool:
+            action_type = (item.get("type") or "").lower()
+            if action_type == "pause":
+                # Real watchdog path: the pause sleeps through checked_sleep.
+                duration = float(item.get("duration", 0.5))
+                if agent.watchdog is not None:
+                    agent.watchdog.checked_sleep(duration, reason="choreo-pause")
+                return True
+            target = item.get("semantic") or item.get("target", "")
+            point = agent._resolve_choreography_target(target) if target else None
+            if point is not None:
+                agent._last_rest_point = (float(point[0]), float(point[1]))
+            if agent.watchdog is not None:
+                agent.watchdog.note_motion()
+            return True
+
+        def _smoke_move_to_target(target: str, duration: float = 0.7) -> bool:
+            point = agent._resolve_choreography_target(target)
+            if point is not None:
+                agent._last_rest_point = (float(point[0]), float(point[1]))
+            if agent.watchdog is not None:
+                agent.watchdog.note_motion()
+            return True
+
+        agent.prime_choreography_geometry = _nominal_geometry
+        agent.prime_run_button_cache = lambda: True
+        agent._read_editor_content = lambda focus=True: ""
+        agent.prepare_sql_editor = lambda: True
+        agent.dismiss_transient_ui = lambda: True
+        agent._focus_editor = lambda: True
+        agent.scroll_result_pane_top = lambda: True
+        agent._clear_editor_accessibility = lambda: True
+        agent._set_editor_text_accessibility = lambda text: True
+        agent.paste_history_block = lambda text: True
+        agent.append_block = lambda text: True
+        agent.execute_beat = _smoke_execute_beat
+        agent.type_segments = _smoke_type_segments
+        agent.run_query = lambda *a, **k: True
+        agent.summarize_result_pane = lambda: {}
+        agent.summarize_observed_state = lambda: {
+            "summary": "smoke nominal observed state",
+            "frontmost": True,
+        }
+        agent.verify_state = lambda *a, **k: True
+        agent._assess_and_maybe_repair = lambda *a, **k: True
+        agent.is_end_state_already_present = (
+            lambda intended, previous_observed_state=None: (False, "")
+        )
+        agent.ask_recovery = lambda failed_action: None
+        agent.perform_emphasis_actions = lambda beat: True
+        agent._semantic_fallback_point = lambda name: None
+        agent._move_to_target = _smoke_move_to_target
+        agent.execute_choreography_item = _smoke_choreo_item
 
     def _finish_action_timings(self, success: bool, reason: str = "") -> DiscoveryResult:
         """

@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -2158,6 +2159,128 @@ class TestC28CaptureWarmup(unittest.TestCase):
         self.assertEqual(d._capture_warmup.call_count, 1)
         self.assertEqual(events, [])  # no beat recorder was ever constructed
         self.assertIn("wsda-capture-warmup-fail", err.getvalue())
+
+
+class TestC40DryRunActionsSmoke(unittest.TestCase):
+    """C40: --dry-run-actions walks the REAL beat choreography loop — per-beat
+    ParkWatchdog arming, scheduled_choreo iteration, covered_choreo_sentences
+    at all three call sites, checked_sleep/tail-fill — with recorder
+    start/stop, TTS playback, physical cursor motion, and VLM calls stubbed.
+    Guards the real-executor wiring bug class the simulated dry proof cannot
+    see (C39's scheduled_choreo unpacking bug aborted the first recording
+    pass at beat_001 before any capture)."""
+
+    def _discovery(self) -> EndStateDiscovery:
+        d = EndStateDiscovery(
+            objective="test",
+            application="db_browser_sqlite",
+            actions_only=True,
+        )
+        d._launch_app = mock.Mock()
+        d._auto_fit_columns = mock.Mock()
+        d._assert_stage_resources = mock.Mock(return_value={"ok": True})
+        d._prepare_opening_state = mock.Mock()
+        return d
+
+    def _run(self, d: EndStateDiscovery) -> Any:
+        beats = [
+            ScriptBeat(
+                beat_id="beat_001",
+                kind="opening",
+                text="Let us look at the editor.",
+                action={"type": "wait", "duration": 1.5},
+                choreography=[
+                    {
+                        "type": "hover",
+                        "target": "the SQL editor text area",
+                        "sentence_idx": 0,
+                    },
+                    {"type": "pause", "duration": 1.5, "sentence_idx": 0},
+                ],
+            ),
+            ScriptBeat(
+                beat_id="beat_002",
+                kind="demo",
+                text="We type the query.",
+                action={
+                    "type": "type_segments",
+                    "segments": [{"text": "SELECT 1;", "sentence_idx": 0}],
+                },
+                choreography=[
+                    {
+                        "type": "hover",
+                        "target": "the SELECT clause in the SQL editor",
+                        "sentence_idx": 0,
+                    },
+                    {"type": "pause", "duration": 1.5, "sentence_idx": 0},
+                ],
+            ),
+            ScriptBeat(
+                beat_id="beat_003",
+                kind="close",
+                text="That is the lesson.",
+                action={"type": "wait", "duration": 1.5},
+                choreography=[
+                    {
+                        "type": "hover",
+                        "target": "the result pane showing query output",
+                        "sentence_idx": 0,
+                    },
+                ],
+            ),
+        ]
+        agent_cls = mock.MagicMock()
+        # The smoke stub keeps these real on a live agent; on the mock they
+        # must be made nominal explicitly.
+        agent_cls.return_value.resolve_choreography_point.side_effect = (
+            lambda name: (100.0, 100.0)
+        )
+        agent_cls.return_value._resolve_choreography_target.side_effect = (
+            lambda name: (100.0, 100.0)
+        )
+        agent_cls.return_value.execute_choreography.side_effect = (
+            lambda items, max_duration=None, covered_sentences=None: len(items)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            prev_cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with mock.patch.multiple(
+                    discovery_module,
+                    _find_db_browser=mock.Mock(return_value="/tmp/DB Browser.app"),
+                    _ensure_sample_db=mock.Mock(return_value=Path("/tmp/x.db")),
+                    VisionAgent=agent_cls,
+                    SMOKE_NOMINAL_AUDIO_SECONDS=2.0,
+                ):
+                    result = d._execute_beats_with_agent(beats, "summary", False)
+            finally:
+                os.chdir(prev_cwd)
+        return result, agent_cls
+
+    def test_smoke_walks_real_choreography_loop(self) -> None:
+        d = self._discovery()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result, agent_cls = self._run(d)
+        log = err.getvalue()
+        self.assertTrue(result.success, log)
+        # Every beat armed the park watchdog exactly once (zero retries).
+        self.assertEqual(log.count("wsda-watchdog: armed"), 3)
+        # The real wiring ran: scheduling, nominal TTS window, C26 timeline.
+        self.assertIn("[CHOREOGRAPHY SCHEDULED]", log)
+        self.assertIn("[TTS] smoke nominal audio", log)
+        # One wsda-timeline row per beat inside the loop (the run-end phase
+        # table adds more lines carrying the same prefix).
+        self.assertGreaterEqual(log.count("wsda-timeline:"), 3)
+        # No exception escaped the beat loop.
+        self.assertNotIn("Traceback", log)
+        # Real wiring markers: interleaved demo segments ran, and the agent-side
+        # choreography executor was driven by the discovery loop.
+        self.assertIn("[SEGMENTS] interleaved segment 1/1", log)
+        self.assertIn("wsda-calibration: smoke nominal geometry", log)
+        self.assertTrue(agent_cls.return_value.execute_choreography.called)
+        # The C17 timings table stayed populated from the real loop.
+        self.assertEqual(len(d.action_timings), 3)
 
 
 class TestC29GroundingReadsRecorderFrame(unittest.TestCase):
@@ -4874,6 +4997,7 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC27DeliveryFloor))
     suite.addTests(loader.loadTestsFromTestCase(TestC27TeardownSettle))
     suite.addTests(loader.loadTestsFromTestCase(TestC28CaptureWarmup))
+    suite.addTests(loader.loadTestsFromTestCase(TestC40DryRunActionsSmoke))
     suite.addTests(loader.loadTestsFromTestCase(TestC29GroundingReadsRecorderFrame))
     suite.addTests(loader.loadTestsFromTestCase(TestC29CodecFallback))
     suite.addTests(loader.loadTestsFromTestCase(TestC29EncodeOffDelivery))
