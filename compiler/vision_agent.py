@@ -12,6 +12,7 @@ a model that locates UI elements on the actual screen pixels.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import io
 import json
@@ -201,6 +202,8 @@ def wait_for_app_readiness(
                 f"wsda-app-not-ready: {process_name} did not answer AX "
                 f"queries within {timeout:.0f}s"
             )
+        # c41-raw-sleep-ok: app-launch AX readiness poll (pre-recording; no
+        # beat watchdog exists at launch, nothing is on camera yet).
         time.sleep(interval)
 
 
@@ -626,7 +629,9 @@ class VisionAgent:
                 file=sys.stderr,
             )
             self._activate_target_app()
-            time.sleep(0.3)
+            # C41: focus-recovery wait — governed so a stuck activate loop
+            # can never park the cursor past the cap mid-recording.
+            self._governed_sleep(0.3, reason="in-action-wait:focus-recovery")
         raise FocusLostError(f"{target} could not be kept frontmost")
 
     def _activate_target_app(self) -> None:
@@ -637,7 +642,7 @@ class VisionAgent:
                 capture_output=True,
                 timeout=3,
             )
-            time.sleep(0.2)
+            self._governed_sleep(0.2, reason="in-action-wait:app-activate")
         except Exception:
             pass
 
@@ -913,7 +918,11 @@ class VisionAgent:
         # Animate cursor for visibility in recordings.
         pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
         pyautogui.click(lx, ly)
-        time.sleep(0.5)
+        # C41: a click is real cursor motion — reset the park clock so the
+        # post-click settle is measured from here.
+        if self.watchdog is not None:
+            self.watchdog.note_motion()
+        self._governed_sleep(0.5, reason="in-action-wait:post-click-settle")
         self._last_click_point = (lx, ly)
         return True
 
@@ -979,7 +988,7 @@ class VisionAgent:
         # pyautogui handles newlines and special characters better than AppleScript.
         # ~0.10 s/char so learners can follow live typing.
         pyautogui.typewrite(text, interval=0.10)
-        time.sleep(0.2)
+        self._governed_sleep(0.2, reason="in-action-wait:post-type-settle")
         return True
 
     def _dismiss_character_viewer(self) -> None:
@@ -990,6 +999,7 @@ class VisionAgent:
         """
         for _ in range(3):
             pyautogui.press("esc")
+            # debounce: let the Escape key event land before the next press
             time.sleep(0.1)
         # Try to close any open Character Viewer window via AppleScript.
         try:
@@ -1091,7 +1101,10 @@ class VisionAgent:
             print(f"  [TYPE BLOCK] fallback click editor at ({fx}, {fy})", file=sys.stderr)
             pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
             pyautogui.click(fx, fy)
-            time.sleep(0.3)
+            # C41: the fallback click is motion; let the watchdog clock restart.
+            if self.watchdog is not None:
+                self.watchdog.note_motion()
+            self._governed_sleep(0.3, reason="in-action-wait:post-focus-settle")
         # Hard guarantee: use accessibility to focus the actual SQL editor text
         # area so keystrokes land in the right control even if the VLM click
         # hit a nearby label or splitter.
@@ -1167,7 +1180,11 @@ class VisionAgent:
                 return True
             self._log_ax_failure_context(process_name, marker, elapsed)
             if attempt < _AX_ENUM_ATTEMPTS:
-                time.sleep(_AX_ENUM_RETRY_DELAY)
+                # C41: focus enumeration retry wait — governed (1.0s >= the
+                # debounce exemption threshold).
+                self._governed_sleep(
+                    _AX_ENUM_RETRY_DELAY, reason="in-action-wait:ax-enum-retry"
+                )
         return False
 
     def _log_ax_failure_context(
@@ -1221,7 +1238,8 @@ end tell
                 timeout=10,
             )
             if result.returncode == 0 and (result.stdout or "").strip() == "wsda-ok":
-                time.sleep(0.8)
+                # C41: post-AppleScript-tab settle — governed (0.8s of still).
+                self._governed_sleep(0.8, reason="in-action-wait:execute-tab-settle")
                 return True
         except Exception as exc:
             print(
@@ -1447,6 +1465,7 @@ end tell
             self._focus_editor()
             self._clear_editor_accessibility()
             self.press_key("cmd+end")
+            # debounce: let the cursor-move key event land before the clear read
             time.sleep(0.1)
             return
         print("  [TYPE BLOCK] clearing editor", file=sys.stderr)
@@ -1458,6 +1477,7 @@ end tell
         # DB Browser sometimes leaves a single trailing blank line after the
         # first delete; a second delete ensures the editor is truly empty.
         self.press_key("delete")
+        # debounce: let the delete key event land before the next call reads
         time.sleep(0.2)
 
     def _type_visible(self, text: str) -> None:
@@ -1475,11 +1495,12 @@ end tell
         for idx, line in enumerate(lines):
             if idx > 0:
                 pyautogui.press("return")
+                # debounce: let the Return key event land before typing the line
                 time.sleep(0.1)
             if line:
                 # ~0.10 s/char so learners can follow live typing.
                 pyautogui.typewrite(line, interval=0.10)
-        time.sleep(0.5)
+        self._governed_sleep(0.5, reason="in-action-wait:post-type-settle")
         self._dismiss_character_viewer()
 
     @staticmethod
@@ -1520,6 +1541,7 @@ end tell
                 pyautogui.keyUp(key)
             except Exception:
                 pass
+        # debounce: let the modifier keyUp events land before the next keystroke
         time.sleep(0.15)
 
     def _safe_hotkey(self, *keys: str, post_delay: float = 0.15) -> None:
@@ -1538,7 +1560,8 @@ end tell
             pyautogui.keyUp(key)
         self._release_all_modifiers()
         if post_delay > 0:
-            time.sleep(post_delay)
+            # C41: hotkey post-delay — governed (callers pass up to ~0.5s).
+            self._governed_sleep(post_delay, reason="in-action-wait:hotkey-post-delay")
 
     def _clipboard_matches(self, intended: str) -> bool:
         """C23: read the live clipboard and compare digests with the text we
@@ -1568,6 +1591,7 @@ end tell
         digest = _clipboard_digest(text)
         for attempt in range(1, _PASTE_INTERLOCK_ATTEMPTS + 1):
             self._copy_to_clipboard(text)
+            # debounce: pbcopy is asynchronous; give it a beat before pbpaste
             time.sleep(0.05)
             if self._clipboard_matches(text):
                 print(
@@ -1582,6 +1606,7 @@ end tell
                 f"(attempt {attempt}/{_PASTE_INTERLOCK_ATTEMPTS}); retrying",
                 file=sys.stderr,
             )
+            # debounce: let the next pbcopy land before the read-back
             time.sleep(0.1)
         print(
             "  [PASTE] wsda-paste-interlock-fail: clipboard never matched the "
@@ -1647,11 +1672,13 @@ end tell
         # resets the park watchdog clock.
         if self.watchdog is not None:
             self.watchdog.note_motion()
+        # debounce: let the paste keystroke land before the cadence wait
         time.sleep(0.05)
         # C18: flat fast-end cadence; the governor's escalation rule is that a
         # failed beat-end canonical check at this pace is the evidence to slow
-        # down, not precaution.
-        time.sleep(pace[0])
+        # down, not precaution. C41: the cadence is an action-internal wait —
+        # governed (variable pace, up to 0.8s).
+        self._governed_sleep(pace[0], reason="in-action-wait:paste-cadence")
 
     def _read_current_line(self) -> str:
         """
@@ -1686,6 +1713,7 @@ end tell
         self._dismiss_character_viewer()
         self._focus_editor()
         self.press_key("cmd+a")
+        # debounce: let the select-all key chord land before the clipboard read
         time.sleep(0.1)
         original_clipboard = self._read_clipboard()
         try:
@@ -1739,7 +1767,8 @@ end tell
             capture_output=True,
             timeout=5,
         )
-        time.sleep(0.3)
+        # C41: clear settle — governed so a slow AX clear can't park the cap.
+        self._governed_sleep(0.3, reason="in-action-wait:editor-clear-settle")
         return True
 
     def dismiss_modal_dialogs(self, max_modals: int = 3) -> None:
@@ -1778,7 +1807,9 @@ end tell
                     capture_output=True,
                     timeout=5,
                 )
-            time.sleep(0.4)
+            # C41: modal-dismiss poll wait — governed (a stuck modal loop must
+            # not park the cursor past the cap mid-recording).
+            self._governed_sleep(0.4, reason="in-action-wait:modal-dismiss-poll")
             remaining = ax_pyobjc.frontmost_modal(app_el)
             if remaining is not None and remaining[1] == title:
                 raise RuntimeError(f"wsda-modal-stuck:{title}")
@@ -1868,9 +1899,11 @@ end tell
         if text_to_append != text:
             print("  [APPEND] prepending newline separator", file=sys.stderr)
         self.press_key("cmd+a")
+        # debounce: let the select-all chord land before the cursor move
         time.sleep(0.1)
         pyautogui.keyDown("right")
         pyautogui.keyUp("right")
+        # debounce: let the cursor-move key land before the clipboard read
         time.sleep(0.1)
         original_clipboard = self._read_clipboard()
         try:
@@ -2175,6 +2208,7 @@ end tell
         pyautogui.keyUp("end")
         pyautogui.keyUp("shift")
         self._release_all_modifiers()
+        # debounce: let the line-selection chord land before the line paste
         time.sleep(0.1)
         self._paste_line(intended_line)
         return True
@@ -2253,6 +2287,7 @@ end tell
                     # move up and replace only that line.
                     pyautogui.press("up")
                     self._release_all_modifiers()
+                    # debounce: let the cursor-move key land before the re-paste
                     time.sleep(0.05)
                     if not self._repair_line(line):
                         break
@@ -2313,7 +2348,7 @@ end tell
                 return text
             return ""
         effective = self._append_text(text)
-        time.sleep(0.3)
+        self._governed_sleep(0.3, reason="in-action-wait:post-append-settle")
         self._dismiss_character_viewer()
         return effective
 
@@ -2323,6 +2358,7 @@ end tell
         self._ensure_frontmost()
         # One undo usually removes the last continuous text entry in DB Browser.
         self.press_key("cmd+z")
+        # debounce: let the undo chord land before the retry path reads
         time.sleep(0.2)
 
     def _verify_buffer_exact(self, intended: str, label: str = "") -> bool:
@@ -2457,6 +2493,7 @@ end tell
         pyautogui.keyDown("end")
         pyautogui.keyUp("end")
         pyautogui.keyUp("command")
+        # debounce: let the cursor-move chord land before the paste loop
         time.sleep(0.1)
         expected_sofar = initial
         # Ceiling: one iteration per segment (bounded by len(segments)).
@@ -2576,12 +2613,14 @@ end tell
             self._paste_text(text)
         # Scroll to the top so the VLM can read the full history if needed.
         self.press_key("cmd+home")
+        # debounce: let the scroll key chord land before the read-back
         time.sleep(0.2)
         if not self._verify_buffer_exact(text, "PASTE HISTORY"):
             print("  [PASTE HISTORY] verification FAILED", file=sys.stderr)
             return False
         # Move cursor to the end so the next append_block lands after the history.
         self.press_key("cmd+end")
+        # debounce: let the cursor-move chord land before returning
         time.sleep(0.2)
         print("  [PASTE HISTORY] done", file=sys.stderr)
         return True
@@ -2674,9 +2713,12 @@ end tell
             fx, fy = int(logical_w * 0.5), int(logical_h * 0.75)
             pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
             pyautogui.click(fx, fy)
-            time.sleep(0.3)
+            # C41: the fallback click is motion; restart the watchdog clock.
+            if self.watchdog is not None:
+                self.watchdog.note_motion()
+            self._governed_sleep(0.3, reason="in-action-wait:post-focus-settle")
         self.press_key("ctrl+home")
-        time.sleep(0.3)
+        self._governed_sleep(0.3, reason="in-action-wait:post-key-settle")
         return True
 
     def dismiss_transient_ui(self) -> bool:
@@ -2686,7 +2728,7 @@ end tell
             if self.is_modal_or_dropdown_open():
                 print("  [STAGE PREP] dismissed transient UI", file=sys.stderr)
                 self.press_key("esc")
-                time.sleep(0.3)
+                self._governed_sleep(0.3, reason="in-action-wait:modal-dismiss-settle")
                 dismissed = True
         except Exception as exc:
             print(f"Warning: transient UI dismiss check failed: {exc}", file=sys.stderr)
@@ -2920,6 +2962,7 @@ end tell
         self.press_key("ctrl+home")
         for _ in range(bad_line_no - 1):
             pyautogui.press("down")
+            # debounce: keep the arrow-key cadence below the key-event rate
             time.sleep(0.02)
         intended_line = intended_lines[bad_line_no - 1]
         if not self._repair_line(intended_line):
@@ -3028,7 +3071,11 @@ end tell
                     file=sys.stderr,
                 )
                 return False
-            time.sleep(0.5)
+            # C41: the poll interval is an action-internal wait — governed by
+            # the park watchdog (reason=in-action-wait:*). The results strip
+            # is under active verification here, so any break-park motion
+            # stays outside it (see run_query's _verification_exclusions).
+            self._governed_sleep(0.5, reason="in-action-wait:fresh-results-poll")
 
     def run_query(
         self, current_statement: str = "", require_fresh: bool = True
@@ -3098,7 +3145,12 @@ end tell
             print(f"  [RUN QUERY] clicking cached Execute button at ({bx}, {by})", file=sys.stderr)
             pyautogui.moveTo(bx, by, duration=0.5, tween=pyautogui.easeInOutQuad)
             pyautogui.click(bx, by)
-            time.sleep(0.5)
+            # C41: the click is real cursor motion — reset the park clock so
+            # the governed post-click settles measure from the click, not
+            # from some pre-action gesture.
+            if self.watchdog is not None:
+                self.watchdog.note_motion()
+            self._governed_sleep(0.5, reason="in-action-wait:post-click-settle")
             clicked = True
         elif self.find_and_click(
             "Execute the SQL query in the editor",
@@ -3108,41 +3160,48 @@ end tell
                 self._run_button_point = self._last_click_point
             clicked = True
 
-        executed = False
-        if clicked:
-            # Give the app time to execute and render the result pane.
-            time.sleep(2.5)
-            executed = True
-            # C17: deterministic post-run check. The pixel error signature is
-            # the only mid-run signal we need; visual confirmation of populated
-            # results is the beat-end assessment's job, not a VLM call here.
-            if not self._result_pane_shows_error():
-                # C30: "no error" is not "ran". The pane must CHANGE versus the
-                # pre-click snapshot, otherwise the click missed and the old
-                # results are still up.
-                if not require_fresh or self._results_pane_changed(pre_snapshot):
-                    print("  [RUN QUERY] results visible", file=sys.stderr)
-                    return True
-                return False
-            print("  [RUN QUERY] error signature detected after run", file=sys.stderr)
+        # C41 STEP 2: everything from here on verifies the RESULTS region
+        # (error-signature pixel check, fresh-results phash poll, Result-tab
+        # re-check). The results strip is under active verification, so the
+        # watchdog may not hover any 'result' target while breaking a park
+        # inside this window — it falls back to another sentence target or a
+        # drift glide in place.
+        with self._verification_exclusions("result"):
+            executed = False
+            if clicked:
+                # Give the app time to execute and render the result pane.
+                self._governed_sleep(2.5, reason="in-action-wait:query-execute-settle")
+                executed = True
+                # C17: deterministic post-run check. The pixel error signature is
+                # the only mid-run signal we need; visual confirmation of populated
+                # results is the beat-end assessment's job, not a VLM call here.
+                if not self._result_pane_shows_error():
+                    # C30: "no error" is not "ran". The pane must CHANGE versus the
+                    # pre-click snapshot, otherwise the click missed and the old
+                    # results are still up.
+                    if not require_fresh or self._results_pane_changed(pre_snapshot):
+                        print("  [RUN QUERY] results visible", file=sys.stderr)
+                        return True
+                    return False
+                print("  [RUN QUERY] error signature detected after run", file=sys.stderr)
 
-        if not executed:
-            print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
-            result_tab = self.profile.landmarks.get("result_tab", "the Result tab")
-            if self.find_and_click(
-                "Show the query results",
-                f"{result_tab} in {self.profile.app_name}",
-            ):
-                time.sleep(1.0)
-                if not self._result_pane_shows_error() and (
-                    not require_fresh or self._results_pane_changed(pre_snapshot)
+            if not executed:
+                print("  [RUN QUERY] results not visible; clicking Result tab", file=sys.stderr)
+                result_tab = self.profile.landmarks.get("result_tab", "the Result tab")
+                if self.find_and_click(
+                    "Show the query results",
+                    f"{result_tab} in {self.profile.app_name}",
                 ):
-                    print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
-                    return True
+                    self._governed_sleep(1.0, reason="in-action-wait:result-tab-settle")
+                    if not self._result_pane_shows_error() and (
+                        not require_fresh or self._results_pane_changed(pre_snapshot)
+                    ):
+                        print("  [RUN QUERY] results visible after Result tab click", file=sys.stderr)
+                        return True
 
-        # Repair path: if we executed and saw an error signature, try once more.
-        if executed and statement and self._result_pane_shows_error():
-            return self._repair_editor_and_rerun(statement)
+            # Repair path: if we executed and saw an error signature, try once more.
+            if executed and statement and self._result_pane_shows_error():
+                return self._repair_editor_and_rerun(statement)
 
         print("  Warning: VLM did not find Execute/Run button or Result tab", file=sys.stderr)
         return False
@@ -3232,7 +3291,8 @@ end tell
         # Defensive modifier release: prevents the Character Viewer race where a
         # subsequent Space lands while Cmd/Ctrl are still held.
         self._release_all_modifiers()
-        time.sleep(0.35)
+        # C41: post-keypress settle — governed (press_key runs mid-recording).
+        self._governed_sleep(0.35, reason="in-action-wait:post-key-settle")
         return True
 
     def verify_state(self, expected_description: str) -> bool:
@@ -3453,7 +3513,8 @@ end tell
 
         if action_type == "wait":
             duration = beat_dict.get("duration", 1.5)
-            time.sleep(duration)
+            # C41: a wait action is an action-internal wait — governed.
+            self._governed_sleep(duration, reason="in-action-wait:beat-wait")
             return True
 
         if action_type == "click":
@@ -3595,7 +3656,8 @@ end tell
         )
         self._ensure_frontmost()
         pyautogui.moveTo(lx, ly, duration=0.4, tween=pyautogui.easeInOutQuad)
-        time.sleep(0.2)
+        # C41: post-move settle — governed (cursor move already noted by callers).
+        self._governed_sleep(0.2, reason="in-action-wait:post-move-settle")
         return True
 
     def _select_text_in_editor(self, text: str) -> bool:
@@ -3612,7 +3674,10 @@ end tell
         pyautogui.mouseDown()
         pyautogui.moveTo(x2, y2, duration=0.4, tween=pyautogui.easeInOutQuad)
         pyautogui.mouseUp()
-        time.sleep(0.2)
+        # C41: the drag is motion; the settle after it is governed.
+        if self.watchdog is not None:
+            self.watchdog.note_motion()
+        self._governed_sleep(0.2, reason="in-action-wait:post-drag-settle")
         return True
 
     def emphasize_element(self, description: str, select: bool = False) -> bool:
@@ -3643,7 +3708,7 @@ end tell
         lx, ly = self._api_to_logical(point["x"], point["y"])
         print(f"  [EMPHASIS] move to '{description}' at ({lx}, {ly})", file=sys.stderr)
         pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
-        time.sleep(0.2)
+        self._governed_sleep(0.2, reason="in-action-wait:post-move-settle")
         if select:
             # C11: drag-select across a narrated region so the recorded clip
             # contains visible, sustained motion instead of a static cursor hold.
@@ -3652,10 +3717,14 @@ end tell
             sw, _ = pyautogui.size()
             end_x = min(lx + 300, sw - 1)
             pyautogui.mouseDown()
+            # debounce: hold the mouse-down before the drag leg
             time.sleep(0.05)
             pyautogui.moveTo(end_x, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+            # debounce: let the drag leg render before the mouse-up
+            # debounce: let the drag leg render before the mouse-up
             time.sleep(0.05)
             pyautogui.mouseUp()
+            # debounce: let the selection render before the next emphasis action
             time.sleep(0.2)
         return True
 
@@ -3704,7 +3773,9 @@ end tell
         for description in descriptions[:3]:  # Cap at 3 emphasis actions per beat.
             if not self.emphasize_element(description, select=True):
                 ok = False
-            time.sleep(0.3)
+            # C41: emphasis cadence — governed (a failed emphasis must not
+            # leave a long park between actions).
+            self._governed_sleep(0.3, reason="in-action-wait:emphasis-cadence")
         return ok
 
     def resolve_choreography_point(self, name: str) -> Optional[Tuple[int, int]]:
@@ -3847,6 +3918,7 @@ end tell
         try:
             move_duration = max(0.25, duration)
             pyautogui.moveTo(point[0], point[1], duration=move_duration, tween=pyautogui.easeInOutQuad)
+            # debounce: let the move land before the rest-point/clock update
             time.sleep(0.05)
             # C36: track the real rest point so the seam contract can compare
             # the next gesture against where the cursor actually sits.
@@ -3890,6 +3962,7 @@ end tell
             if self.watchdog is not None:
                 self.watchdog.checked_sleep(duration, reason="choreo-pause")
             else:
+                # c41-raw-sleep-ok: watchdog-None fallback of the checked choreo pause
                 time.sleep(duration)
             return True
         if action_type == "hover":
@@ -3905,6 +3978,7 @@ end tell
                     self.watchdog.note_motion()
                     self.watchdog.checked_sleep(0.2, reason="post-click-settle")
                 else:
+                    # c41-raw-sleep-ok: watchdog-None fallback of the checked post-click settle
                     time.sleep(0.2)
                 return True
             except Exception as exc:
@@ -3928,6 +4002,7 @@ end tell
                 if self.watchdog is not None:
                     self.watchdog.checked_sleep(0.2, reason="post-drag-settle")
                 else:
+                    # c41-raw-sleep-ok: watchdog-None fallback of the checked post-drag settle
                     time.sleep(0.2)
                 return True
             except Exception as exc:
@@ -3945,6 +4020,7 @@ end tell
                     self.watchdog.note_motion()
                     self.watchdog.checked_sleep(0.2, reason="post-scroll-settle")
                 else:
+                    # c41-raw-sleep-ok: watchdog-None fallback of the checked post-scroll settle
                     time.sleep(0.2)
                 return True
             except Exception as exc:
@@ -4095,6 +4171,7 @@ end tell
                     if self.watchdog is not None:
                         self.watchdog.checked_sleep(rest, reason="leftover-rest")
                     else:
+                        # c41-raw-sleep-ok: watchdog-None fallback of the checked leftover rest
                         time.sleep(rest)
                     rested_same_target += rest
                     elapsed = time.time() - start
@@ -4123,12 +4200,47 @@ end tell
                 if self.watchdog is not None:
                     self.watchdog.checked_sleep(leftover, reason="leftover-rest-no-target")
                 else:
+                    # c41-raw-sleep-ok: watchdog-None fallback of the checked leftover rest
                     time.sleep(leftover)
         return executed
 
     # ------------------------------------------------------------------
     # C39 runtime park watchdog — minimal visible motion
     # ------------------------------------------------------------------
+
+    def _governed_sleep(self, seconds: float, reason: str) -> None:
+        """C41 STEP 1: an executor wait governed by the park cap. When the
+        watchdog is armed the sleep is chunked through checked_sleep — any
+        park past the cap fires a NON-INTERFERING hover/drift motion logged
+        ``wsda-watchdog: fired ... reason=in-action-wait:*`` — so a
+        monolithic action (run_query's click->settle->verify block) can
+        never park the cursor past the cap inside the action window. When
+        disarmed (pre-recording rehearsal paths) it falls back to a raw
+        sleep: there is no park invariant to enforce off-camera."""
+        watchdog = self.watchdog
+        if watchdog is not None:
+            watchdog.checked_sleep(seconds, reason=reason)
+        else:
+            time.sleep(seconds)  # c41-raw-sleep-ok: watchdog-disarmed rehearsal fallback
+
+    @contextlib.contextmanager
+    def _verification_exclusions(self, *regions: str):
+        """C41 STEP 2: mark ``regions`` (case-insensitive name substrings)
+        as under active verification for the duration of the block. While
+        any region is excluded the watchdog's break-park motion will NOT
+        hover inside it — it falls back to another sentence target or a
+        drift glide in place, because a real-cursor hover could perturb the
+        region being compared (e.g. the fresh-results phash strip)."""
+        watchdog = self.watchdog
+        if watchdog is None:
+            yield
+            return
+        previous = list(watchdog.excluded_targets)
+        watchdog.excluded_targets = previous + [r for r in regions if r]
+        try:
+            yield
+        finally:
+            watchdog.excluded_targets = previous
 
     def _resolve_watchdog_point(self, name: str) -> Optional[Tuple[int, int]]:
         """Resolve a watchdog motion target WITHOUT any VLM call: semantic
@@ -4183,6 +4295,7 @@ end tell
                     pyautogui.moveTo(
                         point[0], point[1], duration=0.25, tween=pyautogui.easeInOutQuad
                     )
+                    # debounce: brief hold at the alternative before gliding back
                     time.sleep(0.05)
                     pyautogui.moveTo(
                         rest[0], rest[1], duration=0.25, tween=pyautogui.easeInOutQuad
@@ -4197,6 +4310,7 @@ end tell
             pos = pyautogui.position()
             x, y = float(pos.x), float(pos.y)
             pyautogui.moveTo(x + 60.0, y + 20.0, duration=0.2, tween=pyautogui.easeInOutQuad)
+            # debounce: brief hold at the drift apex before gliding back
             time.sleep(0.05)
             pyautogui.moveTo(x, y, duration=0.2, tween=pyautogui.easeInOutQuad)
             print(

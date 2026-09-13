@@ -3156,6 +3156,351 @@ class TestC39MeasuredReservation(unittest.TestCase):
         self.assertIsNone(restored.measured_action_seconds)
 
 
+class TestC41NoUngovernedSleeps(unittest.TestCase):
+    """C41 STEP 1: universal sleep audit. Every raw ``time.sleep`` call site
+    in the executor and action paths (discovery.py, vision_agent.py,
+    ax_pyobjc.py, lesson_builder.py) must be either
+      (a) a short fixed <1.0s hardware-debounce sleep, commented as such
+          (the word 'debounce' within three lines above the call), or
+      (b) justified by an explicit ``# c41-raw-sleep-ok: <reason>`` marker
+          within three lines above the call (checked-path watchdog-None
+          fallbacks and genuinely non-executor paths),
+    so watchdog jurisdiction can never silently regress: a new raw sleep
+    with neither classification FAILS this audit."""
+
+    AUDIT_FILES = ("discovery.py", "vision_agent.py", "ax_pyobjc.py", "lesson_builder.py")
+    MARKER = "# c41-raw-sleep-ok:"
+    # A justification marker or debounce comment must sit within the three
+    # lines above the call (markers/debounce notes may wrap to two lines).
+    LOOKBACK = 3
+
+    def _audit_source(self, rel_name: str, source: str) -> List[str]:
+        import re as _re
+
+        violations: List[str] = []
+        lines = source.splitlines()
+        for idx, line in enumerate(lines):
+            if line.strip().startswith("#"):
+                continue
+            if "time.sleep(" not in line:
+                continue
+            m = _re.search(r"time\.sleep\((.*?)\)", line)
+            if m is None:
+                continue
+            arg = m.group(1).strip()
+            window_lines = lines[max(0, idx - self.LOOKBACK): idx + 1]
+            window = "\n".join(window_lines)
+            has_marker = any(
+                self.MARKER in ln and ln.split(self.MARKER, 1)[1].strip()
+                for ln in window_lines
+            )
+            const = _re.fullmatch(r"[0-9]*\.?[0-9]+", arg)
+            if const is not None:
+                value = float(arg)
+                if value < 1.0:
+                    if "debounce" not in window.lower() and not has_marker:
+                        violations.append(
+                            f"{rel_name}:{idx + 1}: raw {arg}s sleep is neither "
+                            f"commented as a hardware debounce nor justified by "
+                            f"'{self.MARKER}'"
+                        )
+                elif not has_marker:
+                    violations.append(
+                        f"{rel_name}:{idx + 1}: raw {arg}s constant sleep "
+                        f"(>=1.0s) lacks a '{self.MARKER}' justification"
+                    )
+            elif not has_marker:
+                violations.append(
+                    f"{rel_name}:{idx + 1}: raw variable sleep '{arg}' lacks "
+                    f"a '{self.MARKER}' justification"
+                )
+        return violations
+
+    def test_executor_paths_have_no_ungoverned_sleeps(self) -> None:
+        root = Path(__file__).resolve().parent
+        violations: List[str] = []
+        for name in self.AUDIT_FILES:
+            path = root / name
+            self.assertTrue(path.exists(), f"audit target missing: {path}")
+            violations.extend(self._audit_source(name, path.read_text()))
+        self.assertEqual(violations, [])
+
+    def test_lesson_builder_and_ax_pyobjc_have_no_sleep_sites(self) -> None:
+        # Document the audit boundary: these two files are in jurisdiction
+        # scope and currently contain zero sleep/wait call sites — the audit
+        # above would flag any new one.
+        root = Path(__file__).resolve().parent
+        for name in ("lesson_builder.py", "ax_pyobjc.py"):
+            source = (root / name).read_text()
+            self.assertNotIn("time.sleep(", source, f"{name} gained a raw sleep")
+            self.assertNotIn("c41-raw-sleep-ok", source)
+
+    def test_audit_catches_each_violation_class(self) -> None:
+        # Guard against a vacuous audit: each violation class must be caught,
+        # and each exemption class must pass.
+        self.assertEqual(
+            self._audit_source(
+                "ok_debounce.py", "def f():\n    # debounce: let the key land\n    time.sleep(0.1)\n"
+            ),
+            [],
+        )
+        self.assertEqual(
+            self._audit_source(
+                "ok_marker.py",
+                "# c41-raw-sleep-ok: launch settle, pre-recording\n time.sleep(6)\n",
+            ),
+            [],
+        )
+        self.assertEqual(
+            self._audit_source(
+                "ok_var_marker.py",
+                "# c41-raw-sleep-ok: watchdog-None fallback\ntime.sleep(remaining)\n",
+            ),
+            [],
+        )
+        # <1.0s constant WITHOUT a debounce comment.
+        self.assertTrue(
+            self._audit_source("bad_small.py", "def f():\n    time.sleep(0.3)\n")
+        )
+        # >=1.0s constant without a marker.
+        self.assertTrue(
+            self._audit_source("bad_big.py", "def f():\n    time.sleep(2.5)\n")
+        )
+        # Variable sleep without a marker.
+        self.assertTrue(
+            self._audit_source("bad_var.py", "def f():\n    time.sleep(pace[0])\n")
+        )
+        # Marker with an EMPTY justification is not a justification.
+        self.assertTrue(
+            self._audit_source(
+                "bad_empty_marker.py", "# c41-raw-sleep-ok:\ntime.sleep(2.5)\n"
+            )
+        )
+
+
+class TestC41IntraActionWatchdog(unittest.TestCase):
+    """C41 STEP 3: a monolithic action shaped like beat_005's run_query (one
+    8-14s click->settle->verify block whose internal waits all route through
+    the watchdog's checked_sleep) never parks the cursor past the 3.5s cap
+    INSIDE the action window — the C40 failure shape (one 13.75s
+    'after-demo-action' span) can never recur."""
+
+    def _harness(self, plan: List[Dict[str, Any]], last_item: Dict[str, Any]):
+        from compiler.choreo_runtime import ParkWatchdog
+
+        clock = TestC39RuntimeWatchdog._FakeClock()
+        tracker = TestC39RuntimeWatchdog._Tracker(clock)
+        logs: List[str] = []
+        watchdog = ParkWatchdog(
+            "beat_mono",
+            plan=[dict(it) for it in plan],
+            clock=clock.time,
+            sleeper=tracker.sleep,
+            motion=lambda reason: (tracker.motion(0.25), True)[1],
+            log=logs.append,
+        )
+        watchdog.last_item = dict(last_item)
+        return watchdog, clock, tracker, logs
+
+    def _run_monolithic_action(self, watchdog, tracker) -> None:
+        # Mirrors vision_agent.run_query post-C41: every internal wait is a
+        # governed checked_sleep (reason=in-action-wait:*), and the
+        # fresh-results poll runs with the results region excluded.
+        tracker.motion(0.5)  # the Execute-button click itself
+        watchdog.note_motion()
+        tracker.mode = "still"
+        watchdog.checked_sleep(0.5, reason="in-action-wait:post-click-settle")
+        watchdog.checked_sleep(2.5, reason="in-action-wait:query-execute-settle")
+        watchdog.checked_sleep(0.3, reason="in-action-wait:error-signature-check")
+        watchdog.excluded_targets = ["result"]
+        try:
+            for _ in range(5):  # 2.5s of polling; pane delta crosses at ~2.5s
+                watchdog.checked_sleep(0.5, reason="in-action-wait:fresh-results-poll")
+        finally:
+            watchdog.excluded_targets = []
+        # In-action assessment + final read-back: invisible VLM work, no
+        # cursor motion — exactly where the C40 pass parked 13.75s.
+        watchdog.checked_sleep(4.7, reason="in-action-wait:post-run-assess")
+        watchdog.checked_sleep(1.0, reason="in-action-wait:final-read-back")
+
+    def test_park_never_exceeds_cap_inside_monolithic_action(self) -> None:
+        plan = [
+            {"type": "hover", "semantic": "execute-sql-toolbar-button", "sentence_idx": 0},
+            {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 0},
+        ]
+        watchdog, clock, tracker, logs = self._harness(plan, plan[0])
+        self._run_monolithic_action(watchdog, tracker)
+
+        # The park cap holds everywhere, INCLUDING inside the action window.
+        self.assertLessEqual(tracker.max_park, 3.5 + 1e-6)
+        # The action window is 12.0s of virtual still/sleep time (8-14s band).
+        motion_time = 0.25 * len(watchdog.fires)
+        action_seconds = clock.t - motion_time
+        self.assertGreaterEqual(action_seconds, 8.0)
+        self.assertLessEqual(action_seconds, 14.0)
+        # The watchdog fired inside the action — every fire capped, every
+        # fire logged under the in-action-wait jurisdiction.
+        self.assertGreaterEqual(len(watchdog.fires), 2)
+        for fire in watchdog.fires:
+            self.assertLessEqual(fire["span"], 3.5 + 1e-6)
+            self.assertTrue(
+                fire["reason"].startswith("in-action-wait"),
+                f"fire reason {fire['reason']!r} outside in-action-wait jurisdiction",
+            )
+        # The C40 failure signature is gone: no single giant after-demo span.
+        for line in logs:
+            if "wsda-watchdog: fired" in line:
+                self.assertNotIn("after-demo-action", line)
+
+
+class TestC41NonInterferingMotion(unittest.TestCase):
+    """C41 STEP 2: when the watchdog fires inside an action wait the motion
+    is NON-INTERFERING — hover/drift only, never click/type/key — and never
+    lands inside a region under active verification (the fresh-results
+    strip), where a real-cursor hover could perturb the comparison."""
+
+    def _watchdog(self, plan, last_item, exclusions=()):
+        from compiler.choreo_runtime import ParkWatchdog
+
+        clock = TestC39RuntimeWatchdog._FakeClock()
+        tracker = TestC39RuntimeWatchdog._Tracker(clock)
+        motions: List[Dict[str, Any]] = []
+        watchdog = ParkWatchdog(
+            "beat_ni",
+            plan=[dict(it) for it in plan],
+            clock=clock.time,
+            sleeper=tracker.sleep,
+            log=lambda msg: None,
+        )
+        verification = {"active": False}
+
+        def motion(reason: str) -> bool:
+            target, _source = watchdog.resolve_motion_target()
+            motions.append(
+                {
+                    "reason": reason,
+                    "kind": "hover" if target is not None else "drift",
+                    "target": target,
+                    "during_verification": verification["active"],
+                }
+            )
+            tracker.motion(0.25)
+            return True
+
+        watchdog._motion = motion  # type: ignore[assignment]
+        watchdog.last_item = dict(last_item)
+        watchdog.excluded_targets = list(exclusions)
+        return watchdog, tracker, motions, verification
+
+    def test_agent_break_motion_never_clicks_types_or_presses(self) -> None:
+        # The REAL executor motion path (_watchdog_break_motion) must only
+        # ever move the cursor — patch every interfering primitive to record
+        # and assert none fired.
+        plan = [
+            {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 0},
+        ]
+        watchdog, _tracker, motions, _v = self._watchdog(plan, plan[0])
+        agent = VisionAgent()
+        agent.watchdog = watchdog
+        agent._last_rest_point = (500.0, 500.0)
+        recorder = mock.Mock()
+        with mock.patch.object(
+            vision_agent_module.pyautogui, "moveTo", recorder.moveTo
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "click", recorder.click
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "doubleClick", recorder.doubleClick
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "typewrite", recorder.typewrite
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "press", recorder.press
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "keyDown", recorder.keyDown
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "keyUp", recorder.keyUp
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "hotkey", recorder.hotkey
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "mouseDown", recorder.mouseDown
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "mouseUp", recorder.mouseUp
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "scroll", recorder.scroll
+        ), mock.patch.object(
+            vision_agent_module.pyautogui,
+            "position",
+            return_value=type("P", (), {"x": 400, "y": 300})(),
+        ):
+            ok = agent._watchdog_break_motion("in-action-wait:test")
+        self.assertTrue(ok)
+        # A visible motion happened (hover or drift)...
+        self.assertTrue(recorder.moveTo.called)
+        # ...and nothing else did: no click, no type, no key, no scroll.
+        for name in (
+            "click", "doubleClick", "typewrite", "press", "keyDown",
+            "keyUp", "hotkey", "mouseDown", "mouseUp", "scroll",
+        ):
+            getattr(recorder, name).assert_not_called()
+
+    def test_verification_region_excluded_from_hover(self) -> None:
+        plan = [
+            {"type": "hover", "semantic": "results-grid:body", "sentence_idx": 0},
+            {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 1},
+        ]
+        watchdog, tracker, motions, verification = self._watchdog(plan, plan[0])
+        # Vacuity guard: with NO exclusion the current sentence's results
+        # target IS the preferred hover target.
+        target, source = watchdog.resolve_motion_target()
+        self.assertEqual((target, source), ("results-grid:body", "sentence"))
+        # With the results region under active verification the fire must
+        # hover the safe alternative (the editor), never the results grid.
+        watchdog.excluded_targets = ["result"]
+        verification["active"] = True
+        tracker.mode = "still"
+        watchdog.checked_sleep(5.0, reason="in-action-wait:fresh-results-poll")
+        self.assertTrue(motions, "the watchdog must fire inside the poll")
+        for m in motions:
+            self.assertTrue(m["during_verification"])
+            self.assertIn(m["kind"], ("hover", "drift"))
+            self.assertNotIn(
+                "result", (m["target"] or "").lower(),
+                f"hovered {m['target']!r} inside the verification region",
+            )
+        self.assertLessEqual(tracker.max_park, 3.5 + 1e-6)
+
+    def test_all_targets_excluded_drifts_in_place(self) -> None:
+        plan = [{"type": "hover", "semantic": "results-grid:body", "sentence_idx": 0}]
+        watchdog, tracker, motions, verification = self._watchdog(
+            plan, plan[0], exclusions=["result"]
+        )
+        verification["active"] = True
+        tracker.mode = "still"
+        watchdog.checked_sleep(4.0, reason="in-action-wait:fresh-results-poll")
+        self.assertTrue(motions)
+        self.assertTrue(
+            all(m["kind"] == "drift" and m["target"] is None for m in motions),
+            "with every target excluded the watchdog must drift-glide in place",
+        )
+
+    def test_agent_verification_exclusions_context_manager(self) -> None:
+        plan = [{"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 0}]
+        watchdog, _tracker, _motions, _v = self._watchdog(plan, plan[0])
+        agent = VisionAgent()
+        agent.watchdog = watchdog
+        with agent._verification_exclusions("result"):
+            self.assertEqual(watchdog.excluded_targets, ["result"])
+        self.assertEqual(watchdog.excluded_targets, [])
+        # Nested use restores any pre-existing exclusions.
+        watchdog.excluded_targets = ["preexisting"]
+        with agent._verification_exclusions("result"):
+            self.assertEqual(watchdog.excluded_targets, ["preexisting", "result"])
+        self.assertEqual(watchdog.excluded_targets, ["preexisting"])
+        # Disarmed agent: the context manager is a no-op (never raises).
+        agent.watchdog = None
+        with agent._verification_exclusions("result"):
+            pass
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -5023,6 +5368,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC39BudgetGuardCoverage))
     suite.addTests(loader.loadTestsFromTestCase(TestC39RuntimeWatchdog))
     suite.addTests(loader.loadTestsFromTestCase(TestC39MeasuredReservation))
+    suite.addTests(loader.loadTestsFromTestCase(TestC41NoUngovernedSleeps))
+    suite.addTests(loader.loadTestsFromTestCase(TestC41IntraActionWatchdog))
+    suite.addTests(loader.loadTestsFromTestCase(TestC41NonInterferingMotion))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

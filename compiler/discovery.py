@@ -1014,6 +1014,8 @@ class ScreenRecorder:
                     raw = sct.grab(monitor)
                 except Exception as exc:
                     print(f"Warning: screenshot capture failed during recording: {exc}", file=sys.stderr)
+                    # c41-raw-sleep-ok: recorder capture-thread retry pacing
+                    # (a background frame loop, not an executor cursor wait).
                     time.sleep(interval)
                     continue
 
@@ -1039,6 +1041,8 @@ class ScreenRecorder:
                 elapsed = time.time() - start
                 sleep_time = max(0.0, interval - elapsed)
                 if sleep_time > 0:
+                    # c41-raw-sleep-ok: recorder capture-thread frame pacing
+                    # (a background frame loop, not an executor cursor wait).
                     time.sleep(sleep_time)
             if frame_count >= MAX_SCREEN_RECORDER_FRAMES:
                 print(
@@ -1425,8 +1429,12 @@ class _SmokeAudioProc:
             if remaining <= 0.0:
                 return 0
             if timeout is not None and remaining > timeout:
+                # c41-raw-sleep-ok: smoke stub audio-wait deadline pacing
+                # (dry-run only; no recorder, no cursor on camera).
                 time.sleep(max(0.0, timeout))
                 raise subprocess.TimeoutExpired(cmd="smoke-audio", timeout=timeout)
+            # c41-raw-sleep-ok: smoke stub audio-wait deadline pacing
+            # (dry-run only; no recorder, no cursor on camera).
             time.sleep(min(remaining, 0.05))
 
     def terminate(self) -> None:
@@ -1986,6 +1994,9 @@ class _ScreenCaptureKitRecorder:
         # stream starts collapse delivery deterministically.
         quiet = time.monotonic() - _ScreenCaptureKitRecorder._last_teardown_mono
         if quiet < SCK_TEARDOWN_SETTLE_SECONDS:
+            # c41-raw-sleep-ok: C27 inter-recorder teardown settle — runs
+            # between recorders, never inside an armed beat window, and no
+            # cursor wait is involved.
             time.sleep(SCK_TEARDOWN_SETTLE_SECONDS - quiet)
         if self._start_stream():
             self._thread = threading.Thread(target=self._writer_loop, daemon=True)
@@ -2377,6 +2388,8 @@ def test_window_capture_occlusion(
         )
 
     _activate(app_name)
+    # c41-raw-sleep-ok: app-launch activate settle for the occlusion test
+    # helper (diagnostic probe only; never part of a recorded lesson beat).
     time.sleep(0.5)
 
     recorder = _ScreenCaptureKitRecorder(str(output_path), fps=10, app_name=app_name)
@@ -2389,12 +2402,16 @@ def test_window_capture_occlusion(
 
     try:
         lead = (duration - occlusion_duration) / 2.0
+        # c41-raw-sleep-ok: occlusion-test scenario timing (diagnostic probe
+        # script, not an executor beat wait).
         time.sleep(lead)
         print("[OCCLUSION TEST] Raising Finder", file=sys.stderr)
         _activate("Finder")
+        # c41-raw-sleep-ok: occlusion-test scenario timing (diagnostic probe).
         time.sleep(occlusion_duration)
         print("[OCCLUSION TEST] Restoring target app", file=sys.stderr)
         _activate(app_name)
+        # c41-raw-sleep-ok: occlusion-test scenario timing (diagnostic probe).
         time.sleep(lead)
     finally:
         recorder.stop()
@@ -3214,6 +3231,8 @@ def _execute_action(action: Dict[str, Any], scale_to_logical: float) -> str:
             if action.get("animate"):
                 animate_cursor_to(lx, ly, duration=action.get("animate_duration", 0.6))
             _click(lx, ly)
+            # c41-raw-sleep-ok: legacy recipe action helper (pre-recording
+            # setup probes; no per-beat watchdog exists in this path).
             time.sleep(0.2)
             desc = f"type {text!r} at ({lx:.0f}, {ly:.0f})"
         else:
@@ -3239,6 +3258,8 @@ def _execute_action(action: Dict[str, Any], scale_to_logical: float) -> str:
 
     if name == "wait":
         duration = action.get("duration", 1)
+        # c41-raw-sleep-ok: legacy recipe action helper (pre-recording setup
+        # probes; no per-beat watchdog exists in this path).
         time.sleep(duration)
         return f"wait {duration}s"
 
@@ -3902,6 +3923,9 @@ class EndStateDiscovery:
                         return {"success": False, "reason": msg}
 
                     wait_seconds = 1.5 if action["action"] != "wait" else float(action.get("duration", 1))
+                    # c41-raw-sleep-ok: deprecated agentic recipe loop settle
+                    # (stage-prep discovery; runs outside the armed beat
+                    # window where no per-beat watchdog exists).
                     time.sleep(wait_seconds)
 
                     if enforce_screen_change:
@@ -4008,6 +4032,9 @@ class EndStateDiscovery:
                     file=sys.stderr,
                 )
                 _press_key("F5")
+                # c41-raw-sleep-ok: deprecated recipe F5-retry settle (stage-prep
+                # discovery; runs outside the armed beat window, no watchdog
+                # exists in the recipe path).
                 time.sleep(1.5)
                 try:
                     b64, api_w, api_h, scale_to_logical, raw_img, raw_bytes = _capture_screenshot(
@@ -4354,6 +4381,8 @@ class EndStateDiscovery:
                     pass
 
                 # Give the UI a moment to settle before the next screenshot.
+                # c41-raw-sleep-ok: deprecated recipe loop settle (stage-prep
+                # discovery; runs outside the armed beat window).
                 time.sleep(0.8)
 
                 # After a state change, check whether a table is visible with
@@ -4513,6 +4542,9 @@ class EndStateDiscovery:
                     file=sys.stderr,
                 )
                 _press_key("F5")
+                # c41-raw-sleep-ok: deprecated recipe F5-retry settle (stage-prep
+                # discovery; runs outside the armed beat window, no watchdog
+                # exists in the recipe path).
                 time.sleep(1.5)
                 try:
                     b64, api_w, api_h, scale_to_logical, raw_img, raw_bytes = _capture_screenshot(
@@ -4771,6 +4803,8 @@ class EndStateDiscovery:
             app_name=self.profile.app_name if self.profile else "",
         )
         recorder.start()
+        # c41-raw-sleep-ok: C28 sacrificial warmup scratch capture (pre-run
+        # capture-path warmup, not an executor cursor wait).
         time.sleep(1.5)
         recorder.stop()
         try:
@@ -4882,6 +4916,9 @@ class EndStateDiscovery:
                     file=sys.stderr,
                 )
             if priming_attempt < 2:
+                # c41-raw-sleep-ok: stage-prep run-button priming retry (runs
+                # once before the beat loop; the per-beat watchdog is not
+                # armed yet).
                 time.sleep(1.0)
         else:
             print(
@@ -5335,7 +5372,15 @@ class EndStateDiscovery:
                                         f"failed attempt {attempt + 1}; retrying...",
                                         file=sys.stderr,
                                     )
-                                    time.sleep(0.5)
+                                    # C41: the retry sleep sits inside the armed
+                                    # beat window — governed, never a bare sleep.
+                                    if agent.watchdog is not None:
+                                        agent.watchdog.checked_sleep(
+                                            0.5, reason="in-action-wait:segment-retry"
+                                        )
+                                    else:
+                                        # c41-raw-sleep-ok: watchdog-None fallback
+                                        time.sleep(0.5)
                                 if not seg_ok:
                                     failed_reason = (
                                         f"Beat {beat.beat_id} segment {seg_idx + 1} failed"
@@ -5413,7 +5458,15 @@ class EndStateDiscovery:
                                     f"  Beat {beat.beat_id} failed attempt {attempt + 1}; retrying...",
                                     file=sys.stderr,
                                 )
-                                time.sleep(0.5)
+                                # C41: the retry sleep sits inside the armed
+                                # beat window — governed, never a bare sleep.
+                                if agent.watchdog is not None:
+                                    agent.watchdog.checked_sleep(
+                                        0.5, reason="in-action-wait:beat-retry"
+                                    )
+                                else:
+                                    # c41-raw-sleep-ok: watchdog-None fallback
+                                    time.sleep(0.5)
                             # C39 STEP 1: between action steps — the concrete action
                             # may have parked the cursor past the cap; break the
                             # park before the remaining choreography runs.
@@ -5562,6 +5615,16 @@ class EndStateDiscovery:
                                 # Keep recorder running while the UI settles so the clip
                                 # captures the settled end state rather than cutting off
                                 # while animations or loading are still in progress.
+                                # C41: the poll interval sleeps through the armed
+                                # watchdog (park-capped); disarmed, it falls back
+                                # to the raw default inside the helper.
+                                stability_sleep = None
+                                if agent.watchdog is not None:
+                                    stability_sleep = (
+                                        lambda s, _wd=agent.watchdog: _wd.checked_sleep(
+                                            s, reason="in-action-wait:visual-stability-poll"
+                                        )
+                                    )
                                 _tl_readback(
                                     tl,
                                     "visual_stability",
@@ -5569,6 +5632,7 @@ class EndStateDiscovery:
                                         interval_seconds=0.4,
                                         timeout_seconds=4.0,
                                         frontmost_log_path=frontmost_log_path,
+                                        sleep_fn=stability_sleep,
                                     ),
                                 )
 
@@ -5654,12 +5718,14 @@ class EndStateDiscovery:
                                             remaining, reason="tail-fill-no-choreo"
                                         )
                                     else:
+                                        # c41-raw-sleep-ok: watchdog-None fallback of the checked tail fill
                                         time.sleep(remaining)
                                 elif agent.watchdog is not None:
                                     agent.watchdog.checked_sleep(
                                         remaining, reason="tail-fill-no-plan"
                                     )
                                 else:
+                                    # c41-raw-sleep-ok: watchdog-None fallback of the checked tail fill
                                     time.sleep(remaining)
                             elif remaining < -0.25:
                                 print(
@@ -5967,6 +6033,8 @@ class EndStateDiscovery:
                         f"  Clicked Result tab at ({lx:.0f}, {ly:.0f})",
                         file=sys.stderr,
                     )
+                    # c41-raw-sleep-ok: post-recording end-state finalize
+                    # (runs after the recorder stops; no beat watchdog needed).
                     time.sleep(1.5)
                 else:
                     print(
@@ -6166,6 +6234,7 @@ class EndStateDiscovery:
         stability_threshold: float = 1.0,
         stable_frames_required: int = 2,
         frontmost_log_path: Optional[Path] = None,
+        sleep_fn: Optional[Callable[[float], None]] = None,
     ) -> None:
         """
         Poll screenshots until the UI stops changing or a timeout is reached.
@@ -6174,6 +6243,11 @@ class EndStateDiscovery:
         resulting clip includes the settled end state rather than cutting off
         while animations or loading are still in progress. The frontmost app is
         logged at every poll so off-application intervals can be detected and cut.
+
+        C41: the poll interval sleeps through ``sleep_fn`` when the caller is
+        inside an armed beat window (the park watchdog's checked_sleep), so a
+        slow-settling UI can never park the cursor past the cap during the
+        wait; outside a beat the default is a raw sleep.
         """
         start = time.time()
         prev_gray: Optional[np.ndarray] = None
@@ -6198,7 +6272,12 @@ class EndStateDiscovery:
                 prev_gray = gray
             except Exception as exc:
                 print(f"Warning: stability screenshot failed: {exc}", file=sys.stderr)
-            time.sleep(interval_seconds)
+            if sleep_fn is not None:
+                sleep_fn(interval_seconds)
+            else:
+                # c41-raw-sleep-ok: stability poll default for callers outside
+                # an armed beat window (no watchdog in scope).
+                time.sleep(interval_seconds)
 
     def _trim_clip_to_motion(self, clip_path: Path) -> None:
         """Trim dead air from a recorded beat clip, keeping motion windows.
@@ -6415,6 +6494,8 @@ class EndStateDiscovery:
             capture_output=True,
             timeout=30,
         )
+        # c41-raw-sleep-ok: app-launch settle (pre-recording; the beat
+        # watchdog is not armed until the beat loop starts).
         time.sleep(6)
         subprocess.run(
             ["osascript", "-e", f'tell application "{app_name}" to activate'],
@@ -6422,6 +6503,7 @@ class EndStateDiscovery:
             capture_output=True,
             timeout=10,
         )
+        # c41-raw-sleep-ok: app-launch activate settle (pre-recording).
         time.sleep(1)
 
         # Maximize/front the window to give the model a consistent canvas.
@@ -6447,6 +6529,8 @@ class EndStateDiscovery:
                 capture_output=True,
                 timeout=15,
             )
+            # c41-raw-sleep-ok: window-resize settle (pre-recording launch
+            # best-effort path).
             time.sleep(1)
         except Exception:
             # Window resizing is best-effort; don't fail discovery because of it.
@@ -6507,6 +6591,8 @@ class EndStateDiscovery:
 
             try:
                 _execute_action(action, scale_to_logical)
+                # c41-raw-sleep-ok: stage-prep auto-fit probe loop (runs before
+                # the beat loop; no per-beat watchdog exists in this path).
                 time.sleep(0.5)
             except Exception as exc:
                 print(
@@ -6583,6 +6669,8 @@ class EndStateDiscovery:
             try:
                 _execute_action(action, scale_to_logical)
                 acted = True
+                # c41-raw-sleep-ok: stage-prep truncation probe loop (runs
+                # before the beat loop; no per-beat watchdog exists here).
                 time.sleep(0.5)
             except Exception as exc:
                 print(f"Warning: auto-fit action failed: {exc}", file=sys.stderr)
@@ -6646,6 +6734,8 @@ class EndStateDiscovery:
             if full_text.startswith("YES"):
                 return True
             if attempt < max_retries:
+                # c41-raw-sleep-ok: results-grid verify retry poll (post-stop
+                # finalize / stage-prep contexts; no beat watchdog in scope).
                 time.sleep(0.5)
         return False
 

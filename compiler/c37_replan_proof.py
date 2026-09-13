@@ -34,6 +34,11 @@ Hard-fail assertions:
   - C39: under measured-action conditions, max contiguous park <= 3.5s in
     EVERY beat with the guard and watchdog active;
   - C39: no sentence loses its last gesture under any guard decision;
+  - C41: a monolithic run_query action (one 8-14s click->settle->verify
+    block with internal governed waits) parks <= 3.5s everywhere INCLUDING
+    inside the action window; every in-action fire logs reason=in-action-wait;
+    break-park motions are hover/drift only (never click/type); the results
+    strip under active verification is never hovered;
   - zero VLM/Anthropic calls during the entire check (tracker + API spy).
 
 Exits 0 only when every assertion passes.
@@ -98,6 +103,11 @@ MEASURED_C38_ACTIONS = {
 }
 
 _failures: list[str] = []
+# C41: the C40 recording pass persisted semantic targets into the baked
+# manifest, so replan_choreography() now legitimately returns False (nothing
+# stale to replan; wsda-replan = 0). The proof records that state so the
+# replan assertions can distinguish "already semantic" from "replan broken".
+_replan_legit_zero: Optional[bool] = None
 
 
 def check(condition: bool, label: str) -> None:
@@ -387,6 +397,105 @@ def _replay_beat(
     }
 
 
+def plan_last(plan: list) -> dict:
+    """The plan item a fire would treat as 'current' — the final gesture item."""
+    for it in reversed(plan):
+        if it.get("type") in CHOREO_GESTURE_TYPES:
+            return it
+    return plan[-1] if plan else {}
+
+
+def _replay_monolithic_run_query(plan: list, last_item: dict) -> dict:
+    """C41 STEP 3: replay ONE monolithic run_query action — the exact shape
+    of beat_005's demo action: a single click->settle->verify block whose
+    internal waits (post-click settle, query-execute settle, error-signature
+    check, fresh-results phash poll, post-run assess/read-back) all route
+    through the REAL ParkWatchdog on a virtual clock, with the results strip
+    under active verification during the pane checks (exclusions active).
+
+    Returns the report: total action seconds, max contiguous park (B3
+    semantics, INSIDE the action window included), every fire, and every
+    break-park motion with the target it hovered (or None for a drift) and
+    whether it fired while a verification region was excluded.
+    """
+    clock = _VirtualClock()
+    tracker = _ParkTracker(clock)
+    watchdog = ParkWatchdog(
+        "beat_mono",
+        plan=[dict(it) for it in plan],
+        clock=clock.time,
+        sleeper=tracker.sleep,
+        log=lambda msg: print(msg, file=sys.stderr),
+    )
+    motions: list[dict] = []
+    verification_state = {"active": False}
+
+    def sim_motion(reason: str) -> bool:
+        target, _source = watchdog.resolve_motion_target()
+        kind = "hover" if target is not None else "drift"
+        motions.append(
+            {
+                "reason": reason,
+                "kind": kind,
+                "target": target,
+                "during_verification": verification_state["active"],
+            }
+        )
+        tracker.motion(0.25)  # the break-park hover/drift itself, 0.25s
+        return True
+
+    watchdog._motion = sim_motion
+    watchdog.last_item = dict(last_item)
+
+    def still(seconds: float, reason: str) -> None:
+        tracker.mode = "still"
+        watchdog.checked_sleep(seconds, reason=reason)
+
+    # --- the monolithic action, mirroring vision_agent.run_query -------------
+    # 1. Cached Execute-button click: real cursor motion, resets the clock.
+    tracker.motion(0.5)
+    watchdog.note_motion()
+    still(0.5, "in-action-wait:post-click-settle")
+    # 2. Query-execute settle: the app renders the result pane.
+    still(2.5, "in-action-wait:query-execute-settle")
+    # 3. Deterministic error-signature pixel check.
+    still(0.3, "in-action-wait:error-signature-check")
+    # 4. Fresh-results phash poll with the results strip under verification.
+    verification_state["active"] = True
+    watchdog.excluded_targets = ["result"]
+    try:
+        poll_iterations = 0
+        pane_changed = False
+        while not pane_changed and poll_iterations < 8:  # 4.0s ceiling
+            poll_iterations += 1
+            # The 0.5s poll interval is an action-internal wait — governed.
+            still(0.5, "in-action-wait:fresh-results-poll")
+            # Simulated pane delta crosses the C30 threshold after 2.5s.
+            if poll_iterations >= 5:
+                pane_changed = True
+    finally:
+        watchdog.excluded_targets = []
+        verification_state["active"] = False
+    # 5. In-action assessment/read-back: invisible VLM work, no cursor motion.
+    still(4.7, "in-action-wait:post-run-assess")
+    # 6. Final read-back still moments inside the same action window.
+    still(1.0, "in-action-wait:final-read-back")
+    tracker.mode = "still"
+    tracker.sleep(RECORDER_TAIL_SECONDS)  # stop at audio end + recorder tail
+
+    return {
+        "action_seconds": clock.t - RECORDER_TAIL_SECONDS,
+        "max_park": tracker.max_park,
+        "fires": list(watchdog.fires),
+        "fire_lines": [
+            f"wsda-watchdog: fired beat={f['beat_id']} span={f['span']:.2f}s "
+            f"reason={f['reason']}"
+            for f in watchdog.fires
+        ],
+        "motions": motions,
+    }
+
+
 def main() -> int:
     # --- zero-API-call guards ---------------------------------------------
     reset_tracker()
@@ -414,8 +523,9 @@ def main() -> int:
             Messages.create = original_create  # type: ignore[name-defined]
 
     check(
-        "wsda-replan" in captured.getvalue(),
-        "wsda-replan marker printed during replan",
+        "wsda-replan" in captured.getvalue() or _replan_legit_zero is True,
+        "wsda-replan marker printed during replan OR the baked plan is already "
+        "fully semantic (legitimate 0)",
     )
     seam_markers = captured.getvalue().count("wsda-seam:")
     check(seam_markers > 0, f"wsda-seam: markers printed ({seam_markers})")
@@ -459,7 +569,21 @@ def _run_proof() -> None:
     print("(a) replan_choreography() fired?")
     print(f"  return value : {replanned}")
     print(f"  beats planned: {len(script_beats)}")
-    check(bool(replanned), "replan_choreography() returned True on the real manifest")
+    global _replan_legit_zero
+    _gesture_items = [
+        item
+        for beat in script_beats
+        for item in (beat.choreography or [])
+        if item.get("type") in ("hover", "click", "drag")
+    ]
+    _replan_legit_zero = bool(_gesture_items) and all(
+        item.get("semantic") for item in _gesture_items
+    )
+    check(
+        bool(replanned) or _replan_legit_zero,
+        "replan_choreography() returned True on the real manifest OR the "
+        "baked plan is already fully semantic (wsda-replan legitimately 0)",
+    )
 
     # --- geometry (plan-time nominal, same math the planner used) -----------
     try:
@@ -734,6 +858,107 @@ def _run_proof() -> None:
         not sim_coverage_failures,
         "C39: no sentence loses its last gesture under any guard decision"
         + ("" if not sim_coverage_failures else f" | {sim_coverage_failures}"),
+    )
+
+    # --- (f) C41 monolithic-action simulation (beat_005 run_query shape) -----
+    print("=" * 78)
+    print(
+        "(f) C41 monolithic run_query action (one 10.5s click->settle->verify "
+        "block; guard + watchdog active; results strip under verification)"
+    )
+    mono_failures: list[str] = []
+    mono_plan_realistic = [
+        {"type": "hover", "semantic": "execute-sql-toolbar-button", "sentence_idx": 0},
+        {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 0},
+        {"type": "hover", "semantic": "results-grid:body", "sentence_idx": 1},
+        {"type": "hover", "semantic": "result-pane:status", "sentence_idx": 1},
+    ]
+    mono_plan_worstcase = [
+        {"type": "hover", "semantic": "results-grid:body", "sentence_idx": 0},
+        {"type": "hover", "semantic": "result-pane:status", "sentence_idx": 0},
+        {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 1},
+    ]
+    mono_plan_all_results = [
+        {"type": "hover", "semantic": "results-grid:body", "sentence_idx": 0},
+        {"type": "hover", "semantic": "result-pane:status", "sentence_idx": 0},
+    ]
+    for label, plan, last_item in (
+        ("realistic", mono_plan_realistic, plan_last(mono_plan_realistic)),
+        ("worst-case", mono_plan_worstcase, plan_last(mono_plan_worstcase)),
+        ("all-excluded", mono_plan_all_results, plan_last(mono_plan_all_results)),
+    ):
+        rep = _replay_monolithic_run_query(plan, last_item)
+        print(f"  [{label}] action_seconds={rep['action_seconds']:.2f} "
+              f"max_park={rep['max_park']:.2f}s fires={len(rep['fires'])}")
+        for line in rep["fire_lines"]:
+            print(f"    {line}")
+        for m in rep["motions"]:
+            print(
+                f"    motion kind={m['kind']} target={m['target']} "
+                f"during_verification={m['during_verification']} reason={m['reason']}"
+            )
+        if not (8.0 <= rep["action_seconds"] <= 14.0):
+            mono_failures.append(
+                f"{label}: action window {rep['action_seconds']:.2f}s outside 8-14s"
+            )
+        if rep["max_park"] > PARK_CAP + 0.05:
+            mono_failures.append(
+                f"{label}: max contiguous park {rep['max_park']:.2f}s > cap "
+                f"{PARK_CAP}s INSIDE the monolithic action window"
+            )
+        if not rep["fires"]:
+            mono_failures.append(f"{label}: watchdog never fired inside the action")
+        for fire in rep["fires"]:
+            if fire["span"] > PARK_CAP + 0.05:
+                mono_failures.append(
+                    f"{label}: fire span {fire['span']:.2f}s > cap {PARK_CAP}s"
+                )
+            if not fire["reason"].startswith("in-action-wait"):
+                mono_failures.append(
+                    f"{label}: fire reason {fire['reason']!r} is not in-action-wait"
+                )
+        for m in rep["motions"]:
+            if m["kind"] not in ("hover", "drift"):
+                mono_failures.append(
+                    f"{label}: interfering motion kind={m['kind']!r} (click/type "
+                    f"forbidden inside an action wait)"
+                )
+            if m["during_verification"] and m["target"] and "result" in m["target"].lower():
+                mono_failures.append(
+                    f"{label}: verification-region violation: hovered {m['target']!r} "
+                    f"while the results strip was under active verification"
+                )
+        if not any(m["during_verification"] for m in rep["motions"]):
+            mono_failures.append(
+                f"{label}: no break-park motion happened during the verification "
+                f"window — the exclusion was never exercised"
+            )
+        if label == "worst-case":
+            for m in rep["motions"]:
+                if m["during_verification"] and m["target"] not in (
+                    "sql-editor:body",
+                    None,
+                ):
+                    mono_failures.append(
+                        f"worst-case: during verification the watchdog hovered "
+                        f"{m['target']!r} instead of the safe alternative "
+                        f"'sql-editor:body' or a drift"
+                    )
+        if label == "all-excluded":
+            for m in rep["motions"]:
+                if m["during_verification"] and m["target"] is not None:
+                    mono_failures.append(
+                        f"all-excluded: during verification the watchdog hovered "
+                        f"{m['target']!r} although every target was excluded "
+                        f"(must drift in place)"
+                    )
+
+    check(
+        not mono_failures,
+        "C41: monolithic run_query action — park <= cap inside the action, "
+        "fires logged in-action-wait, zero interfering motions, verification "
+        "regions excluded"
+        + ("" if not mono_failures else f" | {mono_failures}"),
     )
 
 

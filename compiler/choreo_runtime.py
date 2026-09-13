@@ -15,7 +15,12 @@ Contents:
   - max_contiguous_park(): the C38 still-block semantics over a plan;
   - ParkWatchdog: the C39 STEP 1 runtime park watchdog (deterministic, no
     VLM) — tracks last-motion time, truncates sleeps so no contiguous park
-    exceeds the cap, and inserts a minimal visible motion when it fires;
+    exceeds the cap, and inserts a minimal visible motion when it fires.
+    C41 extends its jurisdiction to action-internal waits (all executor
+    sleeps route through checked_sleep) and gives it verification-region
+    exclusions: while a results strip (or any region) is under active
+    verification, targets inside that region are never hover targets — a
+    fire drifts to a safe alternative instead;
   - compress_plan_for_budget(): the C39 STEP 2 executor budget guard — the
     C35 compression order (zero pauses, speed to the 2x cap, drop only
     non-sentence-last gestures, never drop a sentence's last/only gesture)
@@ -147,6 +152,13 @@ class ParkWatchdog:
         # Item context for motion resolution: the executor updates
         # ``last_item`` as it works through the plan so a fire can hover to
         # the CURRENT sentence's resolved target first.
+        # C41: verification-region exclusions. While an action waits on a
+        # region it is verifying (e.g. the fresh-results phash poll over the
+        # results strip), any plan target whose name contains one of these
+        # substrings is excluded from motion resolution — a real-cursor
+        # hover over the region being compared could perturb the check.
+        # The executor sets/clears this around the verification window.
+        self.excluded_targets: List[str] = []
         self.last_item: Optional[Dict[str, Any]] = None
         self.last_motion_time = float(self._clock())
         self.fires: List[Dict[str, Any]] = []
@@ -214,10 +226,20 @@ class ParkWatchdog:
         )
 
     # -- motion target resolution (executor-facing) ------------------------
+    def _target_excluded(self, target: str) -> bool:
+        """C41: True when ``target`` lies inside a verification region that
+        is currently under active verification (substring match, case
+        insensitive)."""
+        low = target.lower()
+        return any(
+            exc and exc.lower() in low for exc in self.excluded_targets
+        )
+
     def resolve_motion_target(self) -> Tuple[Optional[str], str]:
         """Pick the target for the minimal visible motion, in order:
-        (1) the current sentence's resolved target from the plan;
-        (2) the beat's most-referenced alternative target;
+        (1) the current sentence's resolved target from the plan — unless it
+        is inside a verification region under active check (C41);
+        (2) the beat's most-referenced alternative target, likewise excluded;
         (3) None — the caller drifts relative to the current cursor point.
         Returns (target, source)."""
         if self.last_item is not None:
@@ -227,13 +249,14 @@ class ParkWatchdog:
                     it.get("sentence_idx", 0) == sidx
                     and it.get("type") in GESTURE_TYPES
                     and plan_target(it)
+                    and not self._target_excluded(plan_target(it))
                 ):
                     return plan_target(it), "sentence"
         counts: Dict[str, int] = {}
         for it in self.plan:
             if it.get("type") in GESTURE_TYPES:
                 t = plan_target(it)
-                if t:
+                if t and not self._target_excluded(t):
                     counts[t] = counts.get(t, 0) + 1
         if counts:
             best = max(sorted(counts), key=lambda t: (counts[t], t))
