@@ -4,21 +4,21 @@
   "application": "db_browser_sqlite",
   "end_state": {
     "state_id": "state_005",
-    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_2d81e6a85b3d.png",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/db_browser_sqlite_74c0a0eda0e1.png",
     "timestamp": 0.0,
     "application": "db_browser_sqlite",
     "platform_snapshot": {
       "api_width_px": 1568,
       "api_height_px": 1019,
       "scale_to_logical": 0.9375,
-      "screenshot_sha256": "aeb1127105ed86fd7c10eab735d2c10749398c98c257213e47a46442fab37480",
-      "run_duration_seconds": 583.64
+      "screenshot_sha256": "51565e11358da3db87027e60b0fb8439002d1745b2345a77657c1140421929b5",
+      "run_duration_seconds": 296.272
     },
     "visual_summary": "Open the Execute SQL tab, type the commented query SELECT FirstName, LastName, Email FROM Customer, run it with F5, and show the result pane with the contact list"
   },
   "start_state": {
     "state_id": "state_000",
-    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_start.png",
+    "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_7d8445c4_start.png",
     "timestamp": 0.0,
     "application": "db_browser_sqlite",
     "platform_snapshot": {},
@@ -27,7 +27,7 @@
   "states": [
     {
       "state_id": "state_001",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_001.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_7d8445c4_state_001.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -35,7 +35,7 @@
     },
     {
       "state_id": "state_002",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_002.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_7d8445c4_state_002.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -43,7 +43,7 @@
     },
     {
       "state_id": "state_003",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_003.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_7d8445c4_state_003.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -51,7 +51,7 @@
     },
     {
       "state_id": "state_004",
-      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_cbf133a9_state_004.png",
+      "screenshot_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/video_1_1_7d8445c4_state_004.png",
       "timestamp": 0.0,
       "application": "db_browser_sqlite",
       "platform_snapshot": {},
@@ -67,7 +67,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_002.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_002.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -81,7 +81,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_003.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_003.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -95,7 +95,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_004.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_004.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -109,7 +109,7 @@
       "target": {},
       "payload": null,
       "expected_duration": 2.0,
-      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_005.mp4",
+      "video_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_005.mp4",
       "highlight_style": {
         "color": "#FF2D95",
         "width": 3
@@ -136,12 +136,12 @@
       "attaches_to": "state",
       "target_id": "state_000",
       "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. We will add a comment header, list the columns, name the Customer table, and run the query.",
-      "tts_text": null,
+      "tts_text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. We will add a comment header, list the columns, name the Customer table, and run the query.",
       "word_count": 38,
       "start_time": 0.0,
-      "end_time": 0.0,
+      "end_time": 15.3,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_001.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_001.mp4",
       "observed_state": null,
       "merge": false
     },
@@ -150,12 +150,12 @@
       "attaches_to": "edge",
       "target_id": "edge_001",
       "text": "We type a comment header at the top of the query so anyone who opens the file later can see who created it, when it was written, and what problem it solves. The header appears above the SQL and documents the query before any code runs, which is a professional habit worth keeping.",
-      "tts_text": null,
+      "tts_text": "We type a comment header at the top of the query so anyone who opens the file later can see who created it, when it was written, and what problem it solves. The header appears above the S Q L and documents the query before any code runs, which is a professional habit worth keeping.",
       "word_count": 53,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 15.3,
+      "end_time": 34.9,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_002.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_002.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": null,
@@ -166,7 +166,7 @@
           "tabs": 3,
           "buttons": 9
         },
-        "summary": "The Execute SQL tab is active, showing a SQL comment header with creator, date, and description, with no query results displayed yet.",
+        "summary": "The Execute SQL tab is active, showing a SQL comment block header with no query results, table data, or open dialogs.",
         "editor_content": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/"
       },
       "merge": false
@@ -176,12 +176,12 @@
       "attaches_to": "edge",
       "target_id": "edge_002",
       "text": "We type the SELECT clause, listing the columns FirstName, LastName, and Email. SELECT tells the database which columns to return, so we ask for only the contact fields we need. The SELECT clause appears between the comment header and the FROM clause, defining the output clearly.",
-      "tts_text": null,
+      "tts_text": "We type the SELECT clause, listing the columns FirstName, LastName, and Email. SELECT tells the database which columns to return, so we ask for only the contact fields we need. The SELECT clause appears between the comment header and the FROM clause, defining the output clearly.",
       "word_count": 46,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 34.9,
+      "end_time": 55.0,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_003.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_003.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": null,
@@ -190,9 +190,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 10
+          "buttons": 9
         },
-        "summary": "The Execute SQL tab is active, showing a SQL query with a header comment and a SELECT statement for FirstName, LastName, and Email, with no results yet displayed.",
+        "summary": "The Execute SQL tab is active showing a SQL query with a header comment to select FirstName, LastName, and Email from a customer table, with no results yet displayed.",
         "editor_content": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/\nSELECT\n  FirstName,\n  LastName,\n  Email"
       },
       "merge": false
@@ -202,12 +202,12 @@
       "attaches_to": "edge",
       "target_id": "edge_003",
       "text": "We type FROM Customer to name the data source for the columns. FROM tells the database which table holds the data, so the query knows to look in the Customer table. This completes the simplest useful query pattern, asking for specific data from one table.",
-      "tts_text": null,
+      "tts_text": "We type FROM Customer to name the data source for the columns. FROM tells the database which table holds the data, so the query knows to look in the Customer table. This completes the simplest useful query pattern, asking for specific data from one table.",
       "word_count": 45,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 55.0,
+      "end_time": 74.1,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_004.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_004.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": null,
@@ -216,9 +216,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 8
+          "buttons": 10
         },
-        "summary": "The Execute SQL tab is active showing a query that selects FirstName, LastName, and Email from the Customer table, with no results displayed yet.",
+        "summary": "The Execute SQL tab is active, showing a SQL query selecting FirstName, LastName, and Email from the Customer table, with no results yet displayed.",
         "editor_content": "/*\nCreated By: WSDA Student\nCreate Date: 2026-08-31\nDescription: Customer contact list for management\n*/\nSELECT\n  FirstName,\n  LastName,\n  Email\nFROM Customer;"
       },
       "merge": false
@@ -228,12 +228,12 @@
       "attaches_to": "edge",
       "target_id": "edge_004",
       "text": "We run the query by clicking the Execute SQL toolbar button. The result pane fills with the contact list, and the requested FirstName, LastName, and Email columns appear in the grid below the editor.",
-      "tts_text": null,
+      "tts_text": "We run the query by clicking the Execute S Q L toolbar button. The result pane fills with the contact list, and the requested FirstName, LastName, and Email columns appear in the grid below the editor.",
       "word_count": 34,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 74.1,
+      "end_time": 89.2,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_005.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_005.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": "Customer",
@@ -248,7 +248,7 @@
           "tabs": 3,
           "buttons": 10
         },
-        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with results displayed in a grid below and execution details in the log panel."
+        "summary": "DB Browser for SQLite showing the Execute SQL tab with a query selecting FirstName, LastName, and Email from the Customer table, returning 60 rows successfully."
       },
       "merge": false
     },
@@ -257,12 +257,12 @@
       "attaches_to": "state",
       "target_id": "state_004",
       "text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
-      "tts_text": null,
+      "tts_text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
       "word_count": 41,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 89.2,
+      "end_time": 106.2,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_006.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_006.mp4",
       "observed_state": {
         "active_tab": "Execute SQL",
         "visible_table": "Customer",
@@ -275,9 +275,9 @@
         "modal_or_dropdown_open": false,
         "ui_element_counts": {
           "tabs": 3,
-          "buttons": 9
+          "buttons": 10
         },
-        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with results displaying 60 rows returned successfully."
+        "summary": "The Execute SQL tab shows a query selecting FirstName, LastName, and Email from the Customer table, with 60 rows returned and results displayed in a grid below."
       },
       "merge": false
     },
@@ -286,12 +286,12 @@
       "attaches_to": "state",
       "target_id": "state_004",
       "text": "The result pane shows the complete customer contact list, with each customer record appearing once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view or slowing the report. This focused output is exactly what management requested.",
-      "tts_text": null,
+      "tts_text": "The result pane shows the complete customer contact list, with each customer record appearing once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view or slowing the report. This focused output is exactly what management requested.",
       "word_count": 53,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 106.2,
+      "end_time": 129.1,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_007.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_007.mp4",
       "observed_state": null,
       "merge": false
     },
@@ -300,12 +300,12 @@
       "attaches_to": "state",
       "target_id": "state_004",
       "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation the whole team can trust and maintain.",
-      "tts_text": null,
+      "tts_text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation the whole team can trust and maintain.",
       "word_count": 53,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 129.1,
+      "end_time": 147.9,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_008.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_008.mp4",
       "observed_state": null,
       "merge": false
     },
@@ -314,12 +314,12 @@
       "attaches_to": "state",
       "target_id": "state_004",
       "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only exactly the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
-      "tts_text": null,
+      "tts_text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only exactly the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
       "word_count": 43,
-      "start_time": 0.0,
-      "end_time": 0.0,
+      "start_time": 147.9,
+      "end_time": 164.5,
       "audio_path": null,
-      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/450a60a91112_beat_009.mp4",
+      "video_clip_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/18682940df73_beat_009.mp4",
       "observed_state": null,
       "merge": false
     }

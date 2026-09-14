@@ -17,7 +17,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 170,
+      "estimated_duration_seconds": 164,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -32,6 +32,9 @@
       "script_beats": [
         {
           "kind": "opening",
+          "planned_duration": 1.5,
+          "beat_id": "beat_001",
+          "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. We will add a comment header, list the columns, name the Customer table, and run the query.",
           "choreography": [
             {
               "type": "hover",
@@ -68,9 +71,6 @@
               "semantic": "tab:execute-sql"
             }
           ],
-          "planned_duration": 1.5,
-          "beat_id": "beat_001",
-          "text": "In this video, we will write our first SELECT query to pull a clean customer contact list for WSDA Music management. We will add a comment header, list the columns, name the Customer table, and run the query.",
           "action": {
             "type": "wait",
             "duration": 1.5
@@ -79,6 +79,9 @@
         },
         {
           "kind": "demo",
+          "planned_duration": 10.8,
+          "beat_id": "beat_002",
+          "text": "We type a comment header at the top of the query so anyone who opens the file later can see who created it, when it was written, and what problem it solves. The header appears above the SQL and documents the query before any code runs, which is a professional habit worth keeping.",
           "choreography": [
             {
               "type": "hover",
@@ -114,9 +117,6 @@
               "sentence_idx": 1
             }
           ],
-          "planned_duration": 10.8,
-          "beat_id": "beat_002",
-          "text": "We type a comment header at the top of the query so anyone who opens the file later can see who created it, when it was written, and what problem it solves. The header appears above the SQL and documents the query before any code runs, which is a professional habit worth keeping.",
           "action": {
             "type": "type_segments",
             "segments": [
@@ -130,10 +130,13 @@
               }
             ]
           },
-          "measured_action_seconds": 17.606
+          "measured_action_seconds": 17.912
         },
         {
           "kind": "demo",
+          "planned_duration": 4.4,
+          "beat_id": "beat_003",
+          "text": "We type the SELECT clause, listing the columns FirstName, LastName, and Email. SELECT tells the database which columns to return, so we ask for only the contact fields we need. The SELECT clause appears between the comment header and the FROM clause, defining the output clearly.",
           "choreography": [
             {
               "type": "hover",
@@ -180,9 +183,6 @@
               "sentence_idx": 2
             }
           ],
-          "planned_duration": 4.4,
-          "beat_id": "beat_003",
-          "text": "We type the SELECT clause, listing the columns FirstName, LastName, and Email. SELECT tells the database which columns to return, so we ask for only the contact fields we need. The SELECT clause appears between the comment header and the FROM clause, defining the output clearly.",
           "action": {
             "type": "type_segments",
             "segments": [
@@ -192,10 +192,13 @@
               }
             ]
           },
-          "measured_action_seconds": 14.363
+          "measured_action_seconds": 10.964
         },
         {
           "kind": "demo",
+          "planned_duration": 1.9000000000000001,
+          "beat_id": "beat_004",
+          "text": "We type FROM Customer to name the data source for the columns. FROM tells the database which table holds the data, so the query knows to look in the Customer table. This completes the simplest useful query pattern, asking for specific data from one table.",
           "choreography": [
             {
               "type": "hover",
@@ -231,9 +234,6 @@
               "sentence_idx": 2
             }
           ],
-          "planned_duration": 1.9000000000000001,
-          "beat_id": "beat_004",
-          "text": "We type FROM Customer to name the data source for the columns. FROM tells the database which table holds the data, so the query knows to look in the Customer table. This completes the simplest useful query pattern, asking for specific data from one table.",
           "action": {
             "type": "type_segments",
             "segments": [
@@ -243,10 +243,13 @@
               }
             ]
           },
-          "measured_action_seconds": 13.639
+          "measured_action_seconds": 9.365
         },
         {
           "kind": "demo",
+          "planned_duration": 2.0,
+          "beat_id": "beat_005",
+          "text": "We run the query by clicking the Execute SQL toolbar button. The result pane fills with the contact list, and the requested FirstName, LastName, and Email columns appear in the grid below the editor.",
           "choreography": [
             {
               "type": "hover",
@@ -304,16 +307,16 @@
               "sentence_idx": 1
             }
           ],
-          "planned_duration": 2.0,
-          "beat_id": "beat_005",
-          "text": "We run the query by clicking the Execute SQL toolbar button. The result pane fills with the contact list, and the requested FirstName, LastName, and Email columns appear in the grid below the editor.",
           "action": {
             "type": "run_query"
           },
-          "measured_action_seconds": 8.302
+          "measured_action_seconds": 7.655
         },
         {
           "kind": "validation",
+          "planned_duration": 2.0,
+          "beat_id": "beat_006",
+          "text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
           "choreography": [
             {
               "type": "hover",
@@ -371,9 +374,6 @@
               "sentence_idx": 1
             }
           ],
-          "planned_duration": 2.0,
-          "beat_id": "beat_006",
-          "text": "We see 60 rows returned in the result pane with FirstName, LastName, and Email headers for each customer. The row count confirms the contact list is complete, and the three requested columns match exactly what we named in the SELECT clause.",
           "action": {
             "type": "verify",
             "detail": "the Execute SQL tab shows a populated results grid below the query"
@@ -382,6 +382,9 @@
         },
         {
           "kind": "explain",
+          "planned_duration": 1.5,
+          "beat_id": "beat_007",
+          "text": "The result pane shows the complete customer contact list, with each customer record appearing once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view or slowing the report. This focused output is exactly what management requested.",
           "choreography": [
             {
               "type": "hover",
@@ -417,9 +420,6 @@
               "sentence_idx": 2
             }
           ],
-          "planned_duration": 1.5,
-          "beat_id": "beat_007",
-          "text": "The result pane shows the complete customer contact list, with each customer record appearing once in the order it is stored. Management now has a reliable set of first names, last names, and email addresses without extra columns cluttering the view or slowing the report. This focused output is exactly what management requested.",
           "action": {
             "type": "wait",
             "duration": 1.5
@@ -428,6 +428,9 @@
         },
         {
           "kind": "explain",
+          "planned_duration": 1.5,
+          "beat_id": "beat_008",
+          "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation the whole team can trust and maintain.",
           "choreography": [
             {
               "type": "hover",
@@ -474,9 +477,6 @@
               "sentence_idx": 2
             }
           ],
-          "planned_duration": 1.5,
-          "beat_id": "beat_008",
-          "text": "Adding a comment header at the top of the query is a professional habit. It records who created the query, when it was written, and what problem it solves, which helps anyone who opens the file later. Good comments turn a quick one-off query into documentation the whole team can trust and maintain.",
           "action": {
             "type": "wait",
             "duration": 1.5
@@ -485,6 +485,9 @@
         },
         {
           "kind": "close",
+          "planned_duration": 1.5,
+          "beat_id": "beat_009",
+          "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only exactly the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
           "choreography": [
             {
               "type": "hover",
@@ -531,9 +534,6 @@
               "sentence_idx": 2
             }
           ],
-          "planned_duration": 1.5,
-          "beat_id": "beat_009",
-          "text": "We have written our first SELECT query and pulled a complete customer contact list. The query returned only exactly the columns we needed and included a clear comment header. Next, we will make those column headers friendlier for management reports by using aliases.",
           "action": {
             "type": "wait",
             "duration": 1.5
