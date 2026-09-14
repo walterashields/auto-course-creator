@@ -39,6 +39,12 @@ Hard-fail assertions:
     inside the action window; every in-action fire logs reason=in-action-wait;
     break-park motions are hover/drift only (never click/type); the results
     strip under active verification is never hovered;
+  - C42: with the main thread blocked 10s inside a simulated VLM/API call
+    (no checked_sleep, no check — the shape of a mid-recording model call)
+    the threaded heartbeat tier keeps the max contiguous park <= 3.5s, every
+    fire logs reason=heartbeat, break-park motions are hover/drift only,
+    and zero motions happen inside interference-lock windows (a click at
+    t=2.0s and a type at t=6.5s);
   - zero VLM/Anthropic calls during the entire check (tracker + API spy).
 
 Exits 0 only when every assertion passes.
@@ -59,6 +65,7 @@ from compiler.choreo_runtime import (
     ParkWatchdog,
     compress_plan_for_budget,
     item_seconds,
+    plan_target,
 )
 from compiler.cost_tracker import get_tracker, reset_tracker
 from compiler.curriculum import (
@@ -493,6 +500,147 @@ def _replay_monolithic_run_query(plan: list, last_item: dict) -> dict:
             for f in watchdog.fires
         ],
         "motions": motions,
+    }
+
+
+def _replay_blocked_main_with_heartbeat(plan: list, last_item: dict) -> dict:
+    """C42 STEP 3: the main thread blocked 10s inside a simulated VLM/API
+    call — still time that NEVER routes through checked_sleep/check — while
+    the heartbeat tier ticks every 0.5s via heartbeat_once (the same method
+    the daemon thread loops). Two interference-lock windows (a click at
+    t=2.0s, a type at t=6.5s) model physical input mid-block: the heartbeat
+    must not move the cursor while a primitive holds the lock.
+
+    Returns the report: max contiguous park (B3 semantics), every fire, every
+    break-park motion with kind/target/whether it happened during a held
+    lock, and the lock windows exercised.
+    """
+    clock = _VirtualClock()
+    tracker = _ParkTracker(clock)
+    watchdog = ParkWatchdog(
+        "beat_hb",
+        plan=[dict(it) for it in plan],
+        clock=clock.time,
+        sleeper=tracker.sleep,
+        log=lambda msg: print(msg, file=sys.stderr),
+        heartbeat_tick=0.5,
+        heartbeat_threshold=3.0,
+    )
+    motions: list[dict] = []
+    lock_windows: list[tuple] = []
+    # True only while a click/type/drag/key PRIMITIVE holds the interference
+    # lock (the heartbeat's own fire also holds the lock, so locked() alone
+    # cannot distinguish them — this flag marks the primitive windows).
+    primitive_window = {"active": False}
+
+    def sim_motion(reason: str) -> bool:
+        target, _source = watchdog.resolve_motion_target()
+        motions.append(
+            {
+                "reason": reason,
+                "kind": "hover" if target is not None else "drift",
+                "target": target,
+                "during_lock": primitive_window["active"],
+            }
+        )
+        tracker.motion(0.25)  # the break-park hover/drift itself, 0.25s
+        return True
+
+    watchdog._motion = sim_motion
+    watchdog.last_item = dict(last_item)
+    watchdog.register_targets(
+        [
+            plan_target(it)
+            for it in plan
+            if it.get("type") in CHOREO_GESTURE_TYPES
+        ]
+    )
+
+    lock_skips: list[tuple] = []
+
+    def locked_heartbeat_tick() -> None:
+        # A heartbeat tick that lands while a click/type/drag/key primitive
+        # holds the interference lock MUST skip — record the outcome with
+        # the park span observed just before the tick.
+        span_before = watchdog.parked()
+        fired = watchdog.heartbeat_once()
+        lock_skips.append((round(clock.t, 6), round(span_before, 3), fired))
+
+    # Phase 1 (t=0 -> 3.5): plain still block time with the heartbeat ticking
+    # every 0.5s. The park crosses the cap and the HEARTBEAT tier breaks it
+    # at t=3.5 — the tier the synchronous watchdog could never provide while
+    # the main thread is blocked inside the API call.
+    while clock.t < 3.5:
+        tracker.mode = "still"
+        tracker.sleep(0.5)
+        watchdog.heartbeat_once()
+    # Phase 2 (t=3.75 -> 7.25): the block continues; the park crosses the
+    # cap again and the heartbeat fires a second time at t=7.25.
+    while clock.t < 7.25:
+        tracker.mode = "still"
+        tracker.sleep(0.5)
+        watchdog.heartbeat_once()
+    # Phase 3 (t=7.5 -> 10.0): the remainder of the 10s block; the park
+    # stays under the threshold.
+    while clock.t < 10.0:
+        tracker.mode = "still"
+        tracker.sleep(0.5)
+        watchdog.heartbeat_once()
+    block_seconds = clock.t
+    # Lock window A (drag primitive): the interference lock is held while
+    # the park crosses the threshold (3.0 at t=10.5 -> 3.5 at t=11.0). The
+    # heartbeat must skip every tick although parked > threshold; the drag
+    # leg itself is the motion that closes the park at exactly the cap.
+    primitive_window["active"] = True
+    with watchdog.interference_lock:
+        lock_windows.append((round(clock.t, 6), "drag"))
+        tracker.mode = "still"
+        tracker.sleep(0.25)
+        tracker.sleep(0.25)
+        locked_heartbeat_tick()  # parked 3.0 — at threshold, no fire
+        tracker.sleep(0.25)
+        locked_heartbeat_tick()  # parked 3.25 > threshold, lock held: skip
+        tracker.sleep(0.25)
+        locked_heartbeat_tick()  # parked 3.5 > threshold, lock held: skip
+        tracker.mode = "motion"
+        tracker.motion(0.3)  # the drag leg lands
+        watchdog.note_motion()
+    primitive_window["active"] = False
+    # Lock window B (type primitive): keystroke cadence — each key is
+    # motion, the inter-key gap is short still time; the heartbeat must not
+    # fire at any tick inside the lock.
+    primitive_window["active"] = True
+    with watchdog.interference_lock:
+        lock_windows.append((round(clock.t, 6), "type"))
+        tracker.mode = "still"
+        for _ in range(8):
+            tracker.sleep(0.12)  # inter-key gap
+            locked_heartbeat_tick()
+            tracker.mode = "motion"
+            tracker.motion(0.02)  # the keystroke lands
+            watchdog.note_motion()
+            tracker.mode = "still"
+        tracker.sleep(0.5)
+        locked_heartbeat_tick()
+        tracker.mode = "motion"
+        tracker.motion(0.15)  # the paste/keystroke batch lands
+        watchdog.note_motion()
+    primitive_window["active"] = False
+    tracker.mode = "still"
+    tracker.sleep(RECORDER_TAIL_SECONDS)  # stop at audio end + recorder tail
+
+    return {
+        "block_seconds": block_seconds,
+        "max_park": tracker.max_park,
+        "fires": list(watchdog.fires),
+        "fire_lines": [
+            f"wsda-watchdog: fired beat={f['beat_id']} span={f['span']:.2f}s "
+            f"reason={f['reason']}"
+            for f in watchdog.fires
+        ],
+        "motions": motions,
+        "lock_windows": lock_windows,
+        "lock_skips": lock_skips,
     }
 
 
@@ -959,6 +1107,91 @@ def _run_proof() -> None:
         "fires logged in-action-wait, zero interfering motions, verification "
         "regions excluded"
         + ("" if not mono_failures else f" | {mono_failures}"),
+    )
+
+    # --- (g) C42 blocked-main heartbeat simulation ----------------------------
+    print("=" * 78)
+    print(
+        "(g) C42 blocked main thread (10s simulated VLM/API block) with the "
+        "threaded heartbeat active; click/drag + type interference-lock "
+        "windows after the block"
+    )
+    hb_failures: list[str] = []
+    hb_plan = [
+        {"type": "hover", "semantic": "execute-sql-toolbar-button", "sentence_idx": 0},
+        {"type": "hover", "semantic": "sql-editor:body", "sentence_idx": 0},
+        {"type": "hover", "semantic": "results-grid:body", "sentence_idx": 1},
+    ]
+    hb_rep = _replay_blocked_main_with_heartbeat(hb_plan, plan_last(hb_plan))
+    print(f"  block_seconds={hb_rep['block_seconds']:.2f} "
+          f"max_park={hb_rep['max_park']:.2f}s "
+          f"heartbeat_fires={len(hb_rep['fires'])} "
+          f"lock_windows={hb_rep['lock_windows']}")
+    for line in hb_rep["fire_lines"]:
+        print(f"    {line}")
+    for m in hb_rep["motions"]:
+        print(
+            f"    motion kind={m['kind']} target={m['target']} "
+            f"during_lock={m['during_lock']} reason={m['reason']}"
+        )
+    for t, span, fired in hb_rep["lock_skips"]:
+        print(f"    lock-skip t={t:.2f} parked={span:.2f} fired={fired}")
+
+    if not (9.95 <= hb_rep["block_seconds"] <= 10.05):
+        hb_failures.append(
+            f"simulated block is {hb_rep['block_seconds']:.2f}s, not ~10.0s"
+        )
+    if hb_rep["max_park"] > PARK_CAP + 0.05:
+        hb_failures.append(
+            f"max contiguous park {hb_rep['max_park']:.2f}s > cap {PARK_CAP}s "
+            "with the main thread blocked"
+        )
+    if len(hb_rep["fires"]) < 2:
+        hb_failures.append(
+            f"heartbeat fired only {len(hb_rep['fires'])} time(s) during the "
+            "10s block (expected >= 2)"
+        )
+    for fire in hb_rep["fires"]:
+        if fire["reason"] != "heartbeat":
+            hb_failures.append(
+                f"fire reason {fire['reason']!r} is not 'heartbeat'"
+            )
+        if fire["span"] > PARK_CAP + 0.05:
+            hb_failures.append(
+                f"heartbeat fire span {fire['span']:.2f}s > cap {PARK_CAP}s"
+            )
+    for m in hb_rep["motions"]:
+        if m["kind"] not in ("hover", "drift"):
+            hb_failures.append(
+                f"interfering heartbeat motion kind={m['kind']!r} (hover/drift only)"
+            )
+        if m["during_lock"]:
+            hb_failures.append(
+                "heartbeat moved the cursor inside an interference-lock window"
+            )
+    if len(hb_rep["lock_windows"]) != 2:
+        hb_failures.append(
+            f"expected 2 interference-lock windows, got {hb_rep['lock_windows']}"
+        )
+    exercised_skips = [s for s in hb_rep["lock_skips"] if s[1] > 3.0]
+    if len(exercised_skips) < 2:
+        hb_failures.append(
+            f"only {len(exercised_skips)} interference-lock skip exercised "
+            "above the heartbeat threshold (expected >= 2)"
+        )
+    for t, span, fired in hb_rep["lock_skips"]:
+        if fired:
+            hb_failures.append(
+                f"heartbeat fired inside an interference-lock window "
+                f"(t={t:.2f} parked={span:.2f})"
+            )
+
+    check(
+        not hb_failures,
+        "C42: blocked main thread — heartbeat keeps the park <= cap, fires "
+        "log reason=heartbeat, zero interfering motions, zero motion inside "
+        "interference-lock windows"
+        + ("" if not hb_failures else f" | {hb_failures}"),
     )
 
 

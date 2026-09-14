@@ -20,7 +20,9 @@ Contents:
     sleeps route through checked_sleep) and gives it verification-region
     exclusions: while a results strip (or any region) is under active
     verification, targets inside that region are never hover targets — a
-    fire drifts to a safe alternative instead;
+    fire drifts to a safe alternative instead. C42 adds the threaded
+    heartbeat tier (daemon tick, interference lock, safe-target registry)
+    so multi-second blocking VLM/API calls mid-recording are governed too;
   - compress_plan_for_budget(): the C39 STEP 2 executor budget guard — the
     C35 compression order (zero pauses, speed to the 2x cap, drop only
     non-sentence-last gestures, never drop a sentence's last/only gesture)
@@ -30,6 +32,7 @@ Contents:
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -37,6 +40,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 # anywhere in a beat (the B3 detector samples at 1fps, so a 3.5s park
 # measures ~4-5s, safely under the 6.0s anti-stall gate).
 PARK_CAP = 3.5
+# C42 threaded heartbeat: the daemon tick interval (0.5-1.0s band) and the
+# park span at which the heartbeat tier breaks the park. Threshold + tick +
+# one motion lands at ~3.5s worst case, exactly at the cap: the heartbeat
+# governs multi-second main-thread blocks (VLM/API calls) the synchronous
+# checked_sleep/check tier can never interrupt.
+HEARTBEAT_TICK = 0.5
+HEARTBEAT_THRESHOLD = 3.0
 # C35 compression order (b): gesture travel may be sped up to 2x and no
 # further, so compressed motion stays deliberate.
 CHOREO_MAX_SPEED = 2.0
@@ -125,8 +135,33 @@ class ParkWatchdog:
     skipped gestures, action-path sleeps (post-execute settles, verification
     polls), or planner error.
 
+    C42 STEP 1 adds the threaded heartbeat tier: a daemon thread ticking
+    every ``heartbeat_tick`` seconds performs :meth:`heartbeat_once` — when
+    the park has exceeded ``heartbeat_threshold`` it inserts the same safe
+    break motion REGARDLESS of what the main thread is doing, including a
+    multi-second blocking VLM/API call the synchronous tier cannot
+    interrupt. Safety rails:
+
+      - interference lock: the executor's click/type/drag/key primitives
+        hold ``interference_lock`` around their physical action; the
+        heartbeat acquires it non-blocking and skips a tick when held, so
+        the cursor never moves mid-click or mid-keystroke (the in-flight
+        action is itself motion and resets the clock on completion);
+      - excluded_targets apply to heartbeat motions exactly as to
+        synchronous ones (a verification region under phash check is never
+        hovered);
+      - safe-target registry: the executor registers the current sentence's
+        resolved targets (:meth:`register_targets`) as they change; the
+        heartbeat resolves from the registry first, falling back to the
+        plan-based resolution and finally to a drift glide in place;
+      - every heartbeat fire logs
+        ``wsda-watchdog: fired beat=<id> span=<s> reason=heartbeat`` —
+        distinct from the synchronous ``in-action-wait:*`` tier.
+
     One ``wsda-watchdog: armed beat=<id>`` line is printed at arm time (it
-    proves the watchdog is active for the beat) and one
+    proves the watchdog is active for the beat), one
+    ``wsda-watchdog: heartbeat-started beat=<id> tick=<s> threshold=<s>``
+    when the heartbeat thread starts, and one
     ``wsda-watchdog: fired beat=<id> span=<s> reason=<...>`` line each time
     it acts. ``clock``/``sleeper``/``motion`` are injectable so the dry proof
     and the tests can replay beats on a virtual timeline.
@@ -141,6 +176,8 @@ class ParkWatchdog:
         sleeper: Optional[Callable[[float], None]] = None,
         motion: Optional[Callable[[str], bool]] = None,
         log: Optional[Callable[[str], None]] = None,
+        heartbeat_tick: float = HEARTBEAT_TICK,
+        heartbeat_threshold: float = HEARTBEAT_THRESHOLD,
     ) -> None:
         self.beat_id = beat_id
         self.plan: List[Dict[str, Any]] = [dict(it) for it in (plan or [])]
@@ -160,8 +197,24 @@ class ParkWatchdog:
         # The executor sets/clears this around the verification window.
         self.excluded_targets: List[str] = []
         self.last_item: Optional[Dict[str, Any]] = None
+        # C42: executor-registered safe targets for the CURRENT sentence,
+        # newest last. The heartbeat prefers these over the plan-derived
+        # candidates; resolution falls back to a drift glide when empty.
+        self.safe_targets: List[str] = []
         self.last_motion_time = float(self._clock())
         self.fires: List[Dict[str, Any]] = []
+        # C42: the interference lock is held by click/type/drag/key
+        # primitives around their physical action; the heartbeat acquires it
+        # non-blocking. The fire lock serializes the actual break-park
+        # motions so the synchronous tier and the heartbeat tier can never
+        # move the cursor at the same instant.
+        self.interference_lock = threading.Lock()
+        self._fire_lock = threading.Lock()
+        self.heartbeat_tick = float(heartbeat_tick)
+        self.heartbeat_threshold = float(heartbeat_threshold)
+        self.heartbeat_fires = 0
+        self._heartbeat_stop: Optional[threading.Event] = None
+        self._heartbeat_thread: Optional[threading.Thread] = None
         self._log(f"wsda-watchdog: armed beat={self.beat_id}")
 
     # -- motion tracking --------------------------------------------------
@@ -206,24 +259,104 @@ class ParkWatchdog:
             self._fire(reason, self.parked())
         return seconds
 
-    # -- internals --------------------------------------------------------
-    def _fire(self, reason: str, span: float) -> None:
-        self.fires.append(
-            {"beat_id": self.beat_id, "span": round(span, 3), "reason": reason}
+    # -- C42 threaded heartbeat --------------------------------------------
+    def register_targets(self, targets: Sequence[str]) -> None:
+        """C42: the executor registers the current sentence's resolved
+        targets as they change; the heartbeat resolves break-park motions
+        from this registry first (exclusions still apply)."""
+        self.safe_targets = [t for t in targets if t]
+
+    def heartbeat_once(self) -> bool:
+        """C42: one heartbeat tick. When the park has exceeded the heartbeat
+        threshold and no click/type/drag/key primitive is mid-action, insert
+        the safe break motion. Returns True when it fired. Also driven
+        directly by the dry proof and the tests on a virtual clock."""
+        if self.parked() <= self.heartbeat_threshold:
+            return False
+        # A physical input action is in flight: it is itself motion and
+        # resets the clock on completion — never move the cursor mid-click
+        # or mid-keystroke.
+        if not self.interference_lock.acquire(blocking=False):
+            return False
+        try:
+            span = self.parked()
+            if span <= self.heartbeat_threshold:
+                return False
+            self.heartbeat_fires += 1
+            self._fire("heartbeat", span)
+            return True
+        finally:
+            self.interference_lock.release()
+
+    def start_heartbeat(self) -> None:
+        """C42: start the daemon heartbeat thread. Idempotent within a beat;
+        the executor starts it at arm time (before recorder start) and stops
+        it after recorder stop — no orphan threads across beats or retries."""
+        if self._heartbeat_thread is not None:
+            return
+        stop = threading.Event()
+        self._heartbeat_stop = stop
+        thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(stop,),
+            name=f"wsda-watchdog-heartbeat-{self.beat_id}",
+            daemon=True,
         )
-        if self._motion is not None:
+        self._heartbeat_thread = thread
+        thread.start()
+        self._log(
+            f"wsda-watchdog: heartbeat-started beat={self.beat_id} "
+            f"tick={self.heartbeat_tick:.2f}s threshold={self.heartbeat_threshold:.1f}s"
+        )
+
+    def stop_heartbeat(self, timeout: float = 2.0) -> None:
+        """C42: signal the heartbeat thread to exit and join it. Idempotent;
+        safe to call when the heartbeat was never started."""
+        stop = self._heartbeat_stop
+        thread = self._heartbeat_thread
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
+        if stop is not None:
+            stop.set()
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=timeout)
+
+    def _heartbeat_loop(self, stop: threading.Event) -> None:
+        while not stop.wait(self.heartbeat_tick):
             try:
-                self._motion(reason)
-            except Exception as exc:  # motion must never kill the beat
+                self.heartbeat_once()
+            except Exception as exc:  # the heartbeat must never kill a beat
                 print(
-                    f"wsda-watchdog: motion failed beat={self.beat_id}: {exc}",
+                    f"wsda-watchdog: heartbeat error beat={self.beat_id}: {exc}",
                     file=sys.stderr,
                 )
-        self.note_motion()
-        self._log(
-            f"wsda-watchdog: fired beat={self.beat_id} "
-            f"span={span:.2f}s reason={reason}"
-        )
+
+    # -- internals --------------------------------------------------------
+    def _fire(self, reason: str, span: float) -> None:
+        # The fire lock serializes motions across the synchronous tier
+        # (checked_sleep/check on the main thread) and the heartbeat tier so
+        # two break-park hovers can never interleave.
+        with self._fire_lock:
+            self.fires.append(
+                {"beat_id": self.beat_id, "span": round(span, 3), "reason": reason}
+            )
+            if self._motion is not None:
+                try:
+                    self._motion(reason)
+                except Exception as exc:  # motion must never kill the beat
+                    print(
+                        f"wsda-watchdog: motion failed beat={self.beat_id}: {exc}",
+                        file=sys.stderr,
+                    )
+            self.note_motion()
+            self._log(
+                f"wsda-watchdog: fired beat={self.beat_id} "
+                f"span={span:.2f}s reason={reason}"
+            )
 
     # -- motion target resolution (executor-facing) ------------------------
     def _target_excluded(self, target: str) -> bool:
@@ -237,11 +370,16 @@ class ParkWatchdog:
 
     def resolve_motion_target(self) -> Tuple[Optional[str], str]:
         """Pick the target for the minimal visible motion, in order:
+        (0) the C42 executor-registered current-sentence targets (newest
+        first) — unless inside a verification region under active check;
         (1) the current sentence's resolved target from the plan — unless it
         is inside a verification region under active check (C41);
         (2) the beat's most-referenced alternative target, likewise excluded;
         (3) None — the caller drifts relative to the current cursor point.
         Returns (target, source)."""
+        for target in reversed(self.safe_targets):
+            if target and not self._target_excluded(target):
+                return target, "registry"
         if self.last_item is not None:
             sidx = self.last_item.get("sentence_idx", 0)
             for it in self.plan:

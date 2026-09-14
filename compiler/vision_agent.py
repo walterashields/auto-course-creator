@@ -592,7 +592,13 @@ class VisionAgent:
 
     @staticmethod
     def _frontmost_app_name() -> Optional[str]:
-        """Return the name of the current frontmost process via System Events."""
+        """Return the name of the current frontmost process via the System
+        Events query. C42: OFF-CAMERA ONLY — under a ScreenCaptureKit
+        recording this query hangs toward its 5s timeout (C21: System Events
+        process queries die under SCK) and then misfires, which produced the
+        per-beat ~5.7s app-activate park stretch and the 9.27s beat_002 park.
+        Mid-recording focus is verified through the SCK-immune focused-
+        element guard instead (see ``_target_has_focus``)."""
         try:
             result = subprocess.run(
                 [
@@ -609,6 +615,21 @@ class VisionAgent:
             print(f"Warning: could not determine frontmost app: {exc}", file=sys.stderr)
             return None
 
+    def _target_has_focus(self) -> bool:
+        """C42: deterministic, SCK-immune "is the target ready to receive
+        input" check. The focused-element guard (C21/C22) is an attribute-
+        level AX read on the target's application element — the exact class
+        of read the C21 probe proved reliable under ScreenCaptureKit — so it
+        is the primary verdict everywhere. Off-camera, the live System
+        Events frontmost query is also cheap and correct, and catches the
+        "target frontmost but its editor not focused" pre-recording state;
+        mid-recording that query is skipped (it hangs under SCK)."""
+        if self._focused_element_is_editor():
+            return True
+        if self.recording:
+            return False
+        return self._frontmost_app_name() == self.profile.focus_target
+
     def _ensure_frontmost(self, max_attempts: int = 3) -> None:
         """
         Assert the target application is frontmost before any input action.
@@ -620,11 +641,10 @@ class VisionAgent:
         target = self.profile.focus_target
         # Ceiling: max_attempts (default 3) focus-recovery attempts.
         for attempt in range(1, max_attempts + 1):
-            frontmost = self._frontmost_app_name()
-            if frontmost == target:
+            if self._target_has_focus():
                 return
             print(
-                f"  [FOCUS] frontmost is {frontmost!r}, activating {target} "
+                f"  [FOCUS] focus check failed, activating {target} "
                 f"(attempt {attempt}/{max_attempts})",
                 file=sys.stderr,
             )
@@ -635,7 +655,13 @@ class VisionAgent:
         raise FocusLostError(f"{target} could not be kept frontmost")
 
     def _activate_target_app(self) -> None:
-        """Bring the target application to the foreground via AppleScript."""
+        """Bring the target application to the foreground via AppleScript.
+
+        C42 note: the AppleScript ``activate`` event is kept deliberately —
+        it blocks until the activation has taken effect. The multi-second
+        hang the threaded heartbeat now backstops was the System Events
+        frontmost QUERY (C21: process queries die under SCK), which no
+        longer runs inside the recording window."""
         try:
             subprocess.run(
                 ["osascript", "-e", f'tell application "{self.profile.focus_target}" to activate'],
@@ -768,6 +794,7 @@ class VisionAgent:
             "If the objective is already served, set serves_objective to true and "
             "anomaly_class to \"none\"."
         )
+        self._log_mid_recording_vlm("assess-screen-state")
         result = self._call_vlm(prompt, expect_json=True, max_tokens=512)
         action = result.action or {}
         if not isinstance(action, dict):
@@ -819,13 +846,14 @@ class VisionAgent:
         """
         Fast deterministic checks before/after an action.
 
-        Returns (ok, reason). Checks frontmost app, optional editor content match,
-        and the profile's pixel error signature.
+        Returns (ok, reason). Checks target focus (C42: the SCK-immune
+        focused-element guard — the System Events frontmost query hangs
+        under SCK), optional editor content match, and the profile's pixel
+        error signature.
         """
         target = self.profile.focus_target
-        frontmost = self._frontmost_app_name()
-        if frontmost != target:
-            return False, f"frontmost app is {frontmost!r}, expected {target!r}"
+        if not self._target_has_focus():
+            return False, f"target {target!r} does not hold input focus"
 
         if intended_text is not None:
             actual = self._read_editor_content(focus=False) or ""
@@ -916,8 +944,9 @@ class VisionAgent:
         print(f"  VLM click '{element_description}' at logical ({lx}, {ly})", file=sys.stderr)
 
         # Animate cursor for visibility in recordings.
-        pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
-        pyautogui.click(lx, ly)
+        with self._input_exclusivity():
+            pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+            pyautogui.click(lx, ly)
         # C41: a click is real cursor motion — reset the park clock so the
         # post-click settle is measured from here.
         if self.watchdog is not None:
@@ -949,6 +978,7 @@ class VisionAgent:
             "(top-left is 0,0; x increases right; y increases down). Do not add any other text."
         )
 
+        self._log_mid_recording_vlm("vlm-locate-point")
         result = self._call_vlm(prompt, expect_json=True)
         action = result.action
         if not action:
@@ -987,7 +1017,8 @@ class VisionAgent:
         print(f"  Typing: {text[:80]!r}", file=sys.stderr)
         # pyautogui handles newlines and special characters better than AppleScript.
         # ~0.10 s/char so learners can follow live typing.
-        pyautogui.typewrite(text, interval=0.10)
+        with self._input_exclusivity():
+            pyautogui.typewrite(text, interval=0.10)
         self._governed_sleep(0.2, reason="in-action-wait:post-type-settle")
         return True
 
@@ -998,7 +1029,8 @@ class VisionAgent:
         insert a newline into the SQL editor and trigger auto-indent.
         """
         for _ in range(3):
-            pyautogui.press("esc")
+            with self._input_exclusivity():
+                pyautogui.press("esc")
             # debounce: let the Escape key event land before the next press
             time.sleep(0.1)
         # Try to close any open Character Viewer window via AppleScript.
@@ -1099,8 +1131,9 @@ class VisionAgent:
             logical_w, logical_h = pyautogui.size()
             fx, fy = int(logical_w * 0.5), int(logical_h * 0.45)
             print(f"  [TYPE BLOCK] fallback click editor at ({fx}, {fy})", file=sys.stderr)
-            pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
-            pyautogui.click(fx, fy)
+            with self._input_exclusivity():
+                pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
+                pyautogui.click(fx, fy)
             # C41: the fallback click is motion; let the watchdog clock restart.
             if self.watchdog is not None:
                 self.watchdog.note_motion()
@@ -1494,12 +1527,14 @@ end tell
         lines = text.split("\n")
         for idx, line in enumerate(lines):
             if idx > 0:
-                pyautogui.press("return")
+                with self._input_exclusivity():
+                    pyautogui.press("return")
                 # debounce: let the Return key event land before typing the line
                 time.sleep(0.1)
             if line:
                 # ~0.10 s/char so learners can follow live typing.
-                pyautogui.typewrite(line, interval=0.10)
+                with self._input_exclusivity():
+                    pyautogui.typewrite(line, interval=0.10)
         self._governed_sleep(0.5, reason="in-action-wait:post-type-settle")
         self._dismiss_character_viewer()
 
@@ -1527,8 +1562,7 @@ end tell
         except Exception:
             return ""
 
-    @staticmethod
-    def _release_all_modifiers() -> None:
+    def _release_all_modifiers(self) -> None:
         """
         Explicitly release every modifier key pyautogui knows about.
 
@@ -1536,11 +1570,12 @@ end tell
         Viewer when a Space or other keystroke lands while Cmd/Ctrl are still
         held from a preceding hotkey.
         """
-        for key in ("command", "ctrl", "shift", "option", "alt", "control"):
-            try:
-                pyautogui.keyUp(key)
-            except Exception:
-                pass
+        with self._input_exclusivity():
+            for key in ("command", "ctrl", "shift", "option", "alt", "control"):
+                try:
+                    pyautogui.keyUp(key)
+                except Exception:
+                    pass
         # debounce: let the modifier keyUp events land before the next keystroke
         time.sleep(0.15)
 
@@ -1554,10 +1589,11 @@ end tell
         """
         self._ensure_frontmost()
         # Press modifiers first, then the base key.
-        for key in keys:
-            pyautogui.keyDown(key)
-        for key in reversed(keys):
-            pyautogui.keyUp(key)
+        with self._input_exclusivity():
+            for key in keys:
+                pyautogui.keyDown(key)
+            for key in reversed(keys):
+                pyautogui.keyUp(key)
         self._release_all_modifiers()
         if post_delay > 0:
             # C41: hotkey post-delay — governed (callers pass up to ~0.5s).
@@ -1901,8 +1937,9 @@ end tell
         self.press_key("cmd+a")
         # debounce: let the select-all chord land before the cursor move
         time.sleep(0.1)
-        pyautogui.keyDown("right")
-        pyautogui.keyUp("right")
+        with self._input_exclusivity():
+            pyautogui.keyDown("right")
+            pyautogui.keyUp("right")
         # debounce: let the cursor-move key land before the clipboard read
         time.sleep(0.1)
         original_clipboard = self._read_clipboard()
@@ -2203,10 +2240,11 @@ end tell
         self._dismiss_character_viewer()
         # Move to the start of the current line and select to the end.
         self.press_key("home")
-        pyautogui.keyDown("shift")
-        pyautogui.keyDown("end")
-        pyautogui.keyUp("end")
-        pyautogui.keyUp("shift")
+        with self._input_exclusivity():
+            pyautogui.keyDown("shift")
+            pyautogui.keyDown("end")
+            pyautogui.keyUp("end")
+            pyautogui.keyUp("shift")
         self._release_all_modifiers()
         # debounce: let the line-selection chord land before the line paste
         time.sleep(0.1)
@@ -2285,7 +2323,8 @@ end tell
                     )
                     # The cursor is on the empty line after the defective one;
                     # move up and replace only that line.
-                    pyautogui.press("up")
+                    with self._input_exclusivity():
+                        pyautogui.press("up")
                     self._release_all_modifiers()
                     # debounce: let the cursor-move key land before the re-paste
                     time.sleep(0.05)
@@ -2489,10 +2528,11 @@ end tell
             return True
 
         # Non-recording path: fast paste with retry fallback.
-        pyautogui.keyDown("command")
-        pyautogui.keyDown("end")
-        pyautogui.keyUp("end")
-        pyautogui.keyUp("command")
+        with self._input_exclusivity():
+            pyautogui.keyDown("command")
+            pyautogui.keyDown("end")
+            pyautogui.keyUp("end")
+            pyautogui.keyUp("command")
         # debounce: let the cursor-move chord land before the paste loop
         time.sleep(0.1)
         expected_sofar = initial
@@ -2711,8 +2751,9 @@ end tell
         except Exception:
             logical_w, logical_h = pyautogui.size()
             fx, fy = int(logical_w * 0.5), int(logical_h * 0.75)
-            pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
-            pyautogui.click(fx, fy)
+            with self._input_exclusivity():
+                pyautogui.moveTo(fx, fy, duration=0.3, tween=pyautogui.easeInOutQuad)
+                pyautogui.click(fx, fy)
             # C41: the fallback click is motion; restart the watchdog clock.
             if self.watchdog is not None:
                 self.watchdog.note_motion()
@@ -2897,6 +2938,7 @@ end tell
         buf = io.BytesIO()
         crop.save(buf, format="PNG")
         b64 = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        self._log_mid_recording_vlm("read-status-error-text")
         try:
             result = tracked_create(
                 self.client,
@@ -2961,7 +3003,8 @@ end tell
         # Navigate to the defective line and retype it.
         self.press_key("ctrl+home")
         for _ in range(bad_line_no - 1):
-            pyautogui.press("down")
+            with self._input_exclusivity():
+                pyautogui.press("down")
             # debounce: keep the arrow-key cadence below the key-event rate
             time.sleep(0.02)
         intended_line = intended_lines[bad_line_no - 1]
@@ -3143,8 +3186,9 @@ end tell
             # C17: cached at stage prep; no VLM call inside the recording window.
             bx, by = self._run_button_point
             print(f"  [RUN QUERY] clicking cached Execute button at ({bx}, {by})", file=sys.stderr)
-            pyautogui.moveTo(bx, by, duration=0.5, tween=pyautogui.easeInOutQuad)
-            pyautogui.click(bx, by)
+            with self._input_exclusivity():
+                pyautogui.moveTo(bx, by, duration=0.5, tween=pyautogui.easeInOutQuad)
+                pyautogui.click(bx, by)
             # C41: the click is real cursor motion — reset the park clock so
             # the governed post-click settles measure from the click, not
             # from some pre-action gesture.
@@ -3225,6 +3269,7 @@ end tell
             "}\n\n"
             "Use null for unknown values. Do not add any other text."
         )
+        self._log_mid_recording_vlm("summarize-result-pane")
         result = self._call_vlm(prompt, expect_json=False, max_tokens=512)
         data: Dict[str, Any] = {
             "columns": [],
@@ -3258,35 +3303,36 @@ end tell
             raise RuntimeError(f"{key!r} is forbidden while recording")
         print(f"  Pressing key: {key!r}", file=sys.stderr)
 
-        if normalized in ("return", "enter"):
-            pyautogui.press("return")
-        elif normalized == "esc":
-            pyautogui.press("esc")
-        elif normalized == "space":
-            pyautogui.press("space")
-        elif normalized == "tab":
-            pyautogui.press("tab")
-        elif normalized in ("delete", "backspace"):
-            pyautogui.press("backspace")
-        elif "+" in key:
-            parts = [p.strip().lower() for p in key.split("+")]
-            modifiers = []
-            base = parts[-1]
-            for mod in parts[:-1]:
-                if mod in ("cmd", "command", "super"):
-                    modifiers.append("command")
-                elif mod in ("ctrl", "control"):
-                    modifiers.append("ctrl")
-                elif mod == "shift":
-                    modifiers.append("shift")
-                elif mod in ("alt", "option"):
-                    modifiers.append("option")
-            pyautogui.keyDown(*modifiers)
-            pyautogui.keyDown(base)
-            pyautogui.keyUp(base)
-            pyautogui.keyUp(*modifiers)
-        else:
-            pyautogui.press(key.lower())
+        with self._input_exclusivity():
+            if normalized in ("return", "enter"):
+                pyautogui.press("return")
+            elif normalized == "esc":
+                pyautogui.press("esc")
+            elif normalized == "space":
+                pyautogui.press("space")
+            elif normalized == "tab":
+                pyautogui.press("tab")
+            elif normalized in ("delete", "backspace"):
+                pyautogui.press("backspace")
+            elif "+" in key:
+                parts = [p.strip().lower() for p in key.split("+")]
+                modifiers = []
+                base = parts[-1]
+                for mod in parts[:-1]:
+                    if mod in ("cmd", "command", "super"):
+                        modifiers.append("command")
+                    elif mod in ("ctrl", "control"):
+                        modifiers.append("ctrl")
+                    elif mod == "shift":
+                        modifiers.append("shift")
+                    elif mod in ("alt", "option"):
+                        modifiers.append("option")
+                pyautogui.keyDown(*modifiers)
+                pyautogui.keyDown(base)
+                pyautogui.keyUp(base)
+                pyautogui.keyUp(*modifiers)
+            else:
+                pyautogui.press(key.lower())
 
         # Defensive modifier release: prevents the Character Viewer race where a
         # subsequent Space lands while Cmd/Ctrl are still held.
@@ -3309,6 +3355,7 @@ end tell
             "Do not add any other text."
         )
 
+        self._log_mid_recording_vlm("verify-state")
         result = self._call_vlm(prompt, expect_json=False)
         text = result.text
         yes_no_line = next(
@@ -3420,16 +3467,29 @@ end tell
         return already_true, narration
 
     def is_modal_or_dropdown_open(self) -> bool:
-        """Ask the VLM whether a transient dropdown/modal is open and should be dismissed."""
-        prompt = (
-            f"Look at this {self.profile.app_name} screenshot. "
-            "Is a transient dropdown menu, modal dialog, or popup currently open on top of the main window? "
-            "Ignore the main application window, side panels, and table grids. "
-            "Reply exactly YES or NO, nothing else."
-        )
-        result = self._call_vlm(prompt, expect_json=False)
-        text = result.text.strip().upper()
-        return text.startswith("YES")
+        """C42: deterministic AX check — True when the target app's frontmost
+        window is a modal dialog/sheet or a dropdown menu / popover window is
+        open. Replaces the VLM assess, which spent one VLM call per beat at
+        stage prep; no screenshot, no model call."""
+        process_name = self.profile.focus_target or self.profile.app_name
+        try:
+            pid = ax_pyobjc.app_pid_for_name(process_name)
+            if pid is None:
+                return False
+            app_el = ax_pyobjc.create_application(pid)
+            return ax_pyobjc.transient_overlay_open(app_el)
+        except ax_pyobjc.AxCallError as exc:
+            print(f"  [STAGE PREP] transient UI AX check failed: {exc}", file=sys.stderr)
+            return False
+
+    def _log_mid_recording_vlm(self, name: str) -> None:
+        """C42: mark a VLM call that fires between recorder start and stop.
+        The de-VLM audit moved every replaceable call out of the recording
+        window (AX frontmost/overlay checks, stage-prep hygiene); the calls
+        that MUST remain mid-recording log this marker and are covered by
+        the threaded heartbeat."""
+        if self.recording:
+            print(f"wsda-vlm-mid-recording: {name}", file=sys.stderr)
 
     def ask_recovery(self, failed_action: str) -> Optional[Dict[str, Any]]:
         """Ask the VLM what to do after a failed action."""
@@ -3441,6 +3501,7 @@ end tell
             '"text": "only for type/key", "element_type": "...", "description": "..."}\n\n'
             "If no recovery is possible, return: {\"action\": \"wait\", \"duration\": 1}"
         )
+        self._log_mid_recording_vlm("ask-recovery")
         result = self._call_vlm(prompt, expect_json=True)
         return result.action
 
@@ -3670,10 +3731,11 @@ end tell
             bbox["x"] + bbox["w"], bbox["y"] + bbox["h"] / 2
         )
         self._ensure_frontmost()
-        pyautogui.moveTo(x1, y1, duration=0.4, tween=pyautogui.easeInOutQuad)
-        pyautogui.mouseDown()
-        pyautogui.moveTo(x2, y2, duration=0.4, tween=pyautogui.easeInOutQuad)
-        pyautogui.mouseUp()
+        with self._input_exclusivity():
+            pyautogui.moveTo(x1, y1, duration=0.4, tween=pyautogui.easeInOutQuad)
+            pyautogui.mouseDown()
+            pyautogui.moveTo(x2, y2, duration=0.4, tween=pyautogui.easeInOutQuad)
+            pyautogui.mouseUp()
         # C41: the drag is motion; the settle after it is governed.
         if self.watchdog is not None:
             self.watchdog.note_motion()
@@ -3698,6 +3760,7 @@ end tell
             '{"action": "click", "point": {"x": int, "y": int}, "element_type": "...", "description": "..."}\n'
             "The point must be the center of the element in the screenshot coordinate space."
         )
+        self._log_mid_recording_vlm("emphasize-element")
         result = self._call_vlm(prompt, expect_json=True, max_tokens=128)
         action = result.action
         if not action:
@@ -3707,7 +3770,8 @@ end tell
             return False
         lx, ly = self._api_to_logical(point["x"], point["y"])
         print(f"  [EMPHASIS] move to '{description}' at ({lx}, {ly})", file=sys.stderr)
-        pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+        with self._input_exclusivity():
+            pyautogui.moveTo(lx, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
         self._governed_sleep(0.2, reason="in-action-wait:post-move-settle")
         if select:
             # C11: drag-select across a narrated region so the recorded clip
@@ -3716,14 +3780,15 @@ end tell
             # enough frame-to-frame difference to pass the frozen-frame gate.
             sw, _ = pyautogui.size()
             end_x = min(lx + 300, sw - 1)
-            pyautogui.mouseDown()
-            # debounce: hold the mouse-down before the drag leg
-            time.sleep(0.05)
-            pyautogui.moveTo(end_x, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
-            # debounce: let the drag leg render before the mouse-up
-            # debounce: let the drag leg render before the mouse-up
-            time.sleep(0.05)
-            pyautogui.mouseUp()
+            with self._input_exclusivity():
+                pyautogui.mouseDown()
+                # debounce: hold the mouse-down before the drag leg
+                time.sleep(0.05)
+                pyautogui.moveTo(end_x, ly, duration=0.5, tween=pyautogui.easeInOutQuad)
+                # debounce: let the drag leg render before the mouse-up
+                # debounce: let the drag leg render before the mouse-up
+                time.sleep(0.05)
+                pyautogui.mouseUp()
             # debounce: let the selection render before the next emphasis action
             time.sleep(0.2)
         return True
@@ -3971,7 +4036,8 @@ end tell
             if not self._move_to_target(target, duration=self._item_move_duration(item, 0.7)):
                 return False
             try:
-                pyautogui.click()
+                with self._input_exclusivity():
+                    pyautogui.click()
                 # C39: post-click settle is an action-path sleep — capped by
                 # the watchdog, not by a bare time.sleep.
                 if self.watchdog is not None:
@@ -3992,13 +4058,14 @@ end tell
             try:
                 x, y = point
                 leg = self._item_move_duration(item, 0.4)
-                pyautogui.moveTo(x, y, duration=leg, tween=pyautogui.easeInOutQuad)
-                self._last_rest_point = (float(x), float(y))
-                if self.watchdog is not None:
-                    self.watchdog.note_motion()
-                pyautogui.mouseDown()
-                pyautogui.moveTo(x + 150, y, duration=leg, tween=pyautogui.easeInOutQuad)
-                pyautogui.mouseUp()
+                with self._input_exclusivity():
+                    pyautogui.moveTo(x, y, duration=leg, tween=pyautogui.easeInOutQuad)
+                    self._last_rest_point = (float(x), float(y))
+                    if self.watchdog is not None:
+                        self.watchdog.note_motion()
+                    pyautogui.mouseDown()
+                    pyautogui.moveTo(x + 150, y, duration=leg, tween=pyautogui.easeInOutQuad)
+                    pyautogui.mouseUp()
                 if self.watchdog is not None:
                     self.watchdog.checked_sleep(0.2, reason="post-drag-settle")
                 else:
@@ -4012,10 +4079,11 @@ end tell
             direction = item.get("direction", "down")
             amount = int(item.get("amount", 3))
             try:
-                if direction == "down":
-                    pyautogui.scroll(-amount * 30)
-                else:
-                    pyautogui.scroll(amount * 30)
+                with self._input_exclusivity():
+                    if direction == "down":
+                        pyautogui.scroll(-amount * 30)
+                    else:
+                        pyautogui.scroll(amount * 30)
                 if self.watchdog is not None:
                     self.watchdog.note_motion()
                     self.watchdog.checked_sleep(0.2, reason="post-scroll-settle")
@@ -4121,6 +4189,17 @@ end tell
             )
             if self.watchdog is not None:
                 self.watchdog.last_item = item
+                # C42: register the current sentence's resolved targets as
+                # they change so the heartbeat hovers a live target.
+                sidx = item.get("sentence_idx", 0)
+                self.watchdog.register_targets(
+                    [
+                        it.get("semantic") or it.get("target", "")
+                        for it in items
+                        if it.get("sentence_idx") == sidx
+                        and it.get("type") in ("hover", "click", "drag")
+                    ]
+                )
             self.execute_choreography_item(item)
             if count_executed:
                 executed += 1
@@ -4207,6 +4286,20 @@ end tell
     # ------------------------------------------------------------------
     # C39 runtime park watchdog — minimal visible motion
     # ------------------------------------------------------------------
+
+    @contextlib.contextmanager
+    def _input_exclusivity(self):
+        """C42: hold the watchdog interference lock around a physical
+        click/type/drag/key action so the threaded heartbeat never moves the
+        cursor mid-click or mid-keystroke. The action itself is motion and
+        resets the park clock on completion. No-op when the watchdog is
+        disarmed."""
+        watchdog = self.watchdog
+        if watchdog is None:
+            yield
+            return
+        with watchdog.interference_lock:
+            yield
 
     def _governed_sleep(self, seconds: float, reason: str) -> None:
         """C41 STEP 1: an executor wait governed by the park cap. When the

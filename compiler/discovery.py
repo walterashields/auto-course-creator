@@ -53,6 +53,7 @@ from .choreo_runtime import (
     max_contiguous_park,
     plan_cost as _runtime_plan_cost,
 )
+from . import ax_pyobjc
 from .frame_analysis import count_error_signature_frames
 from .narrator import ScriptBeat
 from .schemas import DiscoveryResult, EnvironmentProfile, ExecutionGraph, NarrationBeat, ScreenState
@@ -181,15 +182,51 @@ def _frontmost_app_name() -> Optional[str]:
         return None
 
 
-def _log_frontmost(frontmost_log_path: Path) -> None:
-    """Append the current frontmost app and timestamp to the run sidecar."""
-    frontmost = _frontmost_app_name()
+def _log_frontmost(frontmost_log_path: Path, target_app_name: Optional[str] = None) -> None:
+    """Append the focused-element owner and timestamp to the run sidecar.
+
+    C42: the owner is read through the attribute-level AX API (SCK-immune
+    per C21) instead of the System Events frontmost query, which hangs for
+    seconds under a recording — this poll runs INSIDE the recording window
+    at every stability interval. Each line is
+    ``<ts>\\t<owner-pid-or-'unknown'>\\t<owner-name-or-pid>``."""
+    owner_pid: Optional[int] = None
+    owner = "unknown"
+    try:
+        pid = ax_pyobjc.app_pid_for_name(target_app_name) if target_app_name else None
+        if pid is not None:
+            info = ax_pyobjc.focused_element_info(ax_pyobjc.create_application(pid))
+            if info is not None and info.get("pid") is not None:
+                owner_pid = int(info["pid"])
+                owner = ax_pyobjc.app_name_for_pid(owner_pid) or str(owner_pid)
+    except ax_pyobjc.AxCallError:
+        pass
     try:
         frontmost_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(frontmost_log_path, "a", encoding="utf-8") as f:
-            f.write(f"{time.time():.3f}\t{frontmost}\n")
+            f.write(
+                f"{time.time():.3f}\t"
+                f"{owner_pid if owner_pid is not None else 'unknown'}\t{owner}\n"
+            )
     except Exception as exc:
         print(f"Warning: could not write frontmost log: {exc}", file=sys.stderr)
+
+
+def _target_frontmost_or_focused(app_name: str) -> bool:
+    """C42 stage-prep verdict: does ``app_name`` own input focus? Primary:
+    the SCK-immune focused-element AX read (the target's focused element is
+    owned by the target process). Fallback: the live System Events frontmost
+    query, which is cheap and correct off-camera (this runs before recorder
+    start, never inside the recording window)."""
+    pid = ax_pyobjc.app_pid_for_name(app_name)
+    if pid is not None:
+        try:
+            info = ax_pyobjc.focused_element_info(ax_pyobjc.create_application(pid))
+            if info is not None and int(info.get("pid") or -1) == int(pid):
+                return True
+        except ax_pyobjc.AxCallError:
+            pass
+    return _frontmost_app_name() == app_name
 
 
 def _clip_has_off_app_interval(
@@ -198,21 +235,34 @@ def _clip_has_off_app_interval(
     """Return True if the sidecar records any interval in [t0, t1] not on the target app."""
     if not frontmost_log_path.exists():
         return False
+    target_pid = ax_pyobjc.app_pid_for_name(target_app_name)
     try:
         with open(frontmost_log_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                parts = line.split("\t", 1)
-                if len(parts) != 2:
+                parts = line.split("\t")
+                if len(parts) < 2:
                     continue
                 try:
                     ts = float(parts[0])
                 except ValueError:
                     continue
-                if t0 <= ts <= t1 and parts[1] != target_app_name:
-                    return True
+                if not (t0 <= ts <= t1):
+                    continue
+                # C42: numeric owner pid (AX read) compares against the
+                # target pid; legacy name-only entries compare against the
+                # target name.
+                entry = parts[1]
+                entry_pid = int(entry) if entry.lstrip("-").isdigit() else None
+                if entry_pid is not None and target_pid is not None:
+                    if entry_pid != int(target_pid):
+                        return True
+                else:
+                    name = parts[2] if len(parts) >= 3 else parts[1]
+                    if name != target_app_name:
+                        return True
     except Exception as exc:
         print(f"Warning: could not read frontmost log: {exc}", file=sys.stderr)
     return False
@@ -5104,6 +5154,11 @@ class EndStateDiscovery:
                     beat.beat_id,
                     motion=lambda reason, _a=agent: _a._watchdog_break_motion(reason),
                 )
+                # C42: start the threaded heartbeat at arm time — before
+                # recorder start, covering stage prep and the whole armed
+                # window; the finally block joins it after recorder stop so
+                # no thread outlives its beat attempt.
+                agent.watchdog.start_heartbeat()
                 if retry > 0 and not skipped:
                     # C10 beat-scoped retry: restore the last known-good editor
                     # state without re-composing prior passed beats.
@@ -5297,6 +5352,16 @@ class EndStateDiscovery:
                         # beat's most-referenced alternative).
                         if agent.watchdog is not None:
                             agent.watchdog.plan = [dict(it) for it in scheduled_choreo]
+                            # C42: seed the safe-target registry with the beat's
+                            # gesture targets in plan order (the executor
+                            # re-registers per sentence as items execute).
+                            agent.watchdog.register_targets(
+                                [
+                                    it.get("semantic") or it.get("target", "")
+                                    for it in scheduled_choreo
+                                    if it.get("type") in ("hover", "click", "drag")
+                                ]
+                            )
                         print(
                             f"  [CHOREOGRAPHY SCHEDULED] {beat.beat_id}: "
                             f"{scheduled_choreo}",
@@ -5782,8 +5847,6 @@ class EndStateDiscovery:
                     else:
                         beat_ok = True
                 finally:
-                    # C39: the beat attempt is over — disarm the park watchdog.
-                    agent.watchdog = None
                     if not skipped:
                         if audio_proc is not None:
                             try:
@@ -5800,6 +5863,13 @@ class EndStateDiscovery:
                         agent.recording = False
                         # C29: recording over — grounding returns to live capture.
                         agent.set_frame_provider(None)
+                    # C39/C42: the beat attempt is over — the recorder has
+                    # fully stopped, so join the heartbeat thread (no orphans
+                    # across beats or retries) and disarm the park watchdog.
+                    _watchdog = agent.watchdog
+                    if _watchdog is not None:
+                        _watchdog.stop_heartbeat()
+                    agent.watchdog = None
                 clip_end = time.time()
                 tl["clip_dur"] = _probe_clip_duration(clip_path)
                 tl["delivery"] = getattr(
@@ -6256,7 +6326,7 @@ class EndStateDiscovery:
         # ~= 10 iterations.
         while time.time() - start < timeout_seconds:
             if frontmost_log_path is not None:
-                _log_frontmost(frontmost_log_path)
+                _log_frontmost(frontmost_log_path, self.profile.app_name)
             try:
                 _, _, _, _, raw_img, _ = _capture_screenshot(self.output_dir)
                 gray = np.array(raw_img.convert("L"))
@@ -6790,11 +6860,10 @@ class EndStateDiscovery:
         Returns {"ok": True} on success or {"ok": False, "reason": str} on failure.
         """
         app_name = self.profile.app_name
-        frontmost = _frontmost_app_name()
-        if frontmost != app_name:
+        if not _target_frontmost_or_focused(app_name):
             return {
                 "ok": False,
-                "reason": f"[STAGE PREP] frontmost app is {frontmost!r}, expected {app_name!r}",
+                "reason": f"[STAGE PREP] {app_name} does not own input focus",
             }
 
         db_path = self.db_path

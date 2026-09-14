@@ -627,6 +627,11 @@ class TestEditorReadBack(unittest.TestCase):
         agent = VisionAgent()
         mock.patch.object(agent, "find_and_click", return_value=True).start()
         mock.patch.object(agent, "press_key", return_value=True).start()
+        # C42: the read-back tests exercise editor composition, not focus
+        # discipline — stub the focus check so the suite stays off the real
+        # screen regardless of machine state (focus behavior is covered by
+        # TestFrontmostGate and the C42 heartbeat/lock tests).
+        mock.patch.object(agent, "_ensure_frontmost").start()
         self.addCleanup(mock.patch.stopall)
         return agent
 
@@ -3501,6 +3506,361 @@ class TestC41NonInterferingMotion(unittest.TestCase):
             pass
 
 
+class TestC42ThreadedHeartbeat(unittest.TestCase):
+    """C42 STEP 1: the watchdog's threaded heartbeat tier. A daemon thread
+    ticks every 0.5s and breaks the park past 3.0s REGARDLESS of what the
+    main thread is doing — including blocked on a multi-second VLM/API call
+    the synchronous checked_sleep/check tier can never interrupt. Fires log
+    reason=heartbeat; the thread is started before recorder start and joined
+    after recorder stop (no orphans across beats or retries)."""
+
+    def _watchdog(self, beat_id: str = "beat_thr", tick: float = 0.05,
+                  threshold: float = 0.15):
+        from compiler.choreo_runtime import ParkWatchdog
+
+        motions: List[str] = []
+        logs: List[str] = []
+        watchdog = ParkWatchdog(
+            beat_id,
+            motion=lambda reason: (motions.append(reason), True)[1],
+            log=logs.append,
+            heartbeat_tick=tick,
+            heartbeat_threshold=threshold,
+        )
+        return watchdog, motions, logs
+
+    def test_blocking_main_thread_never_parks_past_cap(self) -> None:
+        # The main thread is blocked ~1.2s with NO checked_sleep and NO
+        # check() — the exact shape of a mid-recording VLM call. Only the
+        # heartbeat thread can act.
+        watchdog, motions, logs = self._watchdog()
+        watchdog.start_heartbeat()
+        try:
+            time.sleep(1.2)  # main thread fully blocked
+        finally:
+            watchdog.stop_heartbeat()
+
+        heartbeat_fires = [f for f in watchdog.fires if f["reason"] == "heartbeat"]
+        self.assertGreaterEqual(len(heartbeat_fires), 2, "heartbeat must fire repeatedly while the main thread is blocked")
+        for fire in heartbeat_fires:
+            self.assertLessEqual(
+                fire["span"], 0.15 + 0.05 + 0.15,
+                f"heartbeat fire span {fire['span']:.2f}s exceeded "
+                "threshold + tick + motion margin",
+            )
+        self.assertTrue(all(m == "heartbeat" for m in motions))
+        self.assertTrue(
+            any("heartbeat-started" in ln for ln in logs),
+            "the heartbeat-started marker must print at thread start",
+        )
+        for ln in logs:
+            if "wsda-watchdog: fired" in ln:
+                self.assertIn("reason=heartbeat", ln)
+
+    def test_heartbeat_thread_lifecycle_no_orphans(self) -> None:
+        watchdog, _motions, _logs = self._watchdog(beat_id="beat_lc")
+        for _ in range(3):  # beat/retry cycles reuse the lifecycle
+            watchdog.start_heartbeat()
+            thread = watchdog._heartbeat_thread
+            self.assertIsNotNone(thread)
+            self.assertTrue(thread.is_alive())
+            watchdog.stop_heartbeat()
+            self.assertFalse(thread.is_alive(), "stop_heartbeat must join the thread")
+        # Idempotent: stopping a stopped heartbeat and starting twice are safe.
+        watchdog.stop_heartbeat()
+        watchdog.start_heartbeat()
+        first = watchdog._heartbeat_thread
+        watchdog.start_heartbeat()  # second start is a no-op
+        self.assertIs(watchdog._heartbeat_thread, first)
+        watchdog.stop_heartbeat()
+        self.assertFalse(first.is_alive())
+        # stop from inside the heartbeat thread itself must not self-join.
+        watchdog.start_heartbeat()
+        thread = watchdog._heartbeat_thread
+        watchdog.stop_heartbeat()
+        self.assertFalse(thread.is_alive())
+
+    def test_virtual_clock_blocked_main_simulation(self) -> None:
+        # Deterministic mirror of the dry-proof (g) replay: 10s block on a
+        # virtual clock with heartbeat_once interleaved every 0.5s.
+        from compiler.choreo_runtime import PARK_CAP, ParkWatchdog
+
+        clock = TestC39RuntimeWatchdog._FakeClock()
+        tracker = TestC39RuntimeWatchdog._Tracker(clock)
+        watchdog = ParkWatchdog(
+            "beat_vhb",
+            clock=clock.time,
+            sleeper=tracker.sleep,
+            motion=lambda reason: (tracker.motion(0.25), True)[1],
+            log=lambda msg: None,
+            heartbeat_tick=0.5,
+            heartbeat_threshold=3.0,
+        )
+        tracker.mode = "still"
+        for _ in range(20):  # 10s of block time, tick every 0.5s
+            tracker.sleep(0.5)
+            watchdog.heartbeat_once()
+        self.assertLessEqual(tracker.max_park, PARK_CAP + 1e-6)
+        fires = [f for f in watchdog.fires if f["reason"] == "heartbeat"]
+        self.assertGreaterEqual(len(fires), 2)
+        for fire in fires:
+            self.assertLessEqual(fire["span"], PARK_CAP + 1e-6)
+
+
+class TestC42InterferenceLock(unittest.TestCase):
+    """C42 STEP 1: the interference lock. click/type/drag/key primitives
+    hold the watchdog interference lock around their physical action; the
+    heartbeat acquires it non-blocking and must never move the cursor
+    mid-click or mid-keystroke."""
+
+    def _virtual_watchdog(self, threshold: float = 0.3):
+        from compiler.choreo_runtime import ParkWatchdog
+
+        clock = TestC39RuntimeWatchdog._FakeClock()
+        tracker = TestC39RuntimeWatchdog._Tracker(clock)
+        motions: List[str] = []
+        watchdog = ParkWatchdog(
+            "beat_il",
+            clock=clock.time,
+            sleeper=tracker.sleep,
+            motion=lambda reason: (motions.append(reason), tracker.motion(0.1), True)[2],
+            log=lambda msg: None,
+            heartbeat_tick=0.5,
+            heartbeat_threshold=threshold,
+        )
+        return watchdog, clock, tracker, motions
+
+    def test_no_heartbeat_motion_inside_primitive_lock_window(self) -> None:
+        watchdog, clock, tracker, motions = self._virtual_watchdog()
+        # A primitive holds the lock; still time passes with the park ABOVE
+        # the heartbeat threshold. Without the lock the heartbeat would fire.
+        tracker.mode = "still"
+        tracker.sleep(1.0)  # parked 1.0 > threshold 0.3
+        watchdog.interference_lock.acquire()
+        try:
+            self.assertFalse(watchdog.heartbeat_once())
+            self.assertEqual(motions, [])
+        finally:
+            watchdog.interference_lock.release()
+        # After the primitive completes (its own motion resets the clock) the
+        # heartbeat governs again.
+        tracker.mode = "motion"
+        tracker.motion(0.1)
+        watchdog.note_motion()
+        tracker.mode = "still"
+        tracker.sleep(0.4)
+        watchdog.heartbeat_once()
+        self.assertTrue(motions, "heartbeat must fire again once the lock is free")
+        self.assertTrue(all(m == "heartbeat" for m in motions))
+
+    def test_agent_click_primitive_holds_lock(self) -> None:
+        # The real choreography click path must execute pyautogui.click while
+        # holding the interference lock — the heartbeat cannot steal the
+        # cursor mid-click.
+        watchdog, _clock, _tracker, _motions = self._virtual_watchdog()
+        agent = VisionAgent()
+        agent.watchdog = watchdog
+        agent._move_to_target = lambda *a, **k: True  # skip the travel leg
+        observed: Dict[str, bool] = {}
+
+        def fake_click():
+            observed["lock_held"] = watchdog.interference_lock.locked()
+
+        with mock.patch.object(
+            vision_agent_module.pyautogui, "click", fake_click
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "moveTo", lambda *a, **k: None
+        ):
+            ok = agent.execute_choreography_item(
+                {"type": "click", "semantic": "sql-editor:body"}
+            )
+        self.assertTrue(ok)
+        self.assertTrue(observed.get("lock_held"), "click must run under the interference lock")
+
+    def test_agent_type_and_key_primitives_hold_lock(self) -> None:
+        watchdog, _clock, _tracker, _motions = self._virtual_watchdog()
+        agent = VisionAgent()
+        agent.watchdog = watchdog
+        agent._ensure_frontmost = lambda: None  # keep the test off the real screen
+        observed: Dict[str, bool] = {}
+
+        def fake_typewrite(text, interval=0.0):
+            observed["type_lock_held"] = watchdog.interference_lock.locked()
+
+        def fake_press(key):
+            observed["press_lock_held"] = watchdog.interference_lock.locked()
+
+        with mock.patch.object(
+            vision_agent_module.pyautogui, "typewrite", fake_typewrite
+        ), mock.patch.object(
+            vision_agent_module.pyautogui, "press", fake_press
+        ):
+            agent.type_text("SELECT 1")
+            agent.press_key("return")
+        self.assertTrue(observed.get("type_lock_held"), "typewrite must run under the interference lock")
+        self.assertTrue(observed.get("press_lock_held"), "press must run under the interference lock")
+
+    def test_heartbeat_skips_while_live_thread_ticks_during_typing(self) -> None:
+        # Live thread: while a long type action holds the lock, real heartbeat
+        # ticks must produce zero motions; after release the heartbeat fires.
+        from compiler.choreo_runtime import ParkWatchdog
+
+        motions: List[str] = []
+        watchdog = ParkWatchdog(
+            "beat_live",
+            motion=lambda reason: (motions.append(reason), True)[1],
+            log=lambda msg: None,
+            heartbeat_tick=0.02,
+            heartbeat_threshold=0.05,
+        )
+        agent = VisionAgent()
+        agent.watchdog = watchdog
+        agent._ensure_frontmost = lambda: None  # keep the test off the real screen
+        lock_observations: Dict[str, Any] = {}
+
+        def slow_type(text, interval=0.0):
+            # Runs INSIDE the primitive's interference-lock window: the
+            # heartbeat thread ticks ~25 times during this hold.
+            lock_observations["entry_motions"] = len(motions)
+            lock_observations["lock_held"] = watchdog.interference_lock.locked()
+            time.sleep(0.5)
+            lock_observations["exit_motions"] = len(motions)
+
+        watchdog.start_heartbeat()
+        try:
+            with mock.patch.object(
+                vision_agent_module.pyautogui, "typewrite", slow_type
+            ):
+                agent.type_text("SELECT 1")  # holds the lock 0.5s
+            self.assertTrue(lock_observations.get("lock_held"), "typewrite must run under the interference lock")
+            self.assertEqual(
+                lock_observations.get("entry_motions"),
+                lock_observations.get("exit_motions"),
+                "no heartbeat motion may interleave a typed action",
+            )
+            self.assertEqual(lock_observations.get("exit_motions"), 0)
+        finally:
+            watchdog.stop_heartbeat()
+        # Cursor idle past the threshold afterwards: the heartbeat governs.
+        time.sleep(0.3)
+        self.assertTrue(motions, "heartbeat must fire once the cursor is idle again")
+
+
+class TestC42RecordingWindowDeVLM(unittest.TestCase):
+    """C42 STEP 2: the recording window is de-VLM'd. Frontmost status reads
+    through NSWorkspace/AX (not the System Events osascript query that hung
+    seconds under SCK), modal/dropdown hygiene is an AX check (no VLM), and
+    every VLM call that must remain mid-recording logs the
+    wsda-vlm-mid-recording marker (covered by the heartbeat)."""
+
+    AUDIT = Path(__file__).resolve().parent / "vision_agent.py"
+    AX = Path(__file__).resolve().parent / "ax_pyobjc.py"
+
+    @staticmethod
+    def _function_body(source: str, name: str) -> str:
+        """Return the body of ``name`` (a method at class indent), spanning
+        single- or multi-line signatures, up to the next method/class. The
+        signature ends at the first line whose paren depth returns to zero
+        and which ends with ':'."""
+        anchor = f"\n    def {name}("
+        start = source.find(anchor)
+        assert start != -1, f"function {name} not found"
+        pos = start + 1
+        depth = 0
+        body_start = -1
+        while pos < len(source):
+            ch = source[pos]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch == "\n" and depth <= 0:
+                # signature must close with ':' at the end of its last line
+                line_end = pos
+                line_start = source.rfind("\n", 0, line_end - 1) + 1
+                if source[line_start:line_end].rstrip().endswith(":"):
+                    body_start = pos + 1
+                    break
+            pos += 1
+        assert body_start != -1, f"signature of {name} not terminated"
+        candidates = [
+            p
+            for marker in ("\n    def ", "\n    @", "\n\nclass ")
+            for p in [source.find(marker, body_start)]
+            if p != -1
+        ]
+        body_end = min(candidates) if candidates else len(source)
+        return source[body_start:body_end]
+
+    def test_frontmost_read_routes_through_ax(self) -> None:
+        source = self.AUDIT.read_text()
+        # Focus must resolve through the SCK-immune focused-element guard
+        # FIRST; the System Events frontmost query may only appear AFTER the
+        # `if self.recording:` early-out (it hangs under SCK — C21 — and the
+        # C41 per-beat app-activate park stretch came from it firing inside
+        # the recording window).
+        guard = self._function_body(source, "_target_has_focus")
+        ax_idx = guard.find("_focused_element_is_editor")
+        rec_idx = guard.find("if self.recording:")
+        se_idx = guard.find("_frontmost_app_name")
+        self.assertNotEqual(ax_idx, -1, "focused-element guard must be primary")
+        self.assertNotEqual(rec_idx, -1, "recording gate must exist")
+        self.assertNotEqual(se_idx, -1, "off-camera System Events fallback")
+        self.assertLess(ax_idx, rec_idx)
+        self.assertLess(rec_idx, se_idx)
+        ensure = self._function_body(source, "_ensure_frontmost")
+        self.assertIn("_target_has_focus", ensure)
+        # The modal/dropdown overlay check is deterministic AX (no VLM).
+        ax_source = self.AX.read_text()
+        self.assertIn("def transient_overlay_open", ax_source)
+
+    def test_modal_dropdown_assess_has_no_vlm(self) -> None:
+        source = self.AUDIT.read_text()
+        assess = self._function_body(source, "is_modal_or_dropdown_open")
+        self.assertNotIn("_call_vlm", assess, "hygiene assess must not call the VLM")
+        self.assertIn("transient_overlay_open", assess)
+        dismiss = self._function_body(source, "dismiss_transient_ui")
+        self.assertNotIn("_call_vlm", dismiss, "dismiss_transient_ui must be VLM-free")
+
+    def test_mid_recording_vlm_markers_present(self) -> None:
+        source = self.AUDIT.read_text()
+        for fn in (
+            "assess_screen_state",
+            "verify_state",
+            "_vlm_locate_point",
+            "ask_recovery",
+            "summarize_result_pane",
+            "emphasize_element",
+            "_read_status_error_text",
+        ):
+            body = self._function_body(source, fn)
+            self.assertIn("_log_mid_recording_vlm", body, f"{fn} lacks the mid-recording marker")
+        self.assertIn("wsda-vlm-mid-recording:", source)
+
+    def test_all_physical_input_sites_hold_interference_lock(self) -> None:
+        # Every pyautogui click/type/key/drag/scroll call site must sit in a
+        # function that routes through _input_exclusivity — the heartbeat
+        # can otherwise move the cursor mid-action. (moveTo alone is the
+        # heartbeat's own hover/drift class and is exempt.)
+        import re as _re
+
+        source = self.AUDIT.read_text()
+        physical = _re.compile(
+            r"pyautogui\.(click|doubleClick|typewrite|press|keyDown|keyUp|"
+            r"mouseDown|mouseUp|scroll|hotkey)\("
+        )
+        failures: List[str] = []
+        for m in physical.finditer(source):
+            line_no = source.count("\n", 0, m.start()) + 1
+            # enclosing function: nearest preceding '    def ' at class level
+            defs = [d for d in _re.finditer(r"\n    def ([\w]+)\(", source[: m.start()])]
+            owner = defs[-1].group(1) if defs else "<module>"
+            body = self._function_body(source, owner) if owner != "<module>" else ""
+            if "_input_exclusivity" not in body:
+                failures.append(f"line {line_no} ({owner}) lacks _input_exclusivity")
+        self.assertEqual(failures, [])
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -5371,6 +5731,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC41NoUngovernedSleeps))
     suite.addTests(loader.loadTestsFromTestCase(TestC41IntraActionWatchdog))
     suite.addTests(loader.loadTestsFromTestCase(TestC41NonInterferingMotion))
+    suite.addTests(loader.loadTestsFromTestCase(TestC42ThreadedHeartbeat))
+    suite.addTests(loader.loadTestsFromTestCase(TestC42InterferenceLock))
+    suite.addTests(loader.loadTestsFromTestCase(TestC42RecordingWindowDeVLM))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

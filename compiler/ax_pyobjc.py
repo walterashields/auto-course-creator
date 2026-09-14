@@ -185,7 +185,14 @@ def copy_attribute(element: Any, name: str) -> Any:
             _cf.CFArrayGetValueAtIndex(ptr, i)
             for i in range(_cf.CFArrayGetCount(ptr))
         ]
+    if ptr == _TRUE_PTR.value:
+        return True
+    if ptr == _FALSE_PTR.value:
+        return False
     return ptr
+
+
+_FALSE_PTR = ctypes.c_void_p.in_dll(_cf, "kCFBooleanFalse")
 
 
 def set_focused(element: Any) -> None:
@@ -293,6 +300,30 @@ def app_name_for_pid(pid: int) -> Optional[str]:
         if int(app.processIdentifier()) == int(pid):
             return app.localizedName()
     return None
+
+
+def transient_overlay_open(app_element: Any) -> bool:
+    """C42: deterministic replacement for the VLM modal/dropdown assess.
+    True when the app's FRONTMOST window is a modal dialog/sheet OR any of
+    the app's windows is an open dropdown menu or popover (AXMenu /
+    AXPopover window). No screenshot, no model call — the same transient UI
+    the hygiene path used to ask the VLM about."""
+    try:
+        windows = copy_attribute(app_element, "AXWindows") or []
+    except AxCallError:
+        return False
+    if not windows:
+        return False
+    if window_is_modal(windows[0]):
+        return True
+    for window in windows:
+        try:
+            role = copy_attribute(window, "AXRole")
+        except AxCallError:
+            continue
+        if role in ("AXMenu", "AXPopover"):
+            return True
+    return False
 
 
 # C22 traversal guards: DB Browser's tree is a few hundred nodes; these caps
