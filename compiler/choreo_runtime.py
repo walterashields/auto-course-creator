@@ -40,13 +40,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 # anywhere in a beat (the B3 detector samples at 1fps, so a 3.5s park
 # measures ~4-5s, safely under the 6.0s anti-stall gate).
 PARK_CAP = 3.5
-# C42 threaded heartbeat: the daemon tick interval (0.5-1.0s band) and the
-# park span at which the heartbeat tier breaks the park. Threshold + tick +
-# one motion lands at ~3.5s worst case, exactly at the cap: the heartbeat
-# governs multi-second main-thread blocks (VLM/API calls) the synchronous
-# checked_sleep/check tier can never interrupt.
-HEARTBEAT_TICK = 0.5
-HEARTBEAT_THRESHOLD = 3.0
+# C43 tick-jitter fix: worst-case measured span = threshold + one full tick
+# + scheduling jitter, and the logged span must stay <= 3.5s INCLUDING
+# motion-execution time. 2.75 + 0.25 + jitter lands at ~3.0-3.2s worst case,
+# safely under the 3.5s cap (C42's 3.0 + 0.5 pair measured a 4.04s breach).
+HEARTBEAT_TICK = 0.25
+HEARTBEAT_THRESHOLD = 2.75
 # C35 compression order (b): gesture travel may be sped up to 2x and no
 # further, so compressed motion stays deliberate.
 CHOREO_MAX_SPEED = 2.0

@@ -1787,6 +1787,46 @@ def _canonical_match_editor_content(
     return False, "canonical mismatch", diff
 
 
+def _write_status(line: str) -> None:
+    """C43: one-line status file so a reader can always tell what the run is
+    doing and how the last one ended. Best effort: never raises into the
+    pipeline."""
+    try:
+        path = Path("output") / "STATUS.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(line.rstrip("\n") + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _run_course_with_status(manifest: CourseManifest, **kwargs: Any) -> Dict[str, Any]:
+    """C43: run_course behind the status-file contract — STARTED is written
+    BEFORE the run begins and the terminal state (DONE with the final mp4
+    path, or ABORTED with the gate/value) is written when it ends, so a
+    completed pass can never leave a previous run's ABORTED text behind."""
+    import datetime
+
+    only_video = kwargs.get("only_video") or "all"
+    backend = os.environ.get("WSDA_CAPTURE_BACKEND", "sck")
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    _write_status(
+        f"STARTED: course={manifest.course_id} video={only_video} "
+        f"backend={backend} pid={os.getpid()} at {stamp}"
+    )
+    try:
+        results = run_course(manifest, **kwargs)
+    except Exception as exc:
+        _write_status(f"ABORTED: {str(exc)[:220]}")
+        raise
+    finals = [
+        str(vo.get("final_path"))
+        for vo in results.get("video_outputs", [])
+        if vo.get("final_path")
+    ]
+    _write_status(f"DONE: {'; '.join(finals) if finals else 'no video output'}")
+    return results
+
+
 def _write_attempt_report(
     manifest: CourseManifest,
     video_id: str,
@@ -1997,7 +2037,7 @@ def main() -> int:
     # C17: action timing pass — execute demo actions without recording and report
     # per-beat action_seconds. No iteration loop, no render gates.
     if args.dry_run_actions:
-        results = run_course(
+        results = _run_course_with_status(
             manifest,
             output_dir=args.output_dir,
             min_reliability=args.min_reliability,
@@ -2018,7 +2058,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             try:
-                results = run_course(
+                results = _run_course_with_status(
                     manifest,
                     output_dir=args.output_dir,
                     min_reliability=args.min_reliability,
@@ -2092,7 +2132,7 @@ def main() -> int:
         output_dir = args.output_dir
         if args.then_full_course:
             output_dir = "output/course_ch4_v5"
-        results = run_course(
+        results = _run_course_with_status(
             manifest,
             output_dir=output_dir,
             min_reliability=args.min_reliability,

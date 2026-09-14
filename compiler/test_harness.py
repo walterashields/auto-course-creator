@@ -3861,6 +3861,304 @@ class TestC42RecordingWindowDeVLM(unittest.TestCase):
         self.assertEqual(failures, [])
 
 
+class TestC43SpriteFollowsHeartbeat(unittest.TestCase):
+    """C43 STEP 1/2: the writer's cursor sprite must follow heartbeat-driven
+    motion. The C42 regression was NOT a cached position channel (the writer
+    reads live pyautogui.position per grab) — it was the out-and-back break
+    motion netting to zero displacement between the B3 gate's 1fps samples
+    (and a literal no-op when the target equaled the rest point). This test
+    runs the REAL _MssWindowRecorder writer loop with a mock grabber against
+    a virtual cursor channel driven ONLY by the real _watchdog_break_motion:
+    every fire must END at a rest point >= 40px from the previous rest, the
+    written frames' sprite centroids must track those rests, and the final
+    frame's sprite must sit at the final rest (persistent displacement)."""
+
+    def _sprite_centroid(self, frame_bgr: np.ndarray):
+        b = frame_bgr[:, :, 0].astype(int)
+        g = frame_bgr[:, :, 1].astype(int)
+        r = frame_bgr[:, :, 2].astype(int)
+        mask = (b > 200) & (g < 80) & (r > 200)
+        ys, xs = np.nonzero(mask)
+        if len(xs) < 8:
+            return None
+        return float(xs.mean()), float(ys.mean())
+
+    def test_heartbeat_motion_is_visible_in_written_frames(self) -> None:
+        from compiler.choreo_runtime import ParkWatchdog
+        from compiler.discovery import _MssWindowRecorder
+        from compiler.vision_agent import VisionAgent
+
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        # Virtual cursor channel: the ONLY position source. pyautogui.moveTo
+        # (the physical-move seam) sets it; the writer's cursor_fn reads it.
+        pos = {"x": 100.0, "y": 60.0}
+        moves: List[tuple] = []
+
+        def fake_move_to(x, y, duration=0.0, tween=None, **_kw):
+            moves.append((float(x), float(y)))
+            pos["x"], pos["y"] = float(x), float(y)
+
+        target_point = (500.0, 400.0)
+
+        agent = VisionAgent()
+        agent._resolve_watchdog_point = lambda name: target_point  # type: ignore[method-assign]
+
+        watchdog = ParkWatchdog(
+            "c43-test",
+            motion=lambda reason: agent._watchdog_break_motion(reason),
+        )
+        agent.watchdog = watchdog
+        watchdog.register_targets(["sql-editor:body"])
+
+        canvas = np.zeros((800, 1000, 4), np.uint8)
+        canvas[:, :, :3] = 200  # light gray background
+        rec = _MssWindowRecorder(
+            str(Path(tmp) / "c43_sprite.mp4"),
+            fps=10,
+            app_name="FakeApp",
+            grab_fn=lambda region: canvas.copy(),
+            cursor_fn=lambda: (pos["x"], pos["y"]),
+            bounds_fn=lambda: {"x": 0.0, "y": 0.0, "w": 1000.0, "h": 800.0},
+            logical_size_fn=lambda: (1000, 800),
+        )
+        rec._scale = 1.0
+        rec._max_ticks = 80
+
+        def dist(a, b) -> float:
+            return math.hypot(a[0] - b[0], a[1] - b[1])
+
+        rests: List[tuple] = []
+        with mock.patch("pyautogui.moveTo", side_effect=fake_move_to), mock.patch(
+            "pyautogui.position", side_effect=lambda: type("P", (), {"x": pos["x"], "y": pos["y"]})()
+        ), mock.patch("pyautogui.size", return_value=type("S", (), {"width": 1470, "height": 956})()):
+            rec.start()
+            try:
+                time.sleep(0.4)  # let the writer establish the start rest
+                # Fire 1: fresh rest -> hover to the registry target.
+                watchdog._fire("heartbeat", watchdog.parked())
+                rests.append((pos["x"], pos["y"]))
+                time.sleep(0.45)
+                # Fire 2: target == rest -> displaced rest-alternate.
+                watchdog._fire("heartbeat", watchdog.parked())
+                rests.append((pos["x"], pos["y"]))
+                time.sleep(0.45)
+                # Fire 3: target still == original -> alternate back.
+                watchdog._fire("heartbeat", watchdog.parked())
+                rests.append((pos["x"], pos["y"]))
+                time.sleep(0.45)
+                # Fire 4: no target -> relative drift, also must END displaced.
+                watchdog.register_targets([])
+                watchdog._fire("heartbeat", watchdog.parked())
+                rests.append((pos["x"], pos["y"]))
+                time.sleep(0.45)
+            finally:
+                rec.stop()
+
+        # (1) every fire ended >= 40px from the previous rest (persistent
+        # displacement — the C43 visibility contract).
+        for prev, cur in zip(rests, rests[1:]):
+            self.assertGreaterEqual(
+                dist(prev, cur),
+                40.0,
+                f"fire ended only {dist(prev, cur):.1f}px from the previous rest "
+                f"({prev} -> {cur}): B3's 1fps sampler would see frozen video",
+            )
+        self.assertEqual(rests[0], target_point, "first fire hovers to the target")
+
+        # (2) the written frames' sprite follows the rests: at least one
+        # frame per rest state and the final frame at the final rest.
+        cap = cv2.VideoCapture(str(rec.output_path))
+        centroids: List = []
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            centroids.append(self._sprite_centroid(frame))
+        cap.release()
+        seen = [c for c in centroids if c is not None]
+        self.assertGreaterEqual(len(seen), 8, "expected written frames with sprite")
+        for rest in rests:
+            self.assertTrue(
+                any(dist(c, rest) <= 3.0 for c in seen),
+                f"no written frame shows the sprite at rest {rest}",
+            )
+        final_rest = rests[-1]
+        self.assertLessEqual(
+            dist(seen[-1], final_rest),
+            3.0,
+            f"final written frame sprite {seen[-1]} is not at the final rest "
+            f"{final_rest} — displacement did not persist to the last frame",
+        )
+        # (3) the fire sequence really moved through the virtual channel.
+        self.assertGreaterEqual(len(moves), 4)
+
+
+class TestC43SinglePositionChannel(unittest.TestCase):
+    """C43 STEP 2 audit: there is exactly ONE cursor-position channel — the
+    physical OS cursor. The writer must read it LIVE at grab time
+    (pyautogui.position), and every mover (actions, choreography, heartbeat,
+    drift) must go through the physical pyautogui API so the live read sees
+    it. A cached pipeline-tracked position updated only by action wrappers
+    (the C42 root-cause hypothesis) must never be able to silently replace
+    the live read, and no agent-side bookkeeping may leak into the writer."""
+
+    DISCOVERY = Path(__file__).resolve().parent / "discovery.py"
+    AGENT = Path(__file__).resolve().parent / "vision_agent.py"
+
+    @staticmethod
+    def _mss_class_body(source: str) -> str:
+        """The full source span of ``class _MssWindowRecorder`` (to the next
+        top-level definition)."""
+        start = source.find("class _MssWindowRecorder")
+        assert start != -1, "_MssWindowRecorder class not found"
+        nxt = source.find("\nclass ", start + 1)
+        nxt_def = source.find("\ndef ", start + 1)
+        candidates = [p for p in (nxt, nxt_def) if p != -1]
+        return source[start: min(candidates) if candidates else len(source)]
+
+    def test_writer_reads_live_position_per_grab(self) -> None:
+        import re as _re
+
+        source = self.DISCOVERY.read_text()
+        mss_body = self._mss_class_body(source)
+        # The constructor's default cursor source must be the live read.
+        self.assertIn(
+            "cursor_fn or pyautogui.position",
+            mss_body,
+            "MSS writer default cursor source must be live pyautogui.position",
+        )
+        # Every grab must composite through _draw_cursor in the writer loop.
+        loop = TestC42RecordingWindowDeVLM._function_body(mss_body, "_writer_loop")
+        self.assertIn("self._draw_cursor(frame)", loop)
+        # All three sprite compositors in the file read pyautogui.position().
+        self.assertEqual(
+            source.count("cv2.circle(frame, (x, y), 5, (255, 0, 255), -1)"), 3
+        )
+        for m in _re.finditer(r"def _draw_cursor\(self[^)]*\):", source):
+            start = m.end()
+            nxt = source.find("\n    def ", start)
+            body = source[start: nxt if nxt != -1 else len(source)]
+            self.assertIn("pyautogui.position()", body)
+
+    def test_no_shadow_position_cache(self) -> None:
+        # The WRITER must never read agent bookkeeping or a cached position:
+        # the physical cursor is the single channel, read live per grab.
+        mss_body = self._mss_class_body(self.DISCOVERY.read_text())
+        self.assertNotIn(
+            "_last_rest_point", mss_body,
+            "the MSS writer must not read agent rest bookkeeping — a writer "
+            "side fork is what made heartbeat motion invisible in C42",
+        )
+        for banned in ("_cursor_cache", "_cached_cursor", "_pipeline_cursor"):
+            for name, src in (("discovery", self.DISCOVERY.read_text()), ("agent", self.AGENT.read_text())):
+                self.assertNotIn(banned, src, f"{name} carries shadow channel {banned}")
+
+    def test_every_mover_uses_the_physical_api(self) -> None:
+        import re
+
+        failures: List[str] = []
+        site_count = 0
+        for fname, path in (
+            ("discovery", self.DISCOVERY),
+            ("vision_agent", self.AGENT),
+        ):
+            src = path.read_text()
+            for m in re.finditer(r"\.(moveTo|moveRel|dragTo|dragRel)\(", src):
+                site_count += 1
+                prefix = src[max(0, m.start() - 12): m.start()]
+                if not prefix.endswith("pyautogui"):
+                    line_no = src.count("\n", 0, m.start()) + 1
+                    failures.append(f"{fname}.py:{line_no} moves the cursor outside pyautogui")
+        self.assertEqual(failures, [])
+        self.assertGreaterEqual(site_count, 5, "audit must enumerate real mover sites")
+
+
+class TestC43WatchdogSpanBound(unittest.TestCase):
+    """C43 STEP 3: with the shipped constants (tick 0.25s, threshold 2.75s)
+    the worst-case logged fire span — threshold + one full tick + scheduling
+    jitter, INCLUDING the motion-execution window — must stay <= 3.5s."""
+
+    def _step_clock(self) -> Any:
+        class Clock:
+            def __init__(self) -> None:
+                self.t = 1000.0
+
+            def time(self) -> float:
+                return self.t
+
+            def advance(self, dt: float) -> None:
+                self.t += dt
+
+        return Clock()
+
+    def _run_ticks(self, clock: Any, jitter_seq) -> List[float]:
+        from compiler.choreo_runtime import (
+            HEARTBEAT_THRESHOLD,
+            HEARTBEAT_TICK,
+            ParkWatchdog,
+        )
+
+        motion_clock_cost = 0.55  # the real fire's 0.25s glide + settle
+
+        def sim_motion(reason: str) -> bool:
+            clock.advance(motion_clock_cost)  # motion executes on the clock
+            return True
+
+        watchdog = ParkWatchdog(
+            "c43-span",
+            clock=clock.time,
+            sleeper=clock.advance,
+            motion=sim_motion,
+            heartbeat_tick=HEARTBEAT_TICK,
+            heartbeat_threshold=HEARTBEAT_THRESHOLD,
+        )
+        spans: List[float] = []
+        for i in range(200):  # ~50-60s of virtual still time
+            clock.advance(HEARTBEAT_TICK + next(jitter_seq))
+            if watchdog.heartbeat_once():
+                spans.append(watchdog.fires[-1]["span"])
+        return spans
+
+    def test_constants_locked(self) -> None:
+        from compiler.choreo_runtime import (
+            HEARTBEAT_THRESHOLD,
+            HEARTBEAT_TICK,
+            PARK_CAP,
+        )
+
+        self.assertEqual(HEARTBEAT_TICK, 0.25)
+        self.assertEqual(HEARTBEAT_THRESHOLD, 2.75)
+        self.assertEqual(PARK_CAP, 3.5)
+
+    def test_worst_case_span_within_cap_no_jitter(self) -> None:
+        from compiler.choreo_runtime import HEARTBEAT_TICK, PARK_CAP
+
+        clock = self._step_clock()
+        spans = self._run_ticks(clock, jitter_seq=iter([0.0] * 500))
+        self.assertGreaterEqual(len(spans), 5, "heartbeat must fire repeatedly")
+        # Exact-tick cadence: the park crosses 2.75 strictly after a tick, so
+        # detection lands one full tick later: span == threshold + tick.
+        self.assertLessEqual(max(spans), 2.75 + HEARTBEAT_TICK + 1e-6)
+        self.assertLessEqual(max(spans), PARK_CAP)
+
+    def test_jittered_ticks_stay_within_cap(self) -> None:
+        from compiler.choreo_runtime import PARK_CAP
+
+        # Deterministic pseudo-jitter up to 0.2s per tick (scheduling).
+        seq = ((i * 37 % 5) * 0.04 for i in range(1000))
+        clock = self._step_clock()
+        spans = self._run_ticks(clock, jitter_seq=seq)
+        self.assertGreaterEqual(len(spans), 5)
+        self.assertLessEqual(
+            max(spans),
+            PARK_CAP,
+            f"jittered worst-case span {max(spans):.2f}s exceeded the 3.5s cap "
+            "(threshold + tick + jitter INCLUDING motion-execution time)",
+        )
+
+
 class TestStageMatchesStory(unittest.TestCase):
     def test_stage_runs_prior_query_and_verifies(self) -> None:
         """Continuity stage-prep runs the prior query and VLM-verifies the screen."""
@@ -5734,6 +6032,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC42ThreadedHeartbeat))
     suite.addTests(loader.loadTestsFromTestCase(TestC42InterferenceLock))
     suite.addTests(loader.loadTestsFromTestCase(TestC42RecordingWindowDeVLM))
+    suite.addTests(loader.loadTestsFromTestCase(TestC43SpriteFollowsHeartbeat))
+    suite.addTests(loader.loadTestsFromTestCase(TestC43SinglePositionChannel))
+    suite.addTests(loader.loadTestsFromTestCase(TestC43WatchdogSpanBound))
     suite.addTests(loader.loadTestsFromTestCase(TestStageMatchesStory))
     suite.addTests(loader.loadTestsFromTestCase(TestEnvironmentProfile))
     suite.addTests(loader.loadTestsFromTestCase(TestCommentExecutionVerifier))

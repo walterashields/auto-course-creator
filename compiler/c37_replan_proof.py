@@ -61,6 +61,8 @@ import subprocess
 import sys
 
 from compiler.choreo_runtime import (
+    HEARTBEAT_THRESHOLD,
+    HEARTBEAT_TICK,
     PARK_CAP,
     ParkWatchdog,
     compress_plan_for_budget,
@@ -504,12 +506,13 @@ def _replay_monolithic_run_query(plan: list, last_item: dict) -> dict:
 
 
 def _replay_blocked_main_with_heartbeat(plan: list, last_item: dict) -> dict:
-    """C42 STEP 3: the main thread blocked 10s inside a simulated VLM/API
+    """C42 STEP 3, C43: the main thread blocked 10s inside a simulated VLM/API
     call — still time that NEVER routes through checked_sleep/check — while
-    the heartbeat tier ticks every 0.5s via heartbeat_once (the same method
-    the daemon thread loops). Two interference-lock windows (a click at
-    t=2.0s, a type at t=6.5s) model physical input mid-block: the heartbeat
-    must not move the cursor while a primitive holds the lock.
+    the heartbeat tier ticks at the production HEARTBEAT_TICK (0.25s) via
+    heartbeat_once (the same method the daemon thread loops). Two
+    interference-lock windows (a drag and a type) model physical input
+    mid-block: the heartbeat must not move the cursor while a primitive
+    holds the lock.
 
     Returns the report: max contiguous park (B3 semantics), every fire, every
     break-park motion with kind/target/whether it happened during a held
@@ -523,8 +526,11 @@ def _replay_blocked_main_with_heartbeat(plan: list, last_item: dict) -> dict:
         clock=clock.time,
         sleeper=tracker.sleep,
         log=lambda msg: print(msg, file=sys.stderr),
-        heartbeat_tick=0.5,
-        heartbeat_threshold=3.0,
+        # C43: the proof drives the PRODUCTION heartbeat constants (tick
+        # 0.25s, threshold 2.75s) so the worst-case measured span is proven
+        # against the shipped values, not a test-only pair.
+        heartbeat_tick=HEARTBEAT_TICK,
+        heartbeat_threshold=HEARTBEAT_THRESHOLD,
     )
     motions: list[dict] = []
     lock_windows: list[tuple] = []
@@ -566,42 +572,41 @@ def _replay_blocked_main_with_heartbeat(plan: list, last_item: dict) -> dict:
         fired = watchdog.heartbeat_once()
         lock_skips.append((round(clock.t, 6), round(span_before, 3), fired))
 
-    # Phase 1 (t=0 -> 3.5): plain still block time with the heartbeat ticking
-    # every 0.5s. The park crosses the cap and the HEARTBEAT tier breaks it
-    # at t=3.5 — the tier the synchronous watchdog could never provide while
-    # the main thread is blocked inside the API call.
-    while clock.t < 3.5:
+    # Phase 1 (t=0 -> 3.0): plain still block time with the heartbeat ticking
+    # every 0.25s. The park crosses the 2.75s threshold and the HEARTBEAT tier
+    # breaks it at t=3.0 — the tier the synchronous watchdog could never
+    # provide while the main thread is blocked inside the API call.
+    while clock.t < 3.0:
         tracker.mode = "still"
-        tracker.sleep(0.5)
+        tracker.sleep(HEARTBEAT_TICK)
         watchdog.heartbeat_once()
-    # Phase 2 (t=3.75 -> 7.25): the block continues; the park crosses the
-    # cap again and the heartbeat fires a second time at t=7.25.
-    while clock.t < 7.25:
+    # Phase 2 (t=3.25 -> 6.0): the block continues; the park crosses the
+    # threshold again and the heartbeat fires a second time at t=6.0.
+    while clock.t < 6.0:
         tracker.mode = "still"
-        tracker.sleep(0.5)
+        tracker.sleep(HEARTBEAT_TICK)
         watchdog.heartbeat_once()
-    # Phase 3 (t=7.5 -> 10.0): the remainder of the 10s block; the park
+    # Phase 3 (t=6.25 -> 10.0): the remainder of the 10s block; the park
     # stays under the threshold.
     while clock.t < 10.0:
         tracker.mode = "still"
-        tracker.sleep(0.5)
+        tracker.sleep(HEARTBEAT_TICK)
         watchdog.heartbeat_once()
     block_seconds = clock.t
     # Lock window A (drag primitive): the interference lock is held while
-    # the park crosses the threshold (3.0 at t=10.5 -> 3.5 at t=11.0). The
-    # heartbeat must skip every tick although parked > threshold; the drag
-    # leg itself is the motion that closes the park at exactly the cap.
+    # the park crosses the threshold (2.75 at t=12.75 -> 3.25 at t=13.25).
+    # The heartbeat must skip every tick although parked > threshold; the
+    # drag leg itself is the motion that closes the park past the cap.
     primitive_window["active"] = True
     with watchdog.interference_lock:
         lock_windows.append((round(clock.t, 6), "drag"))
         tracker.mode = "still"
-        tracker.sleep(0.25)
-        tracker.sleep(0.25)
-        locked_heartbeat_tick()  # parked 3.0 — at threshold, no fire
-        tracker.sleep(0.25)
-        locked_heartbeat_tick()  # parked 3.25 > threshold, lock held: skip
-        tracker.sleep(0.25)
-        locked_heartbeat_tick()  # parked 3.5 > threshold, lock held: skip
+        # Hold the lock while the park climbs past the threshold: several
+        # locked ticks above 2.75s must all skip (the drag leg, not the
+        # heartbeat, will close the park).
+        while watchdog.parked() < HEARTBEAT_THRESHOLD + 0.5:
+            tracker.sleep(0.25)
+            locked_heartbeat_tick()
         tracker.mode = "motion"
         tracker.motion(0.3)  # the drag leg lands
         watchdog.note_motion()
@@ -1156,7 +1161,9 @@ def _run_proof() -> None:
             hb_failures.append(
                 f"fire reason {fire['reason']!r} is not 'heartbeat'"
             )
-        if fire["span"] > PARK_CAP + 0.05:
+        # C43: the logged span must be <= 3.5s INCLUDING motion-execution
+        # time (threshold 2.75 + one 0.25s tick + jitter lands ~3.0-3.2s).
+        if fire["span"] > PARK_CAP:
             hb_failures.append(
                 f"heartbeat fire span {fire['span']:.2f}s > cap {PARK_CAP}s"
             )
@@ -1173,7 +1180,7 @@ def _run_proof() -> None:
         hb_failures.append(
             f"expected 2 interference-lock windows, got {hb_rep['lock_windows']}"
         )
-    exercised_skips = [s for s in hb_rep["lock_skips"] if s[1] > 3.0]
+    exercised_skips = [s for s in hb_rep["lock_skips"] if s[1] > HEARTBEAT_THRESHOLD]
     if len(exercised_skips) < 2:
         hb_failures.append(
             f"only {len(exercised_skips)} interference-lock skip exercised "

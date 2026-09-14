@@ -4347,13 +4347,55 @@ end tell
             return self.resolve_choreography_point(name)
         return self._resolve_choreography_target(name)
 
+    def _alternate_rest_point(
+        self, base: Tuple[float, float]
+    ) -> Tuple[float, float]:
+        """C43: a deterministic rest point at least MIN_GESTURE_SEPARATION_PX
+        from ``base`` AND from the previous rest point. Two candidates
+        straddle the base diagonally; the one farther from the current rest
+        wins, so consecutive near-identical fires alternate between two
+        visibly different rest states instead of returning to the same spot.
+        Clamped to the on-screen rect."""
+        try:
+            size = pyautogui.size()
+            screen = (float(size.width), float(size.height))
+        except Exception:
+            screen = (base[0] + 300.0, base[1] + 300.0)
+        margin = 10.0
+        candidates = (
+            (base[0] + 140.0, base[1] + 50.0),
+            (base[0] - 120.0, base[1] - 70.0),
+        )
+        clamped = tuple(
+            (
+                max(margin, min(cx, screen[0] - margin)),
+                max(margin, min(cy, screen[1] - margin)),
+            )
+            for cx, cy in candidates
+        )
+        last = self._last_rest_point
+        if last is None:
+            return clamped[0]
+        return max(clamped, key=lambda p: distance(p, last))
+
     def _watchdog_break_motion(self, reason: str) -> bool:
-        """C39 STEP 1: the watchdog's minimal visible motion. Preferred: a
-        fast hover to the current sentence's resolved target. When that
-        lands on (or within MIN_GESTURE_SEPARATION_PX of) the cursor's rest
-        point, or no target resolves: a short drift glide to the beat's
-        most-referenced alternative and back. When nothing resolves at all,
-        a small deterministic relative drift around the current point.
+        """C39 STEP 1, C43: the watchdog's minimal visible motion.
+
+        C43 visibility contract: every fire ENDS with the cursor at a point
+        at least MIN_GESTURE_SEPARATION_PX away from where the fire STARTED,
+        and the cursor rests there until the next motion. The B3 frozen gate
+        samples the final video at 1fps and compares sprite positions at
+        sample instants — an out-and-back glide nets to zero displacement
+        between samples (and is a literal no-op when the target equals the
+        rest point, since pyautogui.moveTo to the current position moves
+        nothing), so the gate read governed motion as frozen video (C42:
+        beat_008, 11.4s invisible). Persistent per-fire displacement is what
+        makes the governing motion visible to the gate.
+
+        Preferred: a fast hover to the current sentence's resolved target.
+        When that resolves onto (or within MIN_GESTURE_SEPARATION_PX of) the
+        cursor's rest point: a deterministic rest-alternate around the
+        target. When nothing resolves at all: a displaced relative drift.
 
         Deterministic — never a VLM call."""
         watchdog = self.watchdog
@@ -4382,32 +4424,35 @@ end tell
                         file=sys.stderr,
                     )
                     return True
-                if point is not None and rest is not None:
-                    # The alternative resolves but the cursor is already
-                    # there: glide to it and back — visible travel both ways.
-                    pyautogui.moveTo(
-                        point[0], point[1], duration=0.25, tween=pyautogui.easeInOutQuad
+                if point is not None:
+                    # C43: the target resolves onto the current rest. End the
+                    # fire at a displaced alternation point — never glide back
+                    # — so the sprite sits at a visibly different position at
+                    # the next 1fps sample.
+                    alt = self._alternate_rest_point(
+                        (float(point[0]), float(point[1]))
                     )
-                    # debounce: brief hold at the alternative before gliding back
-                    time.sleep(0.05)
                     pyautogui.moveTo(
-                        rest[0], rest[1], duration=0.25, tween=pyautogui.easeInOutQuad
+                        alt[0], alt[1], duration=0.25, tween=pyautogui.easeInOutQuad
                     )
+                    self._last_rest_point = alt
                     print(
-                        f"  [WATCHDOG] break-park drift glide -> {target[:60]} and back "
-                        f"({source}, reason={reason})",
+                        f"  [WATCHDOG] break-park rest-alternate -> {target[:60]} "
+                        f"@{alt[0]:.0f},{alt[1]:.0f} ({source}, reason={reason})",
                         file=sys.stderr,
                     )
                     return True
-            # Nothing resolved: small deterministic relative drift and back.
+            # Nothing resolved: deterministic displaced relative drift that
+            # ENDS away from the start point (C43: never out-and-back).
             pos = pyautogui.position()
-            x, y = float(pos.x), float(pos.y)
-            pyautogui.moveTo(x + 60.0, y + 20.0, duration=0.2, tween=pyautogui.easeInOutQuad)
-            # debounce: brief hold at the drift apex before gliding back
-            time.sleep(0.05)
-            pyautogui.moveTo(x, y, duration=0.2, tween=pyautogui.easeInOutQuad)
+            alt = self._alternate_rest_point((float(pos.x), float(pos.y)))
+            pyautogui.moveTo(
+                alt[0], alt[1], duration=0.25, tween=pyautogui.easeInOutQuad
+            )
+            self._last_rest_point = alt
             print(
-                f"  [WATCHDOG] break-park relative drift (reason={reason})",
+                f"  [WATCHDOG] break-park relative drift -> "
+                f"{alt[0]:.0f},{alt[1]:.0f} (reason={reason})",
                 file=sys.stderr,
             )
             return True
