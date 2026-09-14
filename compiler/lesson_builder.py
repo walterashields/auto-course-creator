@@ -67,6 +67,11 @@ VARIANCE_MARGIN_SECONDS = 4.0
 SIZING_TOLERANCE_SECONDS = 2.0
 ACTION_SECONDS_DIR_ENV = "WSDA_ACTION_SECONDS_DIR"
 
+# C45: script quality gate retries. On a hard failure the script is regenerated
+# with the gate's failure list, at most this many attempts per video; the video
+# aborts (before recording) if every attempt fails hard.
+SCRIPT_GATE_MAX_ATTEMPTS = 3
+
 _APP_FRIENDLY_NAMES = {
     "db_browser_sqlite": "DB Browser for SQLite",
     "metabase": "Metabase",
@@ -360,13 +365,15 @@ class LessonBuilder:
                 return False
         return True
 
-    def _enforce_sentence_integrity(self, beats: List[ScriptBeat]) -> None:
+    def _enforce_sentence_integrity(self, beats: List[ScriptBeat], fix_errors: Optional[List[str]] = None) -> None:
         """
         Rewrite any beat that fails the integrity gate.
 
         Rewriting must add whole sentences or call the LLM; truncating existing
         text is forbidden. After this method, every beat must end with terminal
-        punctuation and meet its per-kind minimum word count.
+        punctuation and meet its per-kind minimum word count. When the script
+        quality gate flagged earlier failures (C45 retry), the failure list is
+        shown to the LLM so it does not repeat them.
         """
         for beat in beats:
             original = beat.text.strip()
@@ -378,7 +385,7 @@ class LessonBuilder:
                 fixed += "."
             # If the deterministic completion still fails, ask the LLM to expand.
             if not self._beat_text_integrity_ok(fixed, beat.kind):
-                fixed = self._llm_complete_beat(beat, fixed)
+                fixed = self._llm_complete_beat(beat, fixed, fix_errors=fix_errors)
                 fixed = fixed.strip()
                 if fixed and not self._ends_with_terminal(fixed):
                     fixed += "."
@@ -410,7 +417,7 @@ class LessonBuilder:
             "state": "This sets up the next action clearly.",
             "explain": "This relationship is what makes the query useful.",
             "concept": "These two pieces work together to retrieve the right data.",
-            "demo": "The interface updates to show the change.",
+            "demo": "The new text appears in the editor as we type.",
             "validation": "This confirms the outcome matches our goal.",
             "close": "We are ready to apply this pattern in the next video.",
         }
@@ -484,7 +491,9 @@ class LessonBuilder:
 
         return text + "."
 
-    def _llm_complete_beat(self, beat: ScriptBeat, current: str) -> str:
+    def _llm_complete_beat(
+        self, beat: ScriptBeat, current: str, fix_errors: Optional[List[str]] = None
+    ) -> str:
         """Ask the LLM to expand a beat into a complete, minimum-length sentence."""
         min_words = self._min_words_for_kind(beat.kind)
         prompt = (
@@ -495,6 +504,12 @@ class LessonBuilder:
             "Current attempt: {current}\n\n"
             "Rewritten beat:"
         ).format(min_words=min_words, original=beat.text.strip(), current=current)
+        if fix_errors:
+            prompt += (
+                "\n\nThe script failed quality review for these reasons; "
+                "do not repeat them:\n"
+                + "\n".join(f"- {e}" for e in fix_errors)
+            )
         try:
             response = tracked_create(
                 self.client,
@@ -532,6 +547,29 @@ class LessonBuilder:
         except Exception as exc:
             print(f"Warning: could not read DB facts for {table_name}: {exc}", file=sys.stderr)
         return facts
+
+    @staticmethod
+    def _result_columns(video: Any, db_path: Optional[str]) -> List[str]:
+        """
+        Column headers a video's planned query returns (aliases included).
+
+        The choreographer plans gestures against these learner-visible headers,
+        so the script quality gate must resolve them too; without this, a
+        gesture at 'the Email Address column header' is flagged as a mismatch
+        even when the sentence names exactly that alias.
+        """
+        planned_queries = getattr(video, "planned_queries", None) or []
+        if not planned_queries or not db_path or not Path(db_path).exists():
+            return []
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.cursor()
+                cur.execute(planned_queries[0])
+                if cur.description:
+                    return [desc[0] for desc in cur.description]
+        except Exception as exc:
+            print(f"Warning: could not resolve result columns: {exc}", file=sys.stderr)
+        return []
 
     @staticmethod
     def _top_value(db_path: Optional[str], table_name: str, column: str, direction: str) -> str:
@@ -1080,9 +1118,17 @@ class LessonBuilder:
         if "execute sql" in lowered:
             targets.append("the Execute SQL tab")
 
-        # Column headers or columns under a table.
+        # Column headers or columns under a table. C45: match identifiers
+        # normalized on both sides so 'First Name' and 'FirstName' refer to
+        # the same column.
+        sent_norm = LessonBuilder._normalize_identifier(sentence)
         for col in columns:
-            if re.search(rf"\b{re.escape(col)}\b", sentence, re.IGNORECASE):
+            col_norm = LessonBuilder._normalize_identifier(col)
+            if not col_norm:
+                continue
+            if re.search(
+                rf"(?<![a-z0-9]){re.escape(col_norm)}(?![a-z0-9])", sent_norm
+            ):
                 if "header" in lowered or "column" in lowered:
                     targets.append(f"the {col} column header in the result pane")
                 else:
@@ -1125,6 +1171,38 @@ class LessonBuilder:
             targets.append("the finished SELECT statement in the SQL editor")
 
         return targets
+
+    # C45: broad rest anchors name a region, not specific content. A sentence's
+    # gestures may rest on them regardless of what else the sentence references;
+    # only gestures naming specific content can mismatch the sentence.
+    _GENERIC_REST_TARGETS = {
+        "the sql editor text area",
+        "the result pane showing query output",
+        "the finished select statement in the sql editor",
+    }
+
+    @staticmethod
+    def _normalize_identifier(text: str) -> str:
+        """
+        C45: normalize an identifier or phrase for comparison — split
+        camelCase/PascalCase boundaries (FirstName -> First Name), snake_case,
+        collapse whitespace, and lowercase. 'FirstName column' and
+        'the First Name column' compare equal after normalization.
+        """
+        text = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
+        text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+        text = text.replace("_", " ").replace("-", " ")
+        return re.sub(r"\s+", " ", text).strip().lower()
+
+    @staticmethod
+    def _reveal_tab_for_target(target: str) -> str:
+        """The tab/view that must be visible for ``target`` to be seen at all."""
+        lowered = target.lower()
+        if "database structure" in lowered or "column under" in lowered:
+            return "database_structure"
+        if "browse data" in lowered or "rows in the browse data grid" in lowered:
+            return "browse_data"
+        return "execute_sql"
 
     @staticmethod
     def _target_tab(target: str) -> str:
@@ -1583,7 +1661,18 @@ class LessonBuilder:
     def _choreography_matches_sentences(
         beat: ScriptBeat, columns: List[str], table: str
     ) -> List[str]:
-        """Return errors if any choreography gesture points at content the sentence does not name."""
+        """
+        Return errors if any choreography gesture points at content the sentence does not name.
+
+        C45: gestures are evaluated per sentence as a SET, not item by item.
+        Identifiers are normalized on both sides (FirstName == First Name), and
+        a tab-switch gesture required to reveal another element referenced by
+        the same sentence — a navigation enabler, e.g. clicking the Database
+        Structure tab so the FirstName column under Customer becomes visible —
+        is not a mismatch when a sibling gesture in the same sentence targets
+        the referenced element itself. Genuine misalignment (a gesture naming
+        an element the sentence does not reference) still fails.
+        """
         errors: List[str] = []
         if not beat.choreography or not beat.text:
             return errors
@@ -1591,55 +1680,78 @@ class LessonBuilder:
         if not sentences:
             sentences = [beat.text]
 
+        by_sentence: Dict[int, List[Dict[str, Any]]] = {}
         for item in beat.choreography:
-            item_type = item.get("type")
-            if item_type not in ("hover", "click"):
+            if item.get("type") not in ("hover", "click"):
                 continue
-            target = item.get("target", "")
             sidx = item.get("sentence_idx", 0)
             if sidx < 0 or sidx >= len(sentences):
                 continue
+            by_sentence.setdefault(sidx, []).append(item)
+
+        for sidx, items in sorted(by_sentence.items()):
             sentence = sentences[sidx]
             allowed = set(LessonBuilder._sentence_targets(sentence, columns, table))
             if not allowed:
                 # Sentence references nothing visual; anchor rests are allowed.
                 continue
 
-            target_tab = LessonBuilder._target_tab(target)
-            allowed_tabs = {LessonBuilder._target_tab(t) for t in allowed}
             allowed_lower = {t.lower() for t in allowed}
+            allowed_norm = {LessonBuilder._normalize_identifier(t) for t in allowed}
+            allowed_tabs = {LessonBuilder._target_tab(t) for t in allowed}
+            reveal_tabs = {LessonBuilder._reveal_tab_for_target(t) for t in allowed}
+            has_element_gesture = any(
+                LessonBuilder._normalize_identifier(it.get("target", "")) in allowed_norm
+                for it in items
+            )
 
-            # Tab switch check: a tab target is allowed only when the sentence
-            # explicitly references that view's content.
-            if "tab" in target.lower():
-                if target_tab == "browse_data":
-                    # Browse Data is a frequent false positive from the word "rows";
-                    # require an explicit reference.
-                    if (
-                        "browse data" not in sentence.lower()
-                        and "the browse data tab" not in allowed_lower
-                    ):
+            for item in items:
+                target = item.get("target", "")
+                target_norm = LessonBuilder._normalize_identifier(target)
+
+                # General target check: the target must be one the sentence names.
+                if target_norm in allowed_norm:
+                    continue
+
+                # Tab switch check: a tab target is allowed only when the sentence
+                # explicitly references that view's content, or when the switch is
+                # a navigation enabler for a referenced element the sentence's
+                # gesture set also targets.
+                if "tab" in target.lower():
+                    target_tab = LessonBuilder._target_tab(target)
+                    if target_tab == "browse_data":
+                        # Browse Data is a frequent false positive from the word "rows";
+                        # require an explicit reference.
+                        if (
+                            "browse data" not in sentence.lower()
+                            and "the browse data tab" not in allowed_lower
+                        ):
+                            errors.append(
+                                f"{beat.beat_id} sentence {sidx} switches to '{target}' "
+                                f"but sentence does not explicitly reference Browse Data"
+                            )
+                    elif target_tab in allowed_tabs:
+                        pass  # Tab switch is explicitly permitted by this sentence.
+                    elif has_element_gesture and target_tab in reveal_tabs:
+                        pass  # C45 navigation enabler.
+                    else:
                         errors.append(
                             f"{beat.beat_id} sentence {sidx} switches to '{target}' "
-                            f"but sentence does not explicitly reference Browse Data"
+                            f"but sentence references: {sorted(allowed)}"
                         )
-                        continue
-                elif target_tab not in allowed_tabs:
-                    errors.append(
-                        f"{beat.beat_id} sentence {sidx} switches to '{target}' "
-                        f"but sentence references: {sorted(allowed)}"
-                    )
                     continue
-                # Tab switch is explicitly permitted by this sentence.
-                continue
 
-            # Demo beats intentionally keep the cursor over editor anchors while
-            # typing, so only enforce tab-switch consistency for them.
-            if beat.kind == "demo":
-                continue
+                # Demo beats intentionally keep the cursor over editor anchors while
+                # typing, so only enforce tab-switch consistency for them.
+                if beat.kind == "demo":
+                    continue
 
-            # General target check: the target must be one the sentence names.
-            if target.lower() not in allowed_lower:
+                # C45: broad rest anchors (the editor area, the result pane, the
+                # finished statement) name a region rather than specific content,
+                # so resting on them never contradicts the sentence.
+                if target_norm in LessonBuilder._GENERIC_REST_TARGETS:
+                    continue
+
                 errors.append(
                     f"{beat.beat_id} sentence {sidx} gestures at '{target}' "
                     f"but sentence references: {sorted(allowed)}"
@@ -3438,10 +3550,50 @@ class LessonBuilder:
         """
         Generate a SQL Essentials-quality narration script for the video.
 
-        Known objectives are rendered deterministically from templates. Unknown
-        objectives fall back to an LLM prompt. The validator emits warnings for
-        most issues and only hard-fails on empty/missing beats. At most one
-        regeneration attempt is made; after that the best-effort script is used.
+        C45: when the script quality gate hard-fails, the script is regenerated
+        with the gate's failure list, at most SCRIPT_GATE_MAX_ATTEMPTS attempts
+        per video. If every attempt fails hard the video aborts here — before
+        any recording; recording itself remains one-shot and never sees a
+        gate-failed script.
+        """
+        gate_errors: List[str] = []
+        for attempt in range(1, SCRIPT_GATE_MAX_ATTEMPTS + 1):
+            beats, ok, errors, warnings = self._generate_script_once(
+                video, fix_errors=fix_errors, max_attempts=max_attempts, env_map=env_map
+            )
+            for warning in warnings:
+                print(f"Warning: {warning}", file=sys.stderr)
+            if ok:
+                if attempt > 1:
+                    print(
+                        f"wsda-script-retry: attempt={attempt - 1} failures=recovered",
+                        file=sys.stderr,
+                    )
+                return beats
+            gate_errors = errors
+            print(
+                f"wsda-script-retry: attempt={attempt} failures={len(errors)}",
+                file=sys.stderr,
+            )
+            for err in errors:
+                print(f"  - {err}", file=sys.stderr)
+            fix_errors = errors
+        raise RuntimeError(
+            f"Script quality gate failed for {video.video_id} "
+            f"after {SCRIPT_GATE_MAX_ATTEMPTS} attempts: {gate_errors}"
+        )
+
+    def _generate_script_once(
+        self,
+        video: Any,
+        fix_errors: Optional[List[str]] = None,
+        max_attempts: int = 1,
+        env_map: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[ScriptBeat], bool, List[str], List[str]]:
+        """
+        One script-generation attempt. Returns (beats, ok, errors, warnings):
+        the beats after all post-processing, plus the script quality gate's
+        verdict on them.
         """
         exercise = video.exercise_artifact or {}
         db_path = exercise.get("db_path")
@@ -3462,7 +3614,7 @@ class LessonBuilder:
         else:
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
-                return []
+                return [], False, ["ANTHROPIC_API_KEY not set; cannot generate script."], []
             # Ceiling: max_attempts (default 1) LLM script-generation attempts.
             for attempt in range(max_attempts):
                 prompt = self._build_script_prompt(video, fix_errors=fix_errors, env_map=env_map)
@@ -3494,7 +3646,7 @@ class LessonBuilder:
                     print(f"Warning: {warning}", file=sys.stderr)
                 if ok:
                     break
-                print(f"Script quality gate failed (attempt {attempt + 1}); regenerating.", file=sys.stderr)
+                print(f"Script generation gate failed (attempt {attempt + 1}); regenerating.", file=sys.stderr)
                 fix_errors = errors
 
         beats = self._validate_script_beats(beats, video)
@@ -3502,14 +3654,10 @@ class LessonBuilder:
         self._size_demo_narration(beats, video.video_id)
         beats = self._enforce_word_limits(beats, video)
         beats = self._merge_validation_echoes(beats)
-        self._enforce_sentence_integrity(beats)
+        self._enforce_sentence_integrity(beats, fix_errors=fix_errors)
         self._enforce_datum_uniqueness(beats)
         ok, errors, warnings = self.validate_script(beats, video)
-        for warning in warnings:
-            print(f"Warning: {warning}", file=sys.stderr)
-        if not ok:
-            print(f"Warning: returning script despite hard failures: {errors}", file=sys.stderr)
-        return beats
+        return beats, ok, errors, warnings
 
     @staticmethod
     def _parse_script_json(raw_text: str) -> List[Dict[str, Any]]:
@@ -3807,7 +3955,12 @@ Return ONLY a JSON array of beats like:
         db_path = exercise.get("db_path")
         table = exercise.get("table_name", "Orders")
         facts = self._db_facts(db_path, table)
-        columns = facts.get("columns", [])
+        columns = list(facts.get("columns", []))
+        # C45: include the result-header columns (aliases) the learner sees so
+        # the gate and the choreographer resolve the same identifiers.
+        for col in self._result_columns(video, db_path):
+            if col not in columns:
+                columns.append(col)
 
         # C13: every beat must have choreography to fill its narration duration.
         beats_without_choreography = [b.beat_id for b in beats if not b.choreography]

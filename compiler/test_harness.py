@@ -4867,6 +4867,251 @@ class TestTargetContentConsistency(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestC45CleanupPreserveList(unittest.TestCase):
+    """C45 STEP 1: cleanup wipes run artifacts but never approved backups."""
+
+    def test_cleanup_preserves_approved_keep_and_seed_db(self) -> None:
+        tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_cleanup_"))
+        try:
+            (tmpdir / "clip_001.mp4").write_text("run artifact", encoding="utf-8")
+            (tmpdir / "run.log").write_text("run artifact", encoding="utf-8")
+            shots = tmpdir / "screenshots"
+            shots.mkdir()
+            (shots / "frame_001.png").write_text("run artifact", encoding="utf-8")
+            (tmpdir / "seed.db").write_text("seed", encoding="utf-8")
+            (tmpdir / "video_1_1_C43_APPROVED.mp4").write_text("approved", encoding="utf-8")
+            (tmpdir / "notes.keep").write_text("keep", encoding="utf-8")
+
+            curriculum_module._cleanup_dir_contents(tmpdir)
+
+            remaining = {p.name for p in tmpdir.iterdir()}
+            self.assertEqual(
+                remaining,
+                {"seed.db", "video_1_1_C43_APPROVED.mp4", "notes.keep"},
+                "cleanup must delete run artifacts and preserve *_APPROVED.mp4, "
+                f"*.keep, and *.db; remaining={remaining}",
+            )
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_cleanup_never_touches_approved_artifacts_dir(self) -> None:
+        tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_cleanup_"))
+        try:
+            approved = tmpdir / "approved_artifacts"
+            approved.mkdir()
+            (approved / "video_1_1_final.mp4").write_text("approved", encoding="utf-8")
+            (tmpdir / "scratch.txt").write_text("run artifact", encoding="utf-8")
+
+            curriculum_module._cleanup_dir_contents(tmpdir)
+
+            self.assertTrue(
+                (approved / "video_1_1_final.mp4").exists(),
+                "cleanup must never descend into an approved_artifacts directory",
+            )
+            self.assertFalse((tmpdir / "scratch.txt").exists())
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_approved_artifacts_dir_created_on_demand(self) -> None:
+        tmpdir = Path(tempfile.mkdtemp(prefix="wsda_test_cleanup_"))
+        try:
+            path = curriculum_module._approved_artifacts_dir(str(tmpdir))
+            self.assertEqual(path, tmpdir / "approved_artifacts")
+            self.assertTrue(path.is_dir())
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class TestC45ScriptGateRetry(unittest.TestCase):
+    """C45 STEP 2: gate hard failure retries with feedback, aborts after 3."""
+
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def _mock_video(self):
+        class MockVideo:
+            video_id = "video_9_9"
+            title = "Retry Test"
+            learning_objective = "Test the retry loop."
+            discovery_objective = "Test"
+            application = "db_browser_sqlite"
+            format_tier = "short"
+            exercise_artifact = {}
+            planned_queries = []
+
+        return MockVideo()
+
+    @staticmethod
+    def _once(ok: bool, errors: List[str]):
+        """One scripted _generate_script_once result (beats, ok, errors, warnings)."""
+        return (["beat_stub"], ok, errors, [])
+
+    def test_aborts_after_bounded_retries(self) -> None:
+        video = self._mock_video()
+        failure = ["beat_001 contains banned filler phrase."]
+        err = io.StringIO()
+        with mock.patch.object(
+            LessonBuilder,
+            "_generate_script_once",
+            side_effect=lambda *a, **k: self._once(False, failure),
+        ) as once, contextlib.redirect_stderr(err):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.builder.generate_script(video)
+        self.assertEqual(
+            once.call_count,
+            3,
+            "script generation must be bounded at 3 gate attempts",
+        )
+        self.assertIn("after 3 attempts", str(ctx.exception))
+        log = err.getvalue()
+        for attempt in (1, 2, 3):
+            self.assertIn(f"wsda-script-retry: attempt={attempt} failures=", log)
+
+    def test_failure_list_feeds_back_to_next_attempt(self) -> None:
+        video = self._mock_video()
+        failure = ["beat_001 contains banned filler phrase."]
+        with mock.patch.object(
+            LessonBuilder,
+            "_generate_script_once",
+            side_effect=lambda *a, **k: self._once(False, failure),
+        ) as once, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(RuntimeError):
+                self.builder.generate_script(video)
+        self.assertEqual(once.call_count, 3)
+        # Attempt N+1 receives attempt N's failure list as fix_errors.
+        first_feedback = once.call_args_list[1].kwargs.get("fix_errors")
+        self.assertEqual(first_feedback, failure)
+        second_feedback = once.call_args_list[2].kwargs.get("fix_errors")
+        self.assertEqual(second_feedback, failure)
+
+    def test_recovers_when_a_retry_passes(self) -> None:
+        video = self._mock_video()
+        failure = ["beat_001 contains banned filler phrase."]
+        outcomes = [self._once(False, failure), self._once(True, [])]
+        err = io.StringIO()
+        with mock.patch.object(
+            LessonBuilder,
+            "_generate_script_once",
+            side_effect=lambda *a, **k: outcomes.pop(0),
+        ) as once, contextlib.redirect_stderr(err):
+            beats = self.builder.generate_script(video)
+        self.assertEqual(once.call_count, 2)
+        self.assertEqual(beats, ["beat_stub"])
+        log = err.getvalue()
+        self.assertIn("wsda-script-retry: attempt=1 failures=", log)
+        self.assertIn("wsda-script-retry: attempt=1 failures=recovered", log)
+
+
+class TestC45IdentifierNormalization(unittest.TestCase):
+    """C45 STEP 3a: gesture targets and sentence references compare normalized."""
+
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_normalizer_handles_camel_snake_case_whitespace(self) -> None:
+        n = LessonBuilder._normalize_identifier
+        self.assertEqual(n("FirstName"), "first name")
+        self.assertEqual(n("first_name"), "first name")
+        self.assertEqual(n("FIRST NAME"), "first name")
+        self.assertEqual(n("  the   FirstName\t column "), "the first name column")
+        self.assertEqual(n("CustomerId"), n("customer id"))
+        self.assertEqual(n("postal_code"), n("Postal Code"))
+
+    def test_pascal_reference_matches_spaced_gesture(self) -> None:
+        """Sentence names 'FirstName'; gesture says 'First Name' -> equal."""
+        beat = ScriptBeat(
+            beat_id="beat_001",
+            kind="validation",
+            text="We see the FirstName values for every customer now.",
+            action={"type": "verify", "detail": "columns visible"},
+            choreography=[
+                {"type": "hover", "target": "the First Name column under Customer", "sentence_idx": 0},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(beat, ["FirstName"], "Customer")
+        self.assertEqual(errors, [])
+
+    def test_spaced_reference_matches_pascal_gesture(self) -> None:
+        """Sentence names 'First Name'; gesture says 'FirstName' -> equal."""
+        beat = ScriptBeat(
+            beat_id="beat_001",
+            kind="validation",
+            text="We see the First Name values for every customer now.",
+            action={"type": "verify", "detail": "columns visible"},
+            choreography=[
+                {"type": "hover", "target": "the FirstName column under Customer", "sentence_idx": 0},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(beat, ["FirstName"], "Customer")
+        self.assertEqual(errors, [])
+
+
+class TestC45NavigationEnablerGestures(unittest.TestCase):
+    """C45 STEP 3b: sentence gesture sets forgive reveal-tabs, keep real teeth."""
+
+    def setUp(self) -> None:
+        self.builder = LessonBuilder()
+
+    def test_tab_enabler_forgiven_when_set_targets_element(self) -> None:
+        """beat_001 pattern: the Database Structure tab reveals the FirstName
+        column under Customer that the sibling gesture targets."""
+        beat = ScriptBeat(
+            beat_id="beat_001",
+            kind="opening",
+            text=(
+                "In this video, we will use the AS keyword for readable headers. "
+                "Last lesson we pulled the raw contact list; now we want friendly "
+                "labels like First Name instead of FirstName in the report."
+            ),
+            action={"type": "wait", "duration": 1.5},
+            choreography=[
+                {"type": "click", "target": "the Database Structure tab", "sentence_idx": 1},
+                {"type": "hover", "target": "the First Name column under Customer", "sentence_idx": 1},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(beat, ["FirstName"], "Customer")
+        self.assertEqual(errors, [])
+
+    def test_genuine_mismatch_still_fails(self) -> None:
+        """beat_009 pattern: gesture names Email while the sentence references Address."""
+        beat = ScriptBeat(
+            beat_id="beat_009",
+            kind="validation",
+            text="We see the Address column in the result pane.",
+            action={"type": "verify", "detail": "address visible"},
+            choreography=[
+                {"type": "hover", "target": "the Email column header in the result pane", "sentence_idx": 0},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(
+            beat, ["Email", "Address"], "Customer"
+        )
+        self.assertTrue(
+            any("the Email column header" in e for e in errors),
+            f"genuine Email/Address misalignment must still fail: {errors}",
+        )
+
+    def test_lone_unrelated_tab_switch_fails(self) -> None:
+        """A tab switch with no sibling gesture targeting the referenced element
+        is not a navigation enabler."""
+        beat = ScriptBeat(
+            beat_id="beat_002",
+            kind="validation",
+            text="We see the Address column in the result pane.",
+            action={"type": "verify", "detail": "address visible"},
+            choreography=[
+                {"type": "click", "target": "the Database Structure tab", "sentence_idx": 0},
+            ],
+        )
+        errors = self.builder._choreography_matches_sentences(
+            beat, ["Email", "Address"], "Customer"
+        )
+        self.assertTrue(
+            any("Database Structure tab" in e for e in errors),
+            f"unrelated tab switch must still fail: {errors}",
+        )
+
+
 class TestC33ModalDismissal(unittest.TestCase):
     """C33: stage prep dismisses frontmost modal dialogs before the
     editor-clean checkpoint; an undismissable modal halts the run."""
@@ -6049,6 +6294,10 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestAcceptanceGateAVSync))
     suite.addTests(loader.loadTestsFromTestCase(TestFillerBan))
     suite.addTests(loader.loadTestsFromTestCase(TestTargetContentConsistency))
+    suite.addTests(loader.loadTestsFromTestCase(TestC45CleanupPreserveList))
+    suite.addTests(loader.loadTestsFromTestCase(TestC45ScriptGateRetry))
+    suite.addTests(loader.loadTestsFromTestCase(TestC45IdentifierNormalization))
+    suite.addTests(loader.loadTestsFromTestCase(TestC45NavigationEnablerGestures))
     suite.addTests(loader.loadTestsFromTestCase(TestAttemptReportNamesFailingGate))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

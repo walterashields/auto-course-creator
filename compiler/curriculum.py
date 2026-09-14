@@ -850,15 +850,38 @@ def _verify_video_frames_show_app(
     return bad_timestamps
 
 
+# C45: approved/backup artifacts survive course-output cleanup anywhere these
+# patterns are encountered. Approved masters use the *_APPROVED.mp4 suffix;
+# *.keep files are explicit keep-markers; an approved_artifacts directory is
+# never descended into.
+_CLEANUP_PRESERVE_SUFFIXES = (".db", ".keep")
+_CLEANUP_PRESERVE_SUFFIX = "_APPROVED.mp4"
+_CLEANUP_PRESERVE_DIR_NAMES = {"approved_artifacts"}
+
+
+def _approved_artifacts_dir(output_root: str = "output") -> Path:
+    """Standard location for approved/backup artifacts, created on demand."""
+    path = Path(output_root) / "approved_artifacts"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _cleanup_dir_contents(directory: Path) -> None:
     """
-    Remove screenshots, videos, and temp files inside ``directory`` while
-    preserving SQLite seed databases (``.db`` files).
+    Remove run artifacts inside ``directory`` while preserving:
+      - SQLite seed databases (``.db`` files)
+      - approved masters (``*_APPROVED.mp4``) and keep-markers (``*.keep``)
+      - anything inside an ``approved_artifacts`` directory
     """
     if not directory.exists():
         return
     for item in directory.iterdir():
-        if item.is_file() and item.suffix.lower() == ".db":
+        if item.is_file() and (
+            item.suffix.lower() in _CLEANUP_PRESERVE_SUFFIXES
+            or item.name.endswith(_CLEANUP_PRESERVE_SUFFIX)
+        ):
+            continue
+        if item.is_dir() and item.name in _CLEANUP_PRESERVE_DIR_NAMES:
             continue
         try:
             if item.is_dir():
