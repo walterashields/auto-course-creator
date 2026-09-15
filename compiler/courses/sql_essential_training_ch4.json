@@ -560,7 +560,7 @@
         "description": "WSDA Music Customer table with FirstName, LastName, Email."
       },
       "format_tier": "long",
-      "estimated_duration_seconds": 0,
+      "estimated_duration_seconds": 177,
       "video_type": "demo",
       "new_capability": null,
       "key_concept": null,
@@ -574,13 +574,15 @@
       "preview_text_hint": null,
       "script_beats": [
         {
+          "measured_action_seconds": 0.002,
+          "kind": "opening",
           "beat_id": "beat_001",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
-          "planned_duration": 1.5,
           "text": "In this video, we will use the AS keyword to give our query results readable column headers that match management language. Last lesson we pulled the raw contact list; now we want friendly labels like First Name instead of FirstName in the report.",
+          "planned_duration": 1.5,
           "choreography": [
             {
               "type": "hover",
@@ -616,18 +618,536 @@
               "sentence_idx": 1,
               "semantic": "tab:execute-sql"
             }
-          ],
-          "kind": "opening",
-          "measured_action_seconds": 0.002
+          ]
         },
         {
+          "measured_action_seconds": 0.001,
+          "kind": "state",
           "beat_id": "beat_002",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
-          "planned_duration": 1.5,
           "text": "Our previous query sits above, commented out. The result pane below still displays the raw headers. We can add a new query below the history that replaces each raw column name with a friendly alias using the AS keyword.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 1,
+              "semantic": "results-grid:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 0.019,
+          "kind": "explain",
+          "beat_id": "beat_003",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The AS keyword gives a column an alias, which is the name that appears in the result header instead of the raw column name. Aliases make reports easier to read without changing the underlying data or the table structure. They are especially useful when managers want headers in plain English while the database keeps its original column names.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 0.004,
+          "kind": "state",
+          "beat_id": "beat_004",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Right now the result headers show the raw column names. After we run the aliased query, those same three headers will display with spaces, while the rows underneath stay exactly the same. This is a before-and-after change we can verify at a glance.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 7.295,
+          "kind": "demo",
+          "beat_id": "beat_005",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-09-14\nDescription: Readable customer contact headers\n*/"
+              }
+            ]
+          },
+          "text": "We type a comment header that explains this query makes the column headers readable. The new text appears in the editor as we type.",
+          "planned_duration": 10.600000000000001,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the comment block in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 6.598,
+          "kind": "demo",
+          "beat_id": "beat_006",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nSELECT\n  FirstName AS \"First Name\",\n  LastName AS \"Last Name\",\n  Email AS \"Email Address\""
+              }
+            ]
+          },
+          "text": "We type the SELECT clause with AS aliases so First Name, Last Name, and Email Address appear as headers.",
+          "planned_duration": 9.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SELECT clause in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:line:6"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 6.135,
+          "kind": "demo",
+          "beat_id": "beat_007",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nFROM Customer;"
+              }
+            ]
+          },
+          "text": "We type FROM Customer to keep the data source unchanged. The new text appears in the editor as we type.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the FROM clause in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:line:10"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 7.708,
+          "kind": "demo",
+          "beat_id": "beat_008",
+          "action": {
+            "type": "run_query"
+          },
+          "text": "We run the query and the result pane fills with the aliased list. The new text appears in the editor as we type.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SELECT clause in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:line:6"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the Execute SQL toolbar button",
+              "sentence_idx": 0,
+              "semantic": "toolbar:execute-sql"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 0.001,
+          "kind": "validation",
+          "beat_id": "beat_009",
+          "action": {
+            "type": "verify",
+            "detail": "the Execute SQL tab shows a populated results grid with aliased headers"
+          },
+          "text": "We see 60 rows returned with headers reading First Name, Last Name, and Email Address, confirming the AS aliases took effect and the report is readable for management.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the First Name column header in the result pane",
+              "sentence_idx": 0,
+              "semantic": "results-grid:header:First Name"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the Last Name column header in the result pane",
+              "sentence_idx": 0,
+              "semantic": "results-grid:header:Last Name"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the Email Address column header in the result pane",
+              "sentence_idx": 0,
+              "semantic": "results-grid:header:Email Address"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 0.001,
+          "kind": "explain",
+          "beat_id": "beat_010",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "The headers now show the friendly aliases, giving management the readable view they requested. The underlying values did not change; only the labels at the top of each column did. This means the same query can serve both technical users who know the original schema and managers who need a polished report for presentations.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 0.003,
+          "kind": "explain",
+          "beat_id": "beat_011",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "Aliases also help when a column name is long or unclear. A short, descriptive alias keeps the header visible in a narrow spreadsheet column and makes formulas easier to write. Using spaces in quoted aliases is common in reports, but the quotes are required so the database recognizes the whole multi-word header.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "measured_action_seconds": 0.004,
+          "kind": "close",
+          "beat_id": "beat_012",
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "text": "We have used the AS keyword to create readable headers for the customer contact list. The result now speaks management's language without changing any data. Next, we will sort that list alphabetically by last name using ORDER BY.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the finished SELECT statement in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:line:6"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the finished SELECT statement in the SQL editor",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:line:9"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            }
+          ]
+        }
+      ],
+      "planned_queries": [
+        "SELECT FirstName AS \"First Name\", LastName AS \"Last Name\", Email AS \"Email Address\" FROM Customer;"
+      ]
+    },
+    {
+      "video_id": "video_1_3",
+      "title": "Sorting Results with ORDER BY",
+      "learning_objective": "Sort query results by a specific column using ORDER BY",
+      "discovery_objective": "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName, run it with F5, and show the result pane sorted by LastName",
+      "application": "db_browser_sqlite",
+      "prerequisite_videos": [
+        "video_1_2"
+      ],
+      "exercise_artifact": {
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/data/wsda_music.db",
+        "table_name": "Customer",
+        "description": "WSDA Music Customer table with FirstName, LastName, Email."
+      },
+      "format_tier": "long",
+      "estimated_duration_seconds": 0,
+      "video_type": "demo",
+      "new_capability": null,
+      "key_concept": null,
+      "prerequisite_knowledge": null,
+      "running_example_usage": null,
+      "proof_numbers": null,
+      "estimated_word_count": 0,
+      "has_recap": false,
+      "has_preview": false,
+      "recap_text_hint": null,
+      "preview_text_hint": null,
+      "script_beats": [
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "planned_duration": 1.5,
+          "beat_id": "beat_001",
+          "text": "In this video, we will sort the customer contact list alphabetically by last name using the ORDER BY clause. Last lesson we made the headers readable with aliases; now we control the order in which the rows appear in the result pane.",
+          "kind": "opening",
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 1,
+              "semantic": "results-grid:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            }
+          ],
+          "measured_action_seconds": 0.001
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "planned_duration": 1.5,
+          "beat_id": "beat_002",
+          "text": "Our previous queries sit above, commented out. The result pane below shows the readable aliased headers with rows in their stored order. We can add ORDER BY to tell the database exactly how to arrange the returned rows.",
+          "kind": "state",
           "choreography": [
             {
               "type": "hover",
@@ -663,63 +1183,63 @@
               "sentence_idx": 2
             }
           ],
-          "kind": "state",
           "measured_action_seconds": 0.001
         },
         {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "planned_duration": 1.5,
           "beat_id": "beat_003",
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "planned_duration": 1.5,
-          "text": "The AS keyword gives a column an alias, which is the name that appears in the result header instead of the raw column name. Aliases make reports easier to read without changing the underlying data or the table structure. They are especially useful when managers want headers in plain English while the database keeps its original column names.",
-          "choreography": [
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 0,
-              "semantic": "sql-editor:comment-block:1-5"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 0
-            },
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 1,
-              "semantic": "sql-editor:body"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 1
-            },
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 2,
-              "semantic": "sql-editor:comment-block:1-5"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 2
-            }
-          ],
+          "text": "ORDER BY tells the database how to sort the returned rows. It does not change which rows are selected or the columns that come back; it only rearranges the order in which they appear. By default, text columns sort alphabetically from A to Z, which is what we want for a contact list that managers can scan quickly.",
           "kind": "explain",
-          "measured_action_seconds": 0.001
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ],
+          "measured_action_seconds": 0.004
         },
         {
-          "beat_id": "beat_004",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
           "planned_duration": 1.5,
-          "text": "Right now the result headers show the raw column names. After we run the aliased query, those same three headers will display with spaces, while the rows underneath stay exactly the same. This is a before-and-after change we can verify at a glance.",
+          "beat_id": "beat_004",
+          "text": "Right now the rows appear in the order they are stored in the table. After we add ORDER BY LastName, the same rows will reorder so the earliest last name appears at the top and the rest follow alphabetically down the result pane.",
+          "kind": "state",
           "choreography": [
             {
               "type": "hover",
@@ -733,10 +1253,16 @@
               "sentence_idx": 0
             },
             {
-              "type": "hover",
-              "target": "the SQL editor text area",
+              "type": "click",
+              "target": "the Database Structure tab",
               "sentence_idx": 1,
-              "semantic": "sql-editor:comment-block:1-5"
+              "semantic": "tab:database-structure"
+            },
+            {
+              "type": "hover",
+              "target": "the LastName column under Customer",
+              "sentence_idx": 1,
+              "semantic": "schema-columns:LastName"
             },
             {
               "type": "pause",
@@ -744,38 +1270,33 @@
               "sentence_idx": 1
             },
             {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 2,
-              "semantic": "sql-editor:body"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 2
+              "type": "click",
+              "target": "the Execute SQL tab",
+              "sentence_idx": 1,
+              "semantic": "tab:execute-sql"
             }
           ],
-          "kind": "state",
           "measured_action_seconds": 0.001
         },
         {
-          "beat_id": "beat_005",
           "action": {
             "type": "type_segments",
             "segments": [
               {
-                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-09-14\nDescription: Readable customer contact headers\n*/"
+                "text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-09-14\nDescription: Customer contact list sorted by last name\n*/"
               }
             ]
           },
-          "planned_duration": 10.600000000000001,
-          "text": "We type a comment header that explains this query makes the column headers readable. The new text appears in the editor as we type.",
+          "planned_duration": 11.4,
+          "beat_id": "beat_005",
+          "text": "We type a comment header that says this query sorts the contact list by last name.",
+          "kind": "demo",
           "choreography": [
             {
               "type": "hover",
               "target": "the SQL editor text area",
               "sentence_idx": 0,
-              "semantic": "sql-editor:comment-block:1-5"
+              "semantic": "sql-editor:body"
             },
             {
               "type": "pause",
@@ -786,7 +1307,7 @@
               "type": "hover",
               "target": "the comment block in the SQL editor",
               "sentence_idx": 0,
-              "semantic": "sql-editor:body"
+              "semantic": "sql-editor:comment-block:1-5"
             },
             {
               "type": "pause",
@@ -794,11 +1315,9 @@
               "sentence_idx": 0
             }
           ],
-          "kind": "demo",
-          "measured_action_seconds": 7.99
+          "measured_action_seconds": 6.377
         },
         {
-          "beat_id": "beat_006",
           "action": {
             "type": "type_segments",
             "segments": [
@@ -808,7 +1327,9 @@
             ]
           },
           "planned_duration": 9.5,
-          "text": "We type the SELECT clause with AS aliases so First Name, Last Name, and Email Address appear as headers.",
+          "beat_id": "beat_006",
+          "text": "We type the SELECT clause again with the friendly aliases so the headers stay readable.",
+          "kind": "demo",
           "choreography": [
             {
               "type": "hover",
@@ -821,22 +1342,21 @@
               "duration": 1.5,
               "sentence_idx": 0
             }
-          ],
-          "kind": "demo",
-          "measured_action_seconds": 7.202
+          ]
         },
         {
-          "beat_id": "beat_007",
           "action": {
             "type": "type_segments",
             "segments": [
               {
-                "text": "\nFROM Customer;"
+                "text": "\nFROM Customer"
               }
             ]
           },
-          "planned_duration": 2.0,
-          "text": "We type FROM Customer to keep the data source unchanged. The new text appears in the editor as we type.",
+          "planned_duration": 1.9000000000000001,
+          "beat_id": "beat_007",
+          "text": "We type FROM Customer so the data still comes from the same table. The new text appears in the editor as we type.",
+          "kind": "demo",
           "choreography": [
             {
               "type": "hover",
@@ -849,17 +1369,43 @@
               "duration": 1.5,
               "sentence_idx": 0
             }
-          ],
-          "kind": "demo",
-          "measured_action_seconds": 6.135
+          ]
         },
         {
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "\nORDER BY LastName;"
+              }
+            ]
+          },
+          "planned_duration": 2.4000000000000004,
           "beat_id": "beat_008",
+          "text": "We type ORDER BY LastName so the database returns the rows in A-to-Z order. The new text appears in the editor as we type.",
+          "kind": "demo",
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
+        },
+        {
           "action": {
             "type": "run_query"
           },
           "planned_duration": 2.0,
-          "text": "We run the query and the result pane fills with the aliased list. The new text appears in the editor as we type.",
+          "beat_id": "beat_009",
+          "text": "We run the query and the rows reorder alphabetically in the result pane. The new text appears in the editor as we type.",
+          "kind": "demo",
           "choreography": [
             {
               "type": "hover",
@@ -894,116 +1440,91 @@
               "duration": 1.5,
               "sentence_idx": 0
             }
-          ],
-          "kind": "demo",
-          "measured_action_seconds": 8.13
+          ]
         },
         {
-          "beat_id": "beat_009",
           "action": {
             "type": "verify",
-            "detail": "the Execute SQL tab shows a populated results grid with aliased headers"
+            "detail": "the result pane rows are sorted by LastName in ascending order"
           },
           "planned_duration": 2.0,
-          "text": "We see 60 rows returned with headers reading First Name, Last Name, and Email Address, confirming the AS aliases took effect and the report is readable for management.",
-          "choreography": [
-            {
-              "type": "hover",
-              "target": "the First Name column header in the result pane",
-              "sentence_idx": 0,
-              "semantic": "results-grid:header:First Name"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 0
-            },
-            {
-              "type": "hover",
-              "target": "the Last Name column header in the result pane",
-              "sentence_idx": 0,
-              "semantic": "results-grid:header:Last Name"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 0
-            },
-            {
-              "type": "hover",
-              "target": "the Email Address column header in the result pane",
-              "sentence_idx": 0,
-              "semantic": "results-grid:header:Email Address"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 0
-            }
-          ],
-          "kind": "validation",
-          "measured_action_seconds": 0.001
-        },
-        {
           "beat_id": "beat_010",
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "planned_duration": 1.5,
-          "text": "The headers now show the friendly aliases, giving management the readable view they requested. The underlying values did not change; only the labels at the top of each column did. This means the same query can serve both technical users who know the original schema and managers who need a polished report for presentations.",
+          "text": "We see 60 rows returned, with Almeida at the top of the Last Name column, confirming the ascending alphabetical sort is active and the rows follow A-to-Z order.",
+          "kind": "validation",
           "choreography": [
             {
               "type": "hover",
-              "target": "the SQL editor text area",
+              "target": "the result pane showing query output",
               "sentence_idx": 0,
-              "semantic": "sql-editor:body"
+              "semantic": "results-grid:body"
             },
             {
               "type": "pause",
               "duration": 1.5,
               "sentence_idx": 0
-            },
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 1,
-              "semantic": "sql-editor:comment-block:1-5"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 1
-            },
-            {
-              "type": "hover",
-              "target": "the SQL editor text area",
-              "sentence_idx": 2,
-              "semantic": "sql-editor:body"
-            },
-            {
-              "type": "pause",
-              "duration": 1.5,
-              "sentence_idx": 2
             }
-          ],
-          "kind": "explain",
-          "measured_action_seconds": 0.001
+          ]
         },
         {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "planned_duration": 1.5,
           "beat_id": "beat_011",
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "planned_duration": 1.5,
-          "text": "Aliases also help when a column name is long or unclear. A short, descriptive alias keeps the header visible in a narrow spreadsheet column and makes formulas easier to write. Using spaces in quoted aliases is common in reports, but the quotes are required so the database recognizes the whole multi-word header.",
+          "text": "The rows are now arranged alphabetically by last name, with the earliest last name at the top of the list. This makes it easy to scan contacts from A to Z when looking for a specific person. The selected columns and aliases did not change; only the sequence of rows changed to match the ORDER BY clause.",
+          "kind": "explain",
           "choreography": [
             {
               "type": "hover",
               "target": "the SQL editor text area",
               "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
               "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the ORDER BY clause in the SQL editor",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:line:11"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "action": {
+            "type": "wait",
+            "duration": 1.5
+          },
+          "planned_duration": 1.5,
+          "beat_id": "beat_012",
+          "text": "ORDER BY belongs at the end of the SELECT statement, after the column list and FROM clause. Putting it last is a readability convention that helps the team see the sort rule at a glance. It also makes the query easier to edit when we later add filtering or limiting clauses before the final sort.",
+          "kind": "explain",
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the FROM clause in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:line:8"
             },
             {
               "type": "pause",
@@ -1032,18 +1553,17 @@
               "duration": 1.5,
               "sentence_idx": 2
             }
-          ],
-          "kind": "explain",
-          "measured_action_seconds": 0.001
+          ]
         },
         {
-          "beat_id": "beat_012",
           "action": {
             "type": "wait",
             "duration": 1.5
           },
           "planned_duration": 1.5,
-          "text": "We have used the AS keyword to create readable headers for the customer contact list. The result now speaks management's language without changing any data. Next, we will sort that list alphabetically by last name using ORDER BY.",
+          "beat_id": "beat_013",
+          "text": "We have sorted the customer contact list alphabetically by last name with ORDER BY. The rows now appear in A-to-Z order, ready for scanning. Next, we will limit the result to a small preview using LIMIT.",
+          "kind": "close",
           "choreography": [
             {
               "type": "hover",
@@ -1066,44 +1586,21 @@
               "type": "pause",
               "duration": 1.5,
               "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the finished SELECT statement in the SQL editor",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:line:6"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
             }
-          ],
-          "kind": "close",
-          "measured_action_seconds": 0.001
+          ]
         }
       ],
-      "planned_queries": [
-        "SELECT FirstName AS \"First Name\", LastName AS \"Last Name\", Email AS \"Email Address\" FROM Customer;"
-      ]
-    },
-    {
-      "video_id": "video_1_3",
-      "title": "Sorting Results with ORDER BY",
-      "learning_objective": "Sort query results by a specific column using ORDER BY",
-      "discovery_objective": "Open the Execute SQL tab, type SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName, run it with F5, and show the result pane sorted by LastName",
-      "application": "db_browser_sqlite",
-      "prerequisite_videos": [
-        "video_1_2"
-      ],
-      "exercise_artifact": {
-        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/data/wsda_music.db",
-        "table_name": "Customer",
-        "description": "WSDA Music Customer table with FirstName, LastName, Email."
-      },
-      "format_tier": "long",
-      "estimated_duration_seconds": 0,
-      "video_type": "demo",
-      "new_capability": null,
-      "key_concept": null,
-      "prerequisite_knowledge": null,
-      "running_example_usage": null,
-      "proof_numbers": null,
-      "estimated_word_count": 0,
-      "has_recap": false,
-      "has_preview": false,
-      "recap_text_hint": null,
-      "preview_text_hint": null,
-      "script_beats": [],
       "planned_queries": [
         "SELECT FirstName, LastName, Email FROM Customer ORDER BY LastName;"
       ]
