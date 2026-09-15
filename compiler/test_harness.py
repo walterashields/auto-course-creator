@@ -5112,6 +5112,176 @@ class TestC45NavigationEnablerGestures(unittest.TestCase):
         )
 
 
+class TestC46BlankFreeComposition(unittest.TestCase):
+    """C46 STEP 1a: canonical composition is blank-free.
+
+    Segment templates may carry leading/trailing newlines, but the executor's
+    line-paste path drops blank lines — the expected canonical text must be
+    exactly what the executor types (compact SQL: comment block, then clauses,
+    no blank separators).
+    """
+
+    @staticmethod
+    def _video(video_id: str, beats: List[dict], prereq: Optional[List[str]] = None):
+        from compiler.curriculum import VideoManifest
+
+        return VideoManifest(
+            video_id=video_id,
+            title="Test",
+            learning_objective="Test",
+            discovery_objective="Test",
+            application="db_browser_sqlite",
+            format_tier="short",
+            prerequisite_videos=prereq or [],
+            script_beats=beats,
+        )
+
+    def _c46_segments(self) -> List[dict]:
+        return [
+            {
+                "action": {
+                    "type": "type_segments",
+                    "segments": [
+                        {"text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-09-14\nDescription: Readable customer contact headers\n*/"},
+                        {"text": '\nSELECT\n  FirstName AS "First Name",\n  LastName AS "Last Name",\n  Email AS "Email Address"'},
+                        {"text": "\nFROM Customer;"},
+                    ],
+                }
+            }
+        ]
+
+    def test_full_sql_drops_blank_lines_from_segment_boundaries(self):
+        video = self._video("video_1_2", self._c46_segments())
+        sql = curriculum_module._full_sql_from_video(video)
+        self.assertIsNotNone(sql)
+        for line in sql.split("\n"):
+            self.assertNotEqual(line.strip(), "", f"blank line survived: {sql!r}")
+        self.assertNotIn("\n\n", sql)
+        # Genuine content is preserved verbatim.
+        self.assertIn('Email AS "Email Address"', sql)
+        self.assertTrue(sql.rstrip().endswith("FROM Customer;"))
+
+    def test_expected_editor_content_joins_history_without_blanks(self):
+        from compiler.curriculum import CourseManifest
+
+        v1 = self._video(
+            "video_1_1",
+            [{"action": {"type": "type_block", "text": "SELECT\n  FirstName,\n  LastName,\n  Email\nFROM Customer;"}}],
+        )
+        v2 = self._video("video_1_2", self._c46_segments(), prereq=["video_1_1"])
+        manifest = CourseManifest(
+            course_id="test_course",
+            title="Test",
+            description="Test",
+            target_audience="Test",
+            videos=[v1, v2],
+        )
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        self.assertIsNotNone(expected)
+        for line in expected.split("\n"):
+            self.assertNotEqual(line.strip(), "", f"blank line in expected: {expected!r}")
+        # History comment block sits directly above the new query's block.
+        self.assertIn("*/\n/*", expected)
+        self.assertIn("FROM Customer;\n*/", expected)  # wrapped history closes
+        self.assertTrue(expected.rstrip().endswith("FROM Customer;"))
+
+
+class TestC46CanonicalComparisonNormalization(unittest.TestCase):
+    """C46 STEP 1b: the canonical gate ignores cosmetic whitespace only.
+
+    Blank-line placement and trailing whitespace can never mask or fake a
+    content verdict; tokens, identifiers, clause order, and comment content
+    still fail.
+    """
+
+    def _manifest(self) -> "curriculum_module.CourseManifest":
+        from compiler.curriculum import CourseManifest
+
+        video = TestC46BlankFreeComposition._video(
+            "video_1_2",
+            [
+                {
+                    "action": {
+                        "type": "type_segments",
+                        "segments": [
+                            {"text": "/*\nCreated By: WSDA Student\nCreate Date: 2026-09-14\nDescription: Readable customer contact headers\n*/"},
+                            {"text": '\nSELECT\n  FirstName AS "First Name",\n  Email AS "Email Address"'},
+                            {"text": "\nFROM Customer;"},
+                        ],
+                    }
+                }
+            ],
+        )
+        return CourseManifest(
+            course_id="test_course",
+            title="Test",
+            description="Test",
+            target_audience="Test",
+            videos=[video],
+        )
+
+    def test_blank_only_diff_passes(self):
+        manifest = self._manifest()
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        self.assertIsNotNone(expected)
+        # The executor's line-paste path drops blank lines; sprinkle blanks and
+        # trailing spaces into the actual content — the verdict must be a match.
+        actual = expected.replace("*/\nSELECT", "*/\n\n\nSELECT   \n\n")
+        ok, reason, diff = curriculum_module._canonical_match_editor_content(
+            manifest, "video_1_2", actual
+        )
+        self.assertTrue(ok, f"blank-only diff must pass: {reason}\n{diff}")
+
+    def test_trailing_whitespace_diff_passes(self):
+        manifest = self._manifest()
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        actual = "\n".join(line + "   " for line in expected.split("\n"))
+        ok, reason, _ = curriculum_module._canonical_match_editor_content(
+            manifest, "video_1_2", actual
+        )
+        self.assertTrue(ok, f"trailing-whitespace diff must pass: {reason}")
+
+    def test_token_diff_fails(self):
+        manifest = self._manifest()
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        actual = expected.replace("FROM Customer;", "FROM Customers;")
+        ok, reason, diff = curriculum_module._canonical_match_editor_content(
+            manifest, "video_1_2", actual
+        )
+        self.assertFalse(ok, "token diff must fail")
+        self.assertIsNotNone(diff)
+
+    def test_identifier_diff_fails(self):
+        manifest = self._manifest()
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        actual = expected.replace('Email AS "Email Address"', 'EmailAddress AS "Email Address"')
+        ok, reason, _ = curriculum_module._canonical_match_editor_content(
+            manifest, "video_1_2", actual
+        )
+        self.assertFalse(ok, "identifier diff must fail")
+
+    def test_clause_order_diff_fails(self):
+        manifest = self._manifest()
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        actual = expected.replace(
+            'SELECT\n  FirstName AS "First Name",\n  Email AS "Email Address"\nFROM Customer;',
+            'FROM Customer;\nSELECT\n  FirstName AS "First Name",\n  Email AS "Email Address"',
+        )
+        ok, reason, _ = curriculum_module._canonical_match_editor_content(
+            manifest, "video_1_2", actual
+        )
+        self.assertFalse(ok, "clause-order diff must fail")
+
+    def test_comment_content_diff_fails(self):
+        manifest = self._manifest()
+        expected = curriculum_module._expected_editor_content_for_video(manifest, "video_1_2")
+        actual = expected.replace("Description: Readable customer contact headers", "Description: Customer headers")
+        ok, reason, _ = curriculum_module._canonical_match_editor_content(
+            manifest, "video_1_2", actual
+        )
+        self.assertFalse(ok, "comment-content diff must fail")
+
+
 class TestC33ModalDismissal(unittest.TestCase):
     """C33: stage prep dismisses frontmost modal dialogs before the
     editor-clean checkpoint; an undismissable modal halts the run."""

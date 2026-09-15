@@ -441,7 +441,17 @@ def _full_sql_from_video(video: VideoManifest) -> Optional[str]:
                 parts.append(action.get("query") or "")
                 has_sql_action = True
         if has_sql_action:
-            return "\n".join(parts).strip() or None
+            composed = "\n".join(parts).strip()
+            if not composed:
+                return None
+            # C46: house style is compact SQL — comment block, then clauses,
+            # no blank separators. Segment templates may carry leading or
+            # trailing newlines; the executor's line-paste path drops blank
+            # lines, so the canonical composition must be blank-free to be
+            # exactly what the executor types.
+            return "\n".join(
+                line for line in composed.split("\n") if line.strip() != ""
+            )
     if video.planned_queries:
         return video.planned_queries[0]
     return None
@@ -519,7 +529,7 @@ def _derive_sql_history(
         if q:
             history_parts.append(_wrap_query_as_history(q))
 
-    history = "\n\n".join(history_parts) if history_parts else None
+    history = "\n".join(history_parts) if history_parts else None
     new_query = _full_sql_from_video(video)
     return history, new_query
 
@@ -532,9 +542,10 @@ def _expected_editor_content_for_video(
     Return the SQL text that should appear in the editor for ``video_id``.
 
     For videos with prerequisites, the expected editor content is the commented
-    continuity history (one blank line before the current block) followed by the
-    current video's full cumulative query. For the first video it is just the
-    current block. This mirrors what the discovery harness pastes before typing.
+    continuity history (C46: joined directly, no blank separator — the
+    executor's line-paste path drops blank lines, so the expected text must be
+    exactly what the executor types) followed by the current video's full
+    cumulative query. For the first video it is just the current block.
     """
     video = next((v for v in manifest.videos if v.video_id == video_id), None)
     if video is None:
@@ -543,7 +554,7 @@ def _expected_editor_content_for_video(
     if not new_query:
         return None
     if history:
-        return f"{history}\n\n{new_query}"
+        return f"{history}\n{new_query}"
     return new_query
 
 
@@ -1768,15 +1779,16 @@ def _canonical_normalize_editor_content(text: Optional[str]) -> str:
     Normalize editor text for canonical comparison.
 
     - rstrip each line
-    - drop trailing blank lines
-    - drop a single trailing newline
+    - drop blank-only lines (any run of blank lines collapses to nothing), so
+      cosmetic whitespace can never mask or fake a content verdict
+
+    C46: genuine diffs — tokens, identifiers, clause order, comment content —
+    still fail; only blank-line placement and trailing whitespace are ignored.
     """
     if text is None:
         text = ""
     lines = [line.rstrip() for line in text.split("\n")]
-    while lines and lines[-1] == "":
-        lines.pop()
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line.strip() != "")
 
 
 def _canonical_match_editor_content(
