@@ -21,6 +21,9 @@ audience, and depth, it:
   - `renderer.py` — video assembly, TTS muxing, highlights export.
   - `vision_agent.py` — VLM agent for dynamic UI interaction.
   - `narrator.py` — `ScriptBeat` data model and quality helpers.
+  - `transcript_loader.py` — C47 transcript-driven script ingestion (marked
+    beats under `compiler/transcripts/`; a video with `transcript_source`
+    skips LLM script generation; the LLM generator is retired for that video).
   - `graph_store.py`, `schemas.py`, `sql_formatter.py`, `tts.py` — supporting modules.
 - `LESSON_CONTENT_STANDARD.md` / `QA_CHECKLIST.md` — content and QA references.
 - `requirements.txt` — Python dependencies.
