@@ -411,6 +411,51 @@ def _default_profile() -> EnvironmentProfile:
     )
 
 
+def compose_insert_at_anchor(
+    prior: str,
+    segments: List[Any],
+    anchor: str,
+    position: str = "above",
+) -> str:
+    """
+    C47: model the editor buffer after an insert-at-line action.
+
+    Return the exact full-buffer text that results from inserting ``segments``
+    (one per line) immediately above (default) or below the line matching
+    ``anchor``. This is the content model shared by the executor's read-back
+    verification, the curriculum's canonical composition, and the tests — a
+    single definition of what insert-above/below means. When the anchor is not
+    found the segments append at the end of the buffer.
+    """
+    lines = prior.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    seg_lines = [
+        (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
+    ]
+    seg_lines = [line for line in seg_lines if line.strip() != ""]
+
+    anchor_stripped = anchor.strip().upper()
+    idx: Optional[int] = None
+    if anchor_stripped:
+        for i, line in enumerate(lines):
+            if line.strip().upper() == anchor_stripped:
+                idx = i
+                break
+        if idx is None:
+            for i, line in enumerate(lines):
+                if line.strip().upper().startswith(anchor_stripped):
+                    idx = i
+                    break
+    if idx is None:
+        at = len(lines)
+    elif position == "below":
+        at = idx + 1
+    else:
+        at = idx
+    return "\n".join(lines[:at] + seg_lines + lines[at:])
+
+
 @dataclass
 class VisionAgentResult:
     """Structured result from a VLM call."""
@@ -2629,6 +2674,138 @@ end tell
         print("  [TYPE BLOCK] paste verification FAILED", file=sys.stderr)
         return False
 
+    def _handle_intellisense_popup(self) -> bool:
+        """
+        C47: detect and dismiss DB Browser's autocomplete (IntelliSense) popup.
+
+        The check is the deterministic AX transient-overlay probe — no VLM call.
+        When the popup is open it is dismissed with a single governed Escape and
+        the outcome is logged (wsda-intellisense: popup-present|popup-absent) so
+        the report can state whether the popup ever appeared. Absence is a
+        logged fact, never faked.
+        """
+        try:
+            popup_open = self.is_modal_or_dropdown_open()
+        except Exception as exc:
+            print(
+                f"  [INTELLISENSE] overlay check failed (treating as absent): {exc}",
+                file=sys.stderr,
+            )
+            popup_open = False
+        if popup_open:
+            print("wsda-intellisense: popup-present; dismissing", file=sys.stderr)
+            self.press_key("esc")
+            return True
+        print("wsda-intellisense: popup-absent", file=sys.stderr)
+        return False
+
+    def insert_segments_at_anchor(
+        self,
+        segments: List[Any],
+        anchor: str,
+        position: str = "above",
+        prior_editor: Optional[str] = None,
+    ) -> bool:
+        """
+        C47: insert-at-line typing primitive.
+
+        Insert ``segments`` (one per line) immediately above or below the line
+        matching ``anchor`` — the reusable primitive behind FROM-first
+        composition (B07: FROM inserted below the comment block, no SELECT yet)
+        and SELECT-built-above-FROM (B09). Keystroke navigation
+        (ctrl+home / down / end) places the cursor; the sanctioned verified
+        clipboard line-paste inserts the text; Return opens each new line.
+        Nothing is appended blindly and select-all is never used.
+
+        During recording the composition is deterministic; the beat-end
+        canonical gate verifies the buffer. Outside recording a full-buffer
+        read-back verifies against ``compose_insert_at_anchor``'s model.
+        """
+        seg_lines = [
+            (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
+        ]
+        seg_lines = [line for line in seg_lines if line.strip() != ""]
+        if not seg_lines:
+            return True
+
+        self._ensure_frontmost()
+        if prior_editor is None:
+            prior_editor = self._read_editor_content() or ""
+        prior = self._strip_trailing_newline(prior_editor.replace("\r\n", "\n").replace("\r", "\n"))
+
+        # Locate the anchor line (same matching rule as the content model).
+        lines = prior.split("\n")
+        anchor_stripped = anchor.strip().upper()
+        anchor_idx: Optional[int] = None
+        if anchor_stripped:
+            for i, line in enumerate(lines):
+                if line.strip().upper() == anchor_stripped:
+                    anchor_idx = i
+                    break
+            if anchor_idx is None:
+                for i, line in enumerate(lines):
+                    if line.strip().upper().startswith(anchor_stripped):
+                        anchor_idx = i
+                        break
+
+        # Navigate: document start, then to the insertion edge — the START of
+        # the anchor line for above-inserts, the END of the anchor line for
+        # below-inserts.
+        self.press_key("ctrl+home")
+        if anchor_idx is None:
+            target_idx = max(0, len(lines) - 1)
+        elif position == "below":
+            target_idx = anchor_idx
+        else:
+            target_idx = max(0, anchor_idx)
+        for _ in range(target_idx):
+            self.press_key("down")
+        self.press_key("end" if position == "below" else "home")
+        if self.watchdog is not None:
+            self.watchdog.note_motion()
+
+        if position == "below":
+            # Open the line below the anchor with a pasted newline (a pasted
+            # newline never triggers auto-indent, unlike a typed Return), then
+            # fill it.
+            self._paste_line("")
+            for line in seg_lines[:-1]:
+                self._paste_line(line, add_newline=False)
+                self._paste_line("")
+            self._paste_line(seg_lines[-1], add_newline=False)
+        else:
+            # At the anchor line start, each paste carries its own trailing
+            # newline, so every segment lands on its own line above the anchor
+            # and the anchor is pushed down one line per paste. The cursor
+            # stays pinned at the anchor line start throughout.
+            for line in seg_lines:
+                self._paste_line(line, add_newline=True)
+
+        # The completion popup may have opened while a segment landed.
+        self._handle_intellisense_popup()
+
+        if not self.recording:
+            expected = compose_insert_at_anchor(prior, segments, anchor, position)
+            read_back = self._read_editor_content(focus=False) or ""
+            if self._canonical_compare(expected, read_back):
+                print(
+                    "  [INSERT] full-buffer canonical verification OK",
+                    file=sys.stderr,
+                )
+                return True
+            print(
+                "  [INSERT] full-buffer canonical mismatch; intended lines:\n"
+                + "\n".join(f"    {l!r}" for l in expected.split("\n")),
+                file=sys.stderr,
+            )
+            return False
+        print(
+            f"  [INSERT] deterministic insert complete "
+            f"({len(seg_lines)} line(s) {position} {anchor!r}; verified at beat end)",
+            file=sys.stderr,
+        )
+        return True
+
     def paste_history_block(self, text: str) -> bool:
         """
         Compose a commented SQL history into the editor with full read-back.
@@ -3534,6 +3711,17 @@ end tell
                     f"{app_name} is frontmost, the {editor} is focused, "
                     "and the cumulative SQL block appears exactly as authored."
                 )
+            elif action_type == "insert_segments":
+                intended_state = (
+                    f"{app_name} is frontmost, the {editor} is focused, "
+                    "and the inserted SQL lines appear in place with the rest "
+                    "of the statement exactly as authored."
+                )
+            elif action_type == "intellisense_review":
+                intended_state = (
+                    f"{app_name} is frontmost, the {editor} is focused and shows "
+                    "the FROM clause, and no completion popup or dropdown is open."
+                )
             elif action_type == "run_query":
                 intended_state = (
                     f"{app_name} is frontmost, the query has been executed, "
@@ -3641,6 +3829,48 @@ end tell
                 return False
             return self._assess_and_maybe_repair(
                 objective, intended_state, intended_text=text
+            )
+
+        if action_type == "insert_segments":
+            segments = beat_dict.get("segments") or []
+            anchor = beat_dict.get("anchor") or ""
+            position = beat_dict.get("position") or "above"
+            prior_editor = self._strip_trailing_newline(
+                self._read_editor_content() or ""
+            )
+            intended = compose_insert_at_anchor(prior_editor, segments, anchor, position)
+            self._last_executed_statement = intended
+            if not self.insert_segments_at_anchor(
+                segments, anchor, position, prior_editor=prior_editor
+            ):
+                return False
+            self._last_composed_text = intended
+            return self._assess_and_maybe_repair(
+                objective, intended_state, intended_text=intended
+            )
+
+        if action_type == "intellisense_review":
+            anchor = beat_dict.get("anchor") or beat_dict.get("detail") or ""
+            self._focus_editor()
+            popup_present = self._handle_intellisense_popup()
+            content = self._read_editor_content(focus=False) or ""
+            anchor_ok = True
+            if anchor.strip():
+                anchor_ok = anchor.strip().lower() in content.lower()
+            print(
+                f"  [INTELLISENSE] review outcome="
+                f"{'popup-handled' if popup_present else 'popup-absent'} "
+                f"anchor_ok={anchor_ok}",
+                file=sys.stderr,
+            )
+            if not anchor_ok:
+                print(
+                    f"  [INTELLISENSE] anchor {anchor!r} missing from editor; beat failed",
+                    file=sys.stderr,
+                )
+                return False
+            return self._assess_and_maybe_repair(
+                objective, intended_state, intended_text=content
             )
 
         if action_type == "run_query":

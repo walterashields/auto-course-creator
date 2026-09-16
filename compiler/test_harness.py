@@ -5282,6 +5282,245 @@ class TestC46CanonicalComparisonNormalization(unittest.TestCase):
         self.assertFalse(ok, "comment-content diff must fail")
 
 
+class TestC47TranscriptFidelity(unittest.TestCase):
+    """C47 STEP 1/3: transcript-driven beats are verbatim.
+
+    The concatenation of all beat texts must equal the transcript body under
+    whitespace/punctuation normalization — nothing added, nothing lost — and
+    the coverage gate is 100%.
+    """
+
+    SOURCE = "transcripts/video_1_1_04_04.txt"
+
+    def test_coverage_is_100_percent(self):
+        from compiler import transcript_loader
+
+        beats, coverage = transcript_loader.build_transcript_beats(self.SOURCE)
+        self.assertEqual(len(beats), 13)
+        self.assertGreaterEqual(coverage, 100.0, f"coverage drifted: {coverage}")
+
+    def test_concat_equals_transcript_body_normalized(self):
+        from compiler import transcript_loader
+
+        path = transcript_loader.resolve_transcript_path(self.SOURCE)
+        parsed = transcript_loader.parse_transcript(path.read_text(encoding="utf-8"))
+        beats, _ = transcript_loader.build_transcript_beats(self.SOURCE)
+        beat_concat = transcript_loader.normalize_fidelity_text(
+            " ".join(b.text for b in beats)
+        )
+        body = transcript_loader.normalize_fidelity_text(
+            transcript_loader.transcript_body_text(parsed)
+        )
+        self.assertEqual(beat_concat, body)
+
+    def test_no_additions_no_deletions(self):
+        from compiler import transcript_loader
+
+        beats, _ = transcript_loader.build_transcript_beats(self.SOURCE)
+        joined = " ".join(b.text for b in beats)
+        # Every non-marker line of the transcript file appears in the beats.
+        path = transcript_loader.resolve_transcript_path(self.SOURCE)
+        for line in path.read_text(encoding="utf-8").split("\n"):
+            line = line.strip()
+            if not line or line.startswith("[B"):
+                continue
+            self.assertIn(line, joined)
+        # And nothing was appended beyond the transcript: total token count
+        # matches the file body exactly.
+        body_tokens = sum(
+            len(line.split())
+            for line in path.read_text(encoding="utf-8").split("\n")
+            if line.strip() and not line.strip().startswith("[B")
+        )
+        self.assertEqual(len(joined.split()), body_tokens)
+
+    def test_tampered_beat_drops_coverage_below_100(self):
+        from compiler import transcript_loader
+
+        beats, coverage = transcript_loader.build_transcript_beats(self.SOURCE)
+        self.assertGreaterEqual(coverage, 100.0)
+        path = transcript_loader.resolve_transcript_path(self.SOURCE)
+        parsed = transcript_loader.parse_transcript(path.read_text(encoding="utf-8"))
+        tampered = [beats[0].text] + [beats[1].text[:-10]] + [
+            b.text for b in beats[2:]
+        ]
+        lowered = transcript_loader.fidelity_coverage(
+            tampered, transcript_loader.transcript_body_text(parsed)
+        )
+        self.assertLess(lowered, 100.0)
+
+    def test_marker_labels_map_to_expected_kinds(self):
+        from compiler import transcript_loader
+
+        beats, _ = transcript_loader.build_transcript_beats(self.SOURCE)
+        kinds = {b.beat_id: b.kind for b in beats}
+        self.assertEqual(kinds["B01"], "opening")
+        for marker in ("B04", "B05", "B06"):
+            self.assertEqual(kinds[marker], "explore")
+        self.assertEqual(kinds["B11"], "validation")
+        self.assertEqual(kinds["B12"], "concept")
+        self.assertEqual(kinds["B13"], "close")
+
+
+class TestC47InsertAbove(unittest.TestCase):
+    """C47 STEP 2: the insert-at-line primitive produces the exact canonical
+    final editor content — comment block, SELECT FirstName/LastName/Email,
+    FROM Customer; — blank-free, with SELECT physically above FROM."""
+
+    RECORD_DATE = "September 15, 2026"
+    CANONICAL = (
+        "/*\n"
+        "Created By: Walter Shields\n"
+        f"Create Date: {RECORD_DATE}\n"
+        "Description: customer first and last names with email addresses\n"
+        "*/\n"
+        "SELECT FirstName,\n"
+        "  LastName,\n"
+        "  Email\n"
+        "FROM Customer;"
+    )
+
+    def _beats(self):
+        from compiler import transcript_loader
+
+        beats, _ = transcript_loader.build_transcript_beats(
+            TestC47TranscriptFidelity.SOURCE, record_date=self.RECORD_DATE
+        )
+        return beats
+
+    def test_insert_below_comment_then_above_from(self):
+        from compiler.vision_agent import compose_insert_at_anchor
+
+        prior = (
+            "/*\n"
+            "Created By: Walter Shields\n"
+            f"Create Date: {self.RECORD_DATE}\n"
+            "Description: customer first and last names with email addresses\n"
+            "*/"
+        )
+        # B07: FROM FIRST — the FROM clause lands below the comment block with
+        # no SELECT in the buffer.
+        after_from = compose_insert_at_anchor(
+            prior, [{"text": "FROM Customer;"}], "*/", "below"
+        )
+        self.assertEqual(
+            after_from,
+            prior + "\nFROM Customer;",
+            "FROM must land on the line directly below the comment block",
+        )
+        self.assertNotIn("SELECT", after_from, "no SELECT may exist yet (FROM first)")
+        # B09: SELECT is inserted at the line above FROM, one column per line.
+        final = compose_insert_at_anchor(
+            after_from,
+            [{"text": "SELECT FirstName,"}, {"text": "  LastName,"}, {"text": "  Email"}],
+            "FROM Customer;",
+            "above",
+        )
+        self.assertEqual(final, self.CANONICAL)
+        select_line = final.split("\n").index("SELECT FirstName,")
+        from_line = final.split("\n").index("FROM Customer;")
+        self.assertLess(select_line, from_line, "SELECT must sit above FROM")
+
+    def test_full_sql_from_transcript_beats_is_exactly_canonical(self):
+        from compiler.curriculum import _full_sql_from_video, VideoManifest
+
+        beats = self._beats()
+        video = VideoManifest(
+            video_id="video_1_1",
+            title="Test",
+            learning_objective="Test",
+            discovery_objective="Test",
+            application="db_browser_sqlite",
+            format_tier="mid",
+            transcript_source=TestC47TranscriptFidelity.SOURCE,
+            script_beats=[
+                {
+                    k: v
+                    for k, v in {
+                        "beat_id": b.beat_id,
+                        "kind": b.kind,
+                        "text": b.text,
+                        "action": b.action,
+                    }.items()
+                    if v is not None
+                }
+                for b in beats
+            ],
+        )
+        sql = _full_sql_from_video(video)
+        self.assertEqual(sql, self.CANONICAL)
+        for line in sql.split("\n"):
+            self.assertNotEqual(line.strip(), "", "blank line in canonical SQL")
+
+    def test_insert_continues_description_line(self):
+        # B03's leading-space segment continues the "Description:" line rather
+        # than starting a new one.
+        self.assertIn(
+            "Description: customer first and last names with email addresses",
+            self.CANONICAL,
+        )
+        self.assertNotIn("Description:\n customer", self.CANONICAL)
+
+
+class TestC47TeachingOrderActions(unittest.TestCase):
+    """C47 STEP 2: teaching order = action order.
+
+    FROM-first (B07) precedes the SELECT insert-above (B09), and the
+    exploration beats (B04-B06) precede the composition beats (B07-B09).
+    """
+
+    def _beats(self):
+        from compiler import transcript_loader
+
+        beats, _ = transcript_loader.build_transcript_beats(
+            TestC47TranscriptFidelity.SOURCE,
+            record_date=TestC47InsertAbove.RECORD_DATE,
+        )
+        return beats
+
+    def test_from_first_precedes_select_above(self):
+        beats = self._beats()
+        order = [b.beat_id for b in beats]
+        self.assertLess(order.index("B07"), order.index("B09"))
+
+    def test_exploration_precedes_composition(self):
+        beats = self._beats()
+        order = [b.beat_id for b in beats]
+        last_explore = max(order.index(m) for m in ("B04", "B05", "B06"))
+        first_composition = min(order.index(m) for m in ("B07", "B08", "B09"))
+        self.assertLess(last_explore, first_composition)
+
+    def test_action_map_matches_directive(self):
+        beats = {b.beat_id: b for b in self._beats()}
+        b07 = beats["B07"].action
+        self.assertEqual(b07["type"], "insert_segments")
+        self.assertEqual(b07["anchor"], "*/")
+        self.assertEqual(b07["position"], "below")
+        b09 = beats["B09"].action
+        self.assertEqual(b09["type"], "insert_segments")
+        self.assertEqual(b09["anchor"], "FROM Customer;")
+        self.assertEqual(b09["position"], "above")
+        self.assertEqual(
+            [s["text"] for s in b09["segments"]],
+            ["SELECT FirstName,", "  LastName,", "  Email"],
+        )
+        self.assertEqual(beats["B08"].action["type"], "intellisense_review")
+        self.assertEqual(beats["B10"].action["type"], "run_query")
+        self.assertEqual(beats["B01"].action["type"], "click")
+
+    def test_editor_must_show_walter_shields(self):
+        # Screen/narration fidelity: the typed comment block names Walter
+        # Shields and carries the record date.
+        from compiler import transcript_loader
+
+        actions = transcript_loader.video_1_1_04_04_actions(
+            record_date=TestC47InsertAbove.RECORD_DATE
+        )
+        comment = actions["B02"]["segments"][0]["text"]
+        self.assertIn("Created By: Walter Shields", comment)
+        self.assertIn(f"Create Date: {TestC47InsertAbove.RECORD_DATE}", comment)
+
+
 class TestC33ModalDismissal(unittest.TestCase):
     """C33: stage prep dismisses frontmost modal dialogs before the
     editor-clean checkpoint; an undismissable modal halts the run."""
@@ -6468,6 +6707,9 @@ def main() -> int:
     suite.addTests(loader.loadTestsFromTestCase(TestC45ScriptGateRetry))
     suite.addTests(loader.loadTestsFromTestCase(TestC45IdentifierNormalization))
     suite.addTests(loader.loadTestsFromTestCase(TestC45NavigationEnablerGestures))
+    suite.addTests(loader.loadTestsFromTestCase(TestC47TranscriptFidelity))
+    suite.addTests(loader.loadTestsFromTestCase(TestC47InsertAbove))
+    suite.addTests(loader.loadTestsFromTestCase(TestC47TeachingOrderActions))
     suite.addTests(loader.loadTestsFromTestCase(TestAttemptReportNamesFailingGate))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

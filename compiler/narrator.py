@@ -30,7 +30,8 @@ class ScriptBeat:
 
     beat_id: str
     kind: Literal[
-        "opening", "concept", "demo", "validation", "close", "recap", "preview", "state"
+        "opening", "concept", "demo", "validation", "close", "recap", "preview", "state",
+        "explore",
     ]
     text: str
     # For "demo" beats: a recipe-compatible action specification.
@@ -70,6 +71,7 @@ MIN_WORDS = {
     "explain": 25,
     "concept": 25,
     "demo": 15,
+    "explore": 25,
     "validation": 15,
     "close": 30,
     "recap": 25,

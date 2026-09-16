@@ -1,140 +1,835 @@
 {
   "course_id": "sql_fundamentals_for_data_analysts",
   "title": "SQL Fundamentals for Data Analysts",
-  "description": "A short, hands-on introduction to exploring relational data using a database browser, built around a stable e-commerce Customers and Orders dataset.",
+  "description": "A short, hands-on introduction to composing SQL in a database browser, built around the WSDA Music database.",
   "target_audience": "Beginner data analysts with no SQL experience",
   "videos": [
     {
       "video_id": "video_1_1",
-      "title": "Browse the Customers Table",
-      "learning_objective": "Learner locates and opens a table in the database browser to see its raw rows and columns before any manipulation.",
-      "discovery_objective": "Open the Customers table in the Browse Data tab.",
+      "title": "Compose Your First SQL Statement",
+      "learning_objective": "Learner composes a first query from Walter's 04_04 lesson: comment block, FROM-first composition, SELECT built above FROM, and 60-row verification.",
+      "discovery_objective": "Compose and execute SELECT FirstName, LastName, Email FROM Customer; in DB Browser for SQLite and verify 60 rows returned.",
       "application": "db_browser_sqlite",
       "prerequisite_videos": [],
       "exercise_artifact": {
-        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/sql_fundamentals_for_data_analysts_seed.db",
-        "table_name": "Customers",
-        "description": "A small online store dataset with a Customers table linked to an Orders table via customer_id, spanning multiple countries and over a year of order dates."
+        "db_path": "/Users/waltershields/Desktop/wsda-compiler/compiler/discovery_output/wsda_music_seed.db",
+        "table_name": "Customer",
+        "description": "WSDA Music database with 11 tables; the Customer table holds 60 customers with FirstName, LastName, and Email."
       },
-      "format_tier": "short",
-      "estimated_duration_seconds": 16,
-      "video_type": "orientation",
-      "new_capability": "Open the Customers table in the Browse Data tab",
-      "key_concept": "Opening a table in a database browser lets you see the raw, unmodified rows and columns before any sorting or filtering is applied.",
+      "format_tier": "mid",
+      "estimated_duration_seconds": 330,
+      "video_type": "demo",
+      "new_capability": "Compose a first SQL statement: comment block, FROM-first, SELECT above FROM, execute and verify row count",
+      "key_concept": "Orient on the database structure, confirm the data in Browse Data, then write and run the query — the same verify process applies when AI generates SQL for you.",
       "prerequisite_knowledge": "None",
-      "running_example_usage": "The learner opens the Customers table and observes its 500 rows and 6 columns (customer_id, name, email, country, signup_date, status) in the Browse Data tab.",
-      "proof_numbers": "Customers table contains 500 rows and 6 columns.",
-      "estimated_word_count": 170,
+      "running_example_usage": "The learner opens a new SQL tab, writes a comment block, explores the Customer table in Database Structure and Browse Data, composes SELECT FirstName, LastName, Email FROM Customer;, executes it, and verifies 60 rows returned.",
+      "proof_numbers": "Customer table contains 60 rows; the composed query returns 60 rows.",
+      "estimated_word_count": 800,
       "has_recap": false,
       "has_preview": true,
       "recap_text_hint": null,
-      "preview_text_hint": "Next, you will sort the Orders table by order_date in ascending order using the column header.",
+      "preview_text_hint": "Up next: query composition best practices, so everything we write is clean, readable, and professional.",
       "script_beats": [
         {
-          "text": "In this video, we will open the Customers table in the Browse Data tab.",
-          "action": {
-            "type": "wait",
-            "duration": 1.5
-          },
-          "beat_id": "beat_001",
-          "kind": "opening"
-        },
-        {
-          "text": "We click the Browse Data tab.",
+          "kind": "opening",
+          "beat_id": "B01",
           "action": {
             "type": "click",
-            "detail": "Browse Data tab",
-            "target": {}
+            "detail": "the Open Tab button, the leftmost icon in the SQL tab area, which opens a brand new SQL tab"
           },
-          "beat_id": "beat_002_a",
-          "kind": "demo"
+          "text": "Okay, the moment we have been waiting for is here. We get to compose our first SQL statement. So let's do that by first starting up a brand new tab. This icon all the way to the left here is Open Tab. By clicking on that, that gives us a brand new tab. The existing tab that I just had is right here still, but I have now created a brand new tab and it gives us a clean space to start composing our query.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 3,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 4,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 4
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 5,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 5
+            }
+          ]
         },
         {
-          "text": "We select Customers.",
+          "kind": "demo",
+          "beat_id": "B02",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": "/*\nCreated By: Walter Shields\nCreate Date: September 15, 2026\nDescription:"
+              }
+            ]
+          },
+          "text": "Now, jumping right into our best practice, I'm going to start with a comment block — forward slash star, star forward slash — and in there I'm going to put my comments. Created By — and that will be me, Walter Shields. The create date — month, followed by day, followed by year. And last but not least, the Description. Let's think about what description we're going to put.",
+          "planned_duration": 7.9,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the comment block in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 3,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 4,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 4
+            }
+          ]
+        },
+        {
+          "kind": "demo",
+          "beat_id": "B03",
+          "action": {
+            "type": "type_segments",
+            "segments": [
+              {
+                "text": " customer first and last names with email addresses"
+              },
+              {
+                "text": "\n*/"
+              }
+            ]
+          },
+          "text": "Let's say that we were tasked by management of WSDA Music to give us a list of all the customers in the database, and they want their first names, their last names, and email addresses. So let's put that as a description — first and last names along with email addresses. So we want a query that's going to display all customer first and last names, together with their email addresses.",
+          "planned_duration": 5.9,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
+        },
+        {
+          "kind": "explore",
+          "beat_id": "B04",
           "action": {
             "type": "click",
-            "detail": "Customers table in the table dropdown",
-            "target": {}
+            "detail": "the Database Structure tab"
           },
-          "beat_id": "beat_002_b",
-          "kind": "demo"
+          "text": "How would we begin to compose such a query? Well, if we start by going to the Database Structure tab, we can remind ourselves about the entire structure of this database. And if we recall, there are eleven tables. One of the key things is to look at the names of these tables, which gives us some clue as to what might be housed within each. Our current request is asking for information from customers. And as we go down the line here, we do see that we have a Customer table.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "click",
+              "target": "the Database Structure tab",
+              "sentence_idx": 1,
+              "semantic": "tab:database-structure"
+            },
+            {
+              "type": "hover",
+              "target": "the Database Structure tab",
+              "sentence_idx": 1,
+              "semantic": "tab:database-structure"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "click",
+              "target": "the Execute SQL tab",
+              "sentence_idx": 5,
+              "semantic": "tab:execute-sql"
+            }
+          ]
         },
         {
-          "text": "We see 4 columns in the grid: customer_id, customer_name, country, signup_date.",
+          "kind": "explore",
+          "beat_id": "B05",
           "action": {
-            "type": "verify",
-            "detail": "the Customers table is visible with columns customer_id, customer_name, country, signup_date"
+            "type": "click",
+            "detail": "the expansion arrow next to the Customer table in the database structure tree"
           },
-          "beat_id": "beat_003",
-          "kind": "validation"
+          "text": "When we expand this particular table, we can now see the fields or columns that are part of this particular table. In examining it, we do see that we have a First Name, a Last Name, and if we go down here, an Email address. So by going to the Database Structure tab, we've now given ourselves the information to zero in and get this data.",
+          "planned_duration": 1.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            }
+          ]
         },
         {
-          "text": "We have opened the Customers table and confirmed its structure.",
+          "kind": "explore",
+          "beat_id": "B06",
           "action": {
-            "type": "wait",
-            "duration": 1.5
+            "type": "sequence",
+            "actions": [
+              {
+                "type": "click",
+                "detail": "the Browse Data tab"
+              },
+              {
+                "type": "click",
+                "detail": "the Customer table in the table selector drop-down on the Browse Data toolbar"
+              }
+            ]
           },
-          "beat_id": "beat_004",
-          "kind": "close"
+          "text": "Now if we go to the Browse Data tab and take a look at that same Customer table, we can see the contents of that particular table and confirm — yes, indeed, this does have what it says it houses: first names, last names, and email addresses.",
+          "planned_duration": 3.0,
+          "choreography": [
+            {
+              "type": "click",
+              "target": "the Browse Data tab",
+              "sentence_idx": 0,
+              "semantic": "tab:browse-data"
+            },
+            {
+              "type": "hover",
+              "target": "the Browse Data tab",
+              "sentence_idx": 0,
+              "semantic": "tab:browse-data"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the Customer rows in the Browse Data grid",
+              "sentence_idx": 0,
+              "semantic": "browse-grid:Customer"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "click",
+              "target": "the Execute SQL tab",
+              "sentence_idx": 0,
+              "semantic": "tab:execute-sql"
+            }
+          ]
+        },
+        {
+          "kind": "demo",
+          "beat_id": "B07",
+          "action": {
+            "type": "insert_segments",
+            "anchor": "*/",
+            "position": "below",
+            "segments": [
+              {
+                "text": "FROM Customer;"
+              }
+            ]
+          },
+          "text": "So how would we now compose a SQL statement that's going to give us this result? Let's go below our comment and start with the keyword FROM. We've just confirmed that the Customer table is the table that houses the information we're after. Now I'm going to pause here and take a look at this popup that you've probably noticed as we were typing.",
+          "planned_duration": 2.6799999999999997,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 3,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            }
+          ]
+        },
+        {
+          "kind": "demo",
+          "beat_id": "B08",
+          "action": {
+            "type": "intellisense_review",
+            "anchor": "FROM Customer;"
+          },
+          "text": "This is referred to as IntelliSense, and it gives us the option to not type as much. It's the job of IntelliSense to guess what we're typing — with the aim of saving us some typing time. We're after the Customer table, which is denoted here by this symbol. The other option is Customer ID, which is actually a field within the Customer table, but in the FROM clause we want to specify the table. So this effectively is saying — go to the Customer table. Now, inside the Customer table we have all of these choices that we can include in our query result.",
+          "planned_duration": 2.5,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 3,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 4,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 4
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 5,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 5
+            }
+          ]
+        },
+        {
+          "kind": "demo",
+          "beat_id": "B09",
+          "action": {
+            "type": "insert_segments",
+            "anchor": "FROM Customer;",
+            "position": "above",
+            "segments": [
+              {
+                "text": "SELECT FirstName,"
+              },
+              {
+                "text": "  LastName,"
+              },
+              {
+                "text": "  Email"
+              }
+            ]
+          },
+          "text": "Back to our Execute SQL tab. We want to start above that FROM clause with the keyword SELECT. Under SELECT, we can now select the columns or fields that we're interested in. Our request is asking for First Name — and there it is. Because another column is going to be included in our result, I separate column names with a comma. I go down to the second line and put Last Name. Finally, I want to see email addresses, so I repeat the process, add a comma, and add Email.",
+          "planned_duration": 5.2,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the Execute SQL tab",
+              "sentence_idx": 0,
+              "semantic": "tab:execute-sql"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 3,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 4,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 4
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 5,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 5
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 6,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 6
+            }
+          ]
+        },
+        {
+          "kind": "demo",
+          "beat_id": "B10",
+          "action": {
+            "type": "run_query",
+            "statement": "SELECT FirstName,\n  LastName,\n  Email\nFROM Customer;"
+          },
+          "text": "So with this done, I have effectively built a basic SQL statement and it is now ready to be run or executed. I go up here, select Execute All, and we have results down here in our Results pane.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the Execute SQL toolbar button",
+              "sentence_idx": 0,
+              "semantic": "toolbar:execute-sql"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            }
+          ]
+        },
+        {
+          "kind": "validation",
+          "beat_id": "B11",
+          "action": {
+            "type": "summarize_result_pane"
+          },
+          "text": "Our Results pane is now populated with the result of our constructed SQL statement — and it gives us exactly what we were tasked with: first name, last name, and email address. Down here in the Messages pane we have some important information as well. We can tell that we have 60 rows returned — 60 customers. We can tell the time it took for that result to be generated. And we have a repeat of the SQL statement we composed.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 0,
+              "semantic": "results-grid:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 1,
+              "semantic": "results-grid:header"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 2,
+              "semantic": "results-grid:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 3,
+              "semantic": "results-grid:header"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            },
+            {
+              "type": "hover",
+              "target": "the result pane showing query output",
+              "sentence_idx": 4,
+              "semantic": "results-grid:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 4
+            }
+          ]
+        },
+        {
+          "kind": "concept",
+          "beat_id": "B12",
+          "text": "Now — here's what I want you to notice. We started by understanding the database structure, confirmed the data in Browse Data, then wrote and ran the query ourselves. That exact process — orient, confirm, execute, verify — is the same process you apply when AI generates a query for you. You don't just run it. You check it the same way we just did right here.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 3,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 3
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 4,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 4
+            }
+          ]
+        },
+        {
+          "kind": "close",
+          "beat_id": "B13",
+          "text": "Together we have just done our very first SQL statement, gotten a result, and this is something to be very, very proud of. Well done. Up next — query composition best practices, so we can make sure everything we write is clean, readable, and professional.",
+          "planned_duration": 2.0,
+          "choreography": [
+            {
+              "type": "hover",
+              "target": "the finished SELECT statement in the SQL editor",
+              "sentence_idx": 0,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 0
+            },
+            {
+              "type": "hover",
+              "target": "the finished SELECT statement in the SQL editor",
+              "sentence_idx": 1,
+              "semantic": "sql-editor:body"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 1
+            },
+            {
+              "type": "hover",
+              "target": "the SQL editor text area",
+              "sentence_idx": 2,
+              "semantic": "sql-editor:comment-block:1-5"
+            },
+            {
+              "type": "pause",
+              "duration": 1.5,
+              "sentence_idx": 2
+            }
+          ]
         }
-      ]
+      ],
+      "planned_queries": [],
+      "transcript_source": "transcripts/video_1_1_04_04.txt"
     }
   ],
   "running_example": {
-    "name": "E-commerce Orders and Customers",
-    "description": "A small online store dataset with a Customers table linked to an Orders table via customer_id, spanning multiple countries and over a year of order dates.",
+    "name": "WSDA Music",
+    "description": "WSDA Music database with 11 tables, including a Customer table with 60 customers (FirstName, LastName, Email).",
     "tables": [
       {
-        "name": "Customers",
+        "name": "Customer",
         "columns": [
           {
-            "name": "customer_id",
+            "name": "CustomerID",
             "type": "INTEGER"
           },
           {
-            "name": "customer_name",
+            "name": "FirstName",
             "type": "TEXT"
           },
           {
-            "name": "country",
+            "name": "LastName",
             "type": "TEXT"
           },
           {
-            "name": "signup_date",
+            "name": "Email",
             "type": "TEXT"
           }
         ],
-        "rows": 25
-      },
-      {
-        "name": "Orders",
-        "columns": [
-          {
-            "name": "order_id",
-            "type": "INTEGER"
-          },
-          {
-            "name": "customer_id",
-            "type": "INTEGER"
-          },
-          {
-            "name": "order_date",
-            "type": "TEXT"
-          },
-          {
-            "name": "amount",
-            "type": "REAL"
-          },
-          {
-            "name": "status",
-            "type": "TEXT"
-          },
-          {
-            "name": "country",
-            "type": "TEXT"
-          }
-        ],
-        "rows": 120
+        "rows": 60
       }
     ]
   }

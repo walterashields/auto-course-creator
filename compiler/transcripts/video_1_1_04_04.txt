@@ -1,0 +1,38 @@
+[B01 opening]
+Okay, the moment we have been waiting for is here. We get to compose our first SQL statement. So let's do that by first starting up a brand new tab. This icon all the way to the left here is Open Tab. By clicking on that, that gives us a brand new tab. The existing tab that I just had is right here still, but I have now created a brand new tab and it gives us a clean space to start composing our query.
+
+[B02 demo — comment block skeleton]
+Now, jumping right into our best practice, I'm going to start with a comment block — forward slash star, star forward slash — and in there I'm going to put my comments. Created By — and that will be me, Walter Shields. The create date — month, followed by day, followed by year. And last but not least, the Description. Let's think about what description we're going to put.
+
+[B03 demo — description + scenario]
+Let's say that we were tasked by management of WSDA Music to give us a list of all the customers in the database, and they want their first names, their last names, and email addresses. So let's put that as a description — first and last names along with email addresses. So we want a query that's going to display all customer first and last names, together with their email addresses.
+
+[B04 explore — Database Structure]
+How would we begin to compose such a query? Well, if we start by going to the Database Structure tab, we can remind ourselves about the entire structure of this database. And if we recall, there are eleven tables. One of the key things is to look at the names of these tables, which gives us some clue as to what might be housed within each. Our current request is asking for information from customers. And as we go down the line here, we do see that we have a Customer table.
+
+[B05 explore — expand Customer, fields]
+When we expand this particular table, we can now see the fields or columns that are part of this particular table. In examining it, we do see that we have a First Name, a Last Name, and if we go down here, an Email address. So by going to the Database Structure tab, we've now given ourselves the information to zero in and get this data.
+
+[B06 explore — Browse Data, confirm]
+Now if we go to the Browse Data tab and take a look at that same Customer table, we can see the contents of that particular table and confirm — yes, indeed, this does have what it says it houses: first names, last names, and email addresses.
+
+[B07 demo — FROM FIRST]
+So how would we now compose a SQL statement that's going to give us this result? Let's go below our comment and start with the keyword FROM. We've just confirmed that the Customer table is the table that houses the information we're after. Now I'm going to pause here and take a look at this popup that you've probably noticed as we were typing.
+
+[B08 demo — IntelliSense teaching]
+This is referred to as IntelliSense, and it gives us the option to not type as much. It's the job of IntelliSense to guess what we're typing — with the aim of saving us some typing time. We're after the Customer table, which is denoted here by this symbol. The other option is Customer ID, which is actually a field within the Customer table, but in the FROM clause we want to specify the table. So this effectively is saying — go to the Customer table. Now, inside the Customer table we have all of these choices that we can include in our query result.
+
+[B09 demo — SELECT built ABOVE the FROM]
+Back to our Execute SQL tab. We want to start above that FROM clause with the keyword SELECT. Under SELECT, we can now select the columns or fields that we're interested in. Our request is asking for First Name — and there it is. Because another column is going to be included in our result, I separate column names with a comma. I go down to the second line and put Last Name. Finally, I want to see email addresses, so I repeat the process, add a comma, and add Email.
+
+[B10 demo — execute]
+So with this done, I have effectively built a basic SQL statement and it is now ready to be run or executed. I go up here, select Execute All, and we have results down here in our Results pane.
+
+[B11 validation]
+Our Results pane is now populated with the result of our constructed SQL statement — and it gives us exactly what we were tasked with: first name, last name, and email address. Down here in the Messages pane we have some important information as well. We can tell that we have 60 rows returned — 60 customers. We can tell the time it took for that result to be generated. And we have a repeat of the SQL statement we composed.
+
+[B12 takeaway]
+Now — here's what I want you to notice. We started by understanding the database structure, confirmed the data in Browse Data, then wrote and ran the query ourselves. That exact process — orient, confirm, execute, verify — is the same process you apply when AI generates a query for you. You don't just run it. You check it the same way we just did right here.
+
+[B13 close]
+Together we have just done our very first SQL statement, gotten a result, and this is something to be very, very proud of. Well done. Up next — query composition best practices, so we can make sure everything we write is clean, readable, and professional.

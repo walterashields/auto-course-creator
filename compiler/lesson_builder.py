@@ -193,6 +193,14 @@ class LessonBuilder:
                 (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
             )
             return max(1.5, 0.10 * len(text) + 0.5)
+        if action_type == "insert_segments":
+            segments = action.get("segments") or []
+            text = "".join(
+                (s.get("text", "") if isinstance(s, dict) else str(s)) for s in segments
+            )
+            return max(2.0, 0.12 * len(text) + 1.0)
+        if action_type == "intellisense_review":
+            return 2.5
         if action_type in ("run_query", "execute_query"):
             return 2.0
         if action_type == "key":
@@ -770,14 +778,27 @@ class LessonBuilder:
                     violations.append(f"field on line {i} not indented exactly 2 spaces: {line!r}")
 
         # 8. One uncommented statement per block, terminated with ';'.
-        uncommented = [
-            (i, line)
-            for i, line in enumerate(current_block_lines, start=1)
-            if line.strip()
-            and not line.strip().startswith("--")
-            and not line.strip().startswith("/*")
-            and not line.strip().startswith("*/")
-        ]
+        # C47: lines inside a /* ... */ block are comment content, not
+        # statements, so a comment-only flushed segment (e.g. the 04_04
+        # comment block typed before the FROM clause exists) is not asked to
+        # end with ';'.
+        uncommented: List[Tuple[int, str]] = []
+        in_block_comment = False
+        for i, line in enumerate(current_block_lines, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if in_block_comment:
+                if "*/" in stripped:
+                    in_block_comment = False
+                continue
+            if stripped.startswith("--"):
+                continue
+            if stripped.startswith("/*"):
+                if "*/" not in stripped[len("/*"):]:
+                    in_block_comment = True
+                continue
+            uncommented.append((i, line))
         if uncommented:
             last_idx, last_line = uncommented[-1]
             if not last_line.rstrip().endswith(";"):
@@ -1628,7 +1649,11 @@ class LessonBuilder:
             for beat in beats
             for item in (beat.choreography or [])
         )
-        if not stale:
+        # C47: transcript-built beats (and any beat without a plan) carry no
+        # choreography at all; the C13 hard gate requires a plan on every
+        # beat, so a missing plan is just as stale as a pre-semantic one.
+        unplanned = any(not beat.choreography for beat in beats)
+        if not stale and not unplanned:
             return False
         print(
             "wsda-replan: baked choreography predates semantic targets; "
@@ -1908,7 +1933,10 @@ class LessonBuilder:
             }
 
         if action_type == "run_query":
-            return {"type": "run_query"}
+            normalized = {"type": "run_query"}
+            if action_spec.get("statement"):
+                normalized["statement"] = action_spec["statement"]
+            return normalized
 
         if action_type == "summarize_result_pane":
             return {"type": "summarize_result_pane"}
@@ -3810,10 +3838,13 @@ Return ONLY a JSON array of beats like:
     @staticmethod
     def _validate_script_beats(beats: List[ScriptBeat], video: Any) -> List[ScriptBeat]:
         """Normalize actions, split multi-step demo beats, and drop invalid beats."""
-        valid_kinds = {"opening", "concept", "demo", "explain", "validation", "close", "recap", "preview", "state"}
+        valid_kinds = {"opening", "concept", "demo", "explain", "validation", "close", "recap", "preview", "state", "explore"}
         supported_actions = {
             "browse_table", "sort_column", "filter_column", "execute_query",
             "click", "type", "type_block", "type_segments", "key", "run_query", "wait", "verify", "sequence",
+            # C47: insert-at-line (FROM-first / SELECT-above-FROM) and the
+            # live IntelliSense-popup review.
+            "insert_segments", "intellisense_review",
         }
         cleaned: List[ScriptBeat] = []
         for beat in beats:
@@ -4005,10 +4036,18 @@ Return ONLY a JSON array of beats like:
         if action_count == 0:
             warnings.append("Demo beats lack concrete actions; discovery may not reach the objective.")
 
-        # Total length (Part B gate: 400-700 words).
+        # Total length (Part B gate: 400-700 words; transcript-sourced videos
+        # carry a verbatim narration and use a wider band, C47). The band top
+        # is 950 rather than the directive's estimated 900: the verbatim 04_04
+        # transcript measures 922 split-tokens (907 spoken words), so [650,900]
+        # would fail the very script it was sized for. The deviation is
+        # reported in the C47 report.
+        word_band = (650, 950) if getattr(video, "transcript_source", None) else (400, 700)
         total_words = sum(self._word_count(b.text) for b in beats)
-        if not (400 <= total_words <= 700):
-            errors.append(f"Script is {total_words} words; must be in [400, 700].")
+        if not (word_band[0] <= total_words <= word_band[1]):
+            errors.append(
+                f"Script is {total_words} words; must be in [{word_band[0]}, {word_band[1]}]."
+            )
 
         # Per-kind soft word limits, widened for 400-700-word chapter scripts.
         limits = {
@@ -4017,6 +4056,7 @@ Return ONLY a JSON array of beats like:
             "state": (25, 100),
             "explain": (25, 120),
             "demo": (15, 80),
+            "explore": (25, 120),
             "validation": (15, 80),
             "close": (30, 120),
         }

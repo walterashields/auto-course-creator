@@ -401,9 +401,16 @@ def run_acceptance_gates(
     audio_path: Optional[Path],
     reference_md_path: Path,
     profile: EnvironmentProfile,
+    word_band: Optional[Tuple[int, int]] = None,
+    transcript_fidelity_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate Part B acceptance gates for a single rendered video.
+
+    ``word_band`` overrides the B1_words range for transcript-sourced videos
+    (C47: verbatim narrations run longer; the caller passes the band).
+    ``transcript_fidelity_pct`` enables the B6_fidelity gate: 100% of beat
+    text must trace verbatim to the video's transcript source.
 
     Returns a dict:
       {
@@ -414,6 +421,7 @@ def run_acceptance_gates(
           {"gate": "B3_frozen", "value": float, "threshold": "<15%", "passed": bool},
           {"gate": "B4_errors", "value": int, "threshold": "0", "passed": bool},
           {"gate": "B5_terminal", "value": str, "threshold": "terminal punctuation", "passed": bool},
+          {"gate": "B6_fidelity", "value": str, "threshold": "100%", "passed": bool},
         ],
         "metrics": { ... compute_video_metrics ... }
       }
@@ -427,7 +435,8 @@ def run_acceptance_gates(
     error_frames = metrics["error_frames"]
     final_beat_text = metrics["final_beat_text"]
 
-    b1 = 400 <= word_count <= 700
+    band = word_band or (400, 700)
+    b1 = band[0] <= word_count <= band[1]
     has_audio = audio_path is not None and audio_path.exists()
     if has_audio:
         sync_delta = abs(duration - audio_duration)
@@ -445,12 +454,23 @@ def run_acceptance_gates(
     b5 = bool(re.search(r"[.!?]$", final_beat_text.strip()))
 
     gates = [
-        {"gate": "B1_words", "value": word_count, "threshold": "400-700", "passed": b1},
+        {"gate": "B1_words", "value": word_count, "threshold": f"{band[0]}-{band[1]}", "passed": b1},
         {"gate": "B2_av_sync", "value": b2_value, "threshold": b2_threshold, "passed": b2},
         {"gate": "B3_frozen", "value": max_frozen_run, "threshold": "<=6.0s", "passed": b3},
         {"gate": "B4_errors", "value": error_frames, "threshold": "0", "passed": b4},
         {"gate": "B5_terminal", "value": final_beat_text[-30:] if final_beat_text else "", "threshold": "terminal punctuation", "passed": b5},
     ]
+    if transcript_fidelity_pct is not None:
+        # C47: the rendered script must still be the transcript, verbatim.
+        b6 = transcript_fidelity_pct >= 100.0
+        gates.append(
+            {
+                "gate": "B6_fidelity",
+                "value": f"{transcript_fidelity_pct:.1f}%",
+                "threshold": "100%",
+                "passed": b6,
+            }
+        )
 
     return {"passed": all(g["passed"] for g in gates), "gates": gates, "metrics": metrics}
 

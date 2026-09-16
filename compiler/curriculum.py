@@ -122,6 +122,10 @@ class VideoManifest(BaseModel):
     script_beats: List[dict] = Field(default_factory=list)
     # Ground-truth SELECT queries to run during the scout pass.
     planned_queries: List[str] = Field(default_factory=list)
+    # C47: marked transcript file (under compiler/transcripts/) this video's
+    # script_beats are built from, verbatim. When set, the transcript is the
+    # script source of truth and LLM generation is skipped for this video.
+    transcript_source: Optional[str] = None
 
 
 class CourseManifest(BaseModel):
@@ -420,28 +424,56 @@ def _full_sql_from_video(video: VideoManifest) -> Optional[str]:
     query extraction see the complete query, not just the last clause.
     """
     if video.script_beats:
-        parts: List[str] = []
+        composed = ""
         has_sql_action = False
         for beat_dict in video.script_beats:
             action = beat_dict.get("action") or {}
             action_type = action.get("type")
+            part = ""
             if action_type == "type_block":
-                parts.append(action.get("text") or "")
+                part = action.get("text") or ""
                 has_sql_action = True
             elif action_type == "type_segments":
                 segments = action.get("segments") or []
-                parts.append(
-                    "\n".join(
-                        (seg.get("text", "") if isinstance(seg, dict) else str(seg))
-                        for seg in segments
-                    )
+                part = "\n".join(
+                    (seg.get("text", "") if isinstance(seg, dict) else str(seg))
+                    for seg in segments
                 )
                 has_sql_action = True
             elif action_type == "execute_query":
-                parts.append(action.get("query") or "")
+                part = action.get("query") or ""
                 has_sql_action = True
+            elif action_type == "insert_segments":
+                # C47: insert-at-line (FROM-first, SELECT-above-FROM). Model
+                # the insertion on the blank-free buffer composed so far, using
+                # the same content model the executor verifies against.
+                from .vision_agent import compose_insert_at_anchor
+
+                segments = action.get("segments") or []
+                base = "\n".join(
+                    line for line in composed.split("\n") if line.strip() != ""
+                )
+                composed = compose_insert_at_anchor(
+                    base,
+                    segments,
+                    action.get("anchor") or "",
+                    action.get("position") or "above",
+                )
+                has_sql_action = True
+                continue
+            else:
+                continue
+            # Join with the executor's line rule: a part starting with
+            # whitespace continues the current line (e.g. the 04_04
+            # Description content continues the "Description:" line); any
+            # other part starts on its own line. The canonical composition is
+            # exactly what the line-paste path types into the editor.
+            if composed.strip() and part and not part[0].isspace():
+                composed += "\n" + part
+            else:
+                composed += part
         if has_sql_action:
-            composed = "\n".join(parts).strip()
+            composed = composed.strip()
             if not composed:
                 return None
             # C46: house style is compact SQL — comment block, then clauses,
@@ -1399,7 +1431,34 @@ def run_course(
                 )
 
             # Phase 2: generate or load the narration script.
-            if video.script_beats:
+            if video.transcript_source:
+                # C47: transcript-driven rebuild. The script comes verbatim
+                # from the marked transcript file; the LLM generator is
+                # retired for this video. The fidelity invariant (concat of
+                # beat texts == transcript body, normalized) is a hard gate at
+                # load; the loader logs wsda-fidelity: coverage=100%.
+                from . import transcript_loader
+
+                script_beats, coverage = transcript_loader.build_transcript_beats(
+                    video.transcript_source
+                )
+                if coverage < 100.0:
+                    raise RuntimeError(
+                        f"Transcript fidelity below 100% for {video.video_id}: "
+                        f"{coverage}%"
+                    )
+                script_beats = lesson_builder._validate_script_beats(script_beats, video)
+                _history, _ = _derive_sql_history(manifest, video)
+                _exercise = video.exercise_artifact or {}
+                _table = _exercise.get("table_name", "Customer")
+                _facts = lesson_builder._db_facts(_exercise.get("db_path"), _table)
+                lesson_builder.replan_choreography(
+                    script_beats,
+                    _facts.get("columns", []),
+                    _table,
+                    opening_history=_history or "",
+                )
+            elif video.script_beats:
                 script_beats = [_dict_to_script_beat(b) for b in video.script_beats]
                 # Normalize legacy recipe/coordinate actions to the vision-agent format.
                 script_beats = lesson_builder._validate_script_beats(script_beats, video)
@@ -1669,8 +1728,31 @@ def run_course(
                 )
                 raise RuntimeError(f"Summary reconciliation failed: {discrepancies}")
 
+            # C47: transcript-sourced videos carry a verbatim narration — the
+            # wider B1 band applies (see lesson_builder.validate_script for why
+            # the top is 950, not the directive's estimated 900) — and gain the
+            # B6_fidelity gate (100% of beat text traces verbatim to
+            # transcript_source).
+            word_band = (650, 950) if video.transcript_source else None
+            transcript_fidelity_pct: Optional[float] = None
+            if video.transcript_source:
+                from . import transcript_loader
+
+                transcript_fidelity_pct = transcript_loader.beats_fidelity_against_source(
+                    script_beats, video.transcript_source
+                )
+                print(
+                    f"wsda-fidelity: gate-check coverage={transcript_fidelity_pct:.1f}%",
+                    file=sys.stderr,
+                )
+
             gate_result = run_acceptance_gates(
-                final_path_obj, audio_path_obj, reference_path_obj, profile
+                final_path_obj,
+                audio_path_obj,
+                reference_path_obj,
+                profile,
+                word_band=word_band,
+                transcript_fidelity_pct=transcript_fidelity_pct,
             )
             print(f"[GATES] {video.video_id}", file=sys.stderr)
             print(format_gate_table(gate_result), file=sys.stderr)
@@ -1929,9 +2011,24 @@ def _dry_run_video(
 
     video = ordered_videos[0]
     lesson_builder = LessonBuilder()
-    script_beats = lesson_builder.generate_script(video, env_map={})
+    if video.transcript_source:
+        # C47: dry-run the transcript path, not the retired LLM generator.
+        from . import transcript_loader
+
+        script_beats, coverage = transcript_loader.build_transcript_beats(
+            video.transcript_source
+        )
+        if coverage < 100.0:
+            raise RuntimeError(
+                f"Transcript fidelity below 100% for {video.video_id}: {coverage}%"
+            )
+    else:
+        script_beats = lesson_builder.generate_script(video, env_map={})
     if not script_beats:
         raise RuntimeError(f"Script generation failed for {video.video_id}")
+    # Attach the beats so the canonical expected-content composition (which
+    # reads the manifest) sees exactly what the transcript path built.
+    video.script_beats = [_script_beat_to_dict(b) for b in script_beats]
 
     expected = _expected_editor_content_for_video(manifest, video.video_id)
     actual = _extract_final_editor_content(script_beats) or ""
@@ -2010,9 +2107,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--course-id",
-        choices=["sql_sorting_fundamentals", "sql_essential_training_ch4"],
-        default="sql_essential_training_ch4",
-        help="Course manifest to build (default: sql_essential_training_ch4)",
+        choices=[
+            "sql_sorting_fundamentals",
+            "sql_essential_training_ch4",
+            "sql_fundamentals_for_data_analysts",
+        ],
+        default="sql_fundamentals_for_data_analysts",
+        help="Course manifest to build (default: sql_fundamentals_for_data_analysts)",
     )
     parser.add_argument(
         "--only-video",
@@ -2057,6 +2158,13 @@ def main() -> int:
 
     if args.course_id == "sql_sorting_fundamentals":
         manifest = create_sql_sorting_fundamentals()
+    elif args.course_id == "sql_fundamentals_for_data_analysts":
+        # C47: this course is authored on disk (transcript-driven video_1_1);
+        # there is no in-code factory. Loading it here makes
+        # `--only-video video_1_1` address the transcript course directly.
+        manifest = load_manifest(args.course_id)
+        if manifest is None:
+            raise RuntimeError(f"Course manifest not found: {args.course_id}")
     else:
         manifest = create_sql_essential_training_ch4()
 

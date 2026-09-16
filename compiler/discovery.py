@@ -322,7 +322,7 @@ def reserved_action_seconds(beat: Any, margin: float = MEASURED_RESERVATION_MARG
     if measured and float(measured) > 0.0:
         return float(measured) * (1.0 + margin)
     action_type = action.get("type")
-    if action_type == "type_segments":
+    if action_type in ("type_segments", "insert_segments"):
         return 2.0 + len(action.get("segments") or []) * 2.0
     if action_type in ("type_block", "append_block", "run_query"):
         return 3.0
@@ -5230,7 +5230,7 @@ class EndStateDiscovery:
                     # a focus call landing after recorder.start() had to fall back
                     # to VLM clicks (System Events enumeration dies under SCK; C21
                     # probe), inflating clips past the padding cap.
-                    if action.get("type") in ("type_segments", "run_query"):
+                    if action.get("type") in ("type_segments", "run_query", "insert_segments"):
                         try:
                             agent._focus_editor()
                             print(
@@ -5326,6 +5326,15 @@ class EndStateDiscovery:
                     # C13/C16: demo beats run their concrete action; all beats then fill
                     # the narration duration with scheduled choreography synced to TTS.
                     is_demo_action = beat.kind == "demo" and action.get("type") != "wait"
+                    # C47: exploration/opening/validation beats may also declare a
+                    # concrete action (click a tab, expand a schema node, review
+                    # the completion popup, summarize the result pane). When a
+                    # beat carries an explicit non-wait action, it runs — the
+                    # teaching order is the action order — regardless of kind.
+                    has_explicit_action = (
+                        beat.action is not None and action.get("type") != "wait"
+                    )
+                    run_beat_action = is_demo_action or has_explicit_action
 
                     # C16/C39: reserve time in the narration window for the concrete
                     # demo action so choreography pauses do not consume the entire
@@ -5367,7 +5376,7 @@ class EndStateDiscovery:
                             f"{scheduled_choreo}",
                             file=sys.stderr,
                         )
-                    if is_demo_action:
+                    if run_beat_action:
                         # Segmented beats get the intended cumulative block as a
                         # fallback so a failed segment recovers to the real target.
                         beat_fallback = (
@@ -5381,7 +5390,7 @@ class EndStateDiscovery:
                         # starts a fresh clip, instead of re-typing inside the same
                         # recording.
                         is_typing_action = action.get("type") in (
-                            "type_segments", "type_block", "append_block"
+                            "type_segments", "type_block", "append_block", "insert_segments"
                         )
                         # Ceiling: 1 internal attempt for typing (handled by outer beat
                         # retry) or 3 attempts for other action types.
@@ -5585,7 +5594,7 @@ class EndStateDiscovery:
                                 beat_failed = True
                                 break
 
-                    if not is_demo_action:
+                    if not run_beat_action:
                         beat_ok = True
                     tl["actions_done"] = time.time()
 
@@ -5632,7 +5641,9 @@ class EndStateDiscovery:
                             # not just the last segment. The last-good-editor marker
                             # and demo count move to post-gate (C26): they commit
                             # only when the post-stop canonical gate passes.
-                            if action.get("type") in ("type_segments", "type_block", "append_block"):
+                            if action.get("type") in (
+                                "type_segments", "type_block", "append_block", "insert_segments"
+                            ):
                                 composed = agent._last_composed_text or ""
                                 if not composed and action.get("type") in ("type_block", "append_block"):
                                     composed = action.get("text") or action.get("detail") or ""
